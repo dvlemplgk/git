@@ -79,7 +79,7 @@ Git revision tree visualiser ('gitk')
 Summary:        Perl interface to Git
 Group:          Development/Libraries
 Requires:       git-core = %{version}-%{release}
-Requires:       perl(:MODULE_COMPAT_%(eval "`%{__perl} -V:version`"; echo $version))
+#Requires:       perl(:MODULE_COMPAT_%(eval "`%{__perl} -V:version`"; echo $version))
 BuildRequires:  perl(Error)
 
 %description -n perl-Git
