@@ -109,7 +109,7 @@ pick_one () {
 		sha1=$(git rev-parse --short $sha1)
 		output warn Fast forward to $sha1
 	else
-		output git cherry-pick $STRATEGY "$@"
+		output git cherry-pick "$@"
 	fi
 }
 
@@ -165,6 +165,8 @@ pick_one_preserving_merges () {
 			eval "$author_script"
 			msg="$(git cat-file commit $sha1 | \
 				sed -e '1,/^$/d' -e "s/[\"\\]/\\\\&/g")"
+			# No point in merging the first parent, that's HEAD
+			new_parents=${new_parents# $first_parent}
 			# NEEDSWORK: give rerere a chance
 			if ! output git merge $STRATEGY -m "$msg" $new_parents
 			then
@@ -173,7 +175,7 @@ pick_one_preserving_merges () {
 			fi
 			;;
 		*)
-			output git cherry-pick $STRATEGY "$@" ||
+			output git cherry-pick "$@" ||
 				die_with_patch $sha1 "Could not pick $sha1"
 		esac
 	esac
@@ -357,7 +359,6 @@ do
 		output git reset --hard && do_rest
 		;;
 	-s|--strategy)
-		shift
 		case "$#,$1" in
 		*,*=*)
 			STRATEGY="-s `expr "z$1" : 'z-[^=]*=\(.*\)'`" ;;
