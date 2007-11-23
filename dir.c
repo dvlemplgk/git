@@ -626,6 +626,7 @@ static void free_simplify(struct path_simplify *simplify)
 int read_directory(struct dir_struct *dir, const char *path, const char *base, int baselen, const char **pathspec)
 {
 	struct path_simplify *simplify = create_simplify(pathspec);
+	char *pp = NULL;
 
 	/*
 	 * Make sure to do the per-directory exclude for all the
@@ -633,7 +634,8 @@ int read_directory(struct dir_struct *dir, const char *path, const char *base, i
 	 */
 	if (baselen) {
 		if (dir->exclude_per_dir) {
-			char *p, *pp = xmalloc(baselen+1);
+			char *p;
+			pp = xmalloc(baselen+1);
 			memcpy(pp, base, baselen+1);
 			p = pp;
 			while (1) {
@@ -649,12 +651,12 @@ int read_directory(struct dir_struct *dir, const char *path, const char *base, i
 				else
 					p = pp + baselen;
 			}
-			free(pp);
 		}
 	}
 
 	read_directory_recursive(dir, path, base, baselen, 0, simplify);
 	free_simplify(simplify);
+	free(pp);
 	qsort(dir->entries, dir->nr, sizeof(struct dir_entry *), cmp_name);
 	qsort(dir->ignored, dir->ignored_nr, sizeof(struct dir_entry *), cmp_name);
 	return dir->nr;
@@ -708,4 +710,16 @@ int is_inside_dir(const char *dir)
 {
 	char buffer[PATH_MAX];
 	return get_relative_cwd(buffer, sizeof(buffer), dir) != NULL;
+}
+
+void setup_standard_excludes(struct dir_struct *dir)
+{
+	const char *path;
+
+	dir->exclude_per_dir = ".gitignore";
+	path = git_path("info/exclude");
+	if (!access(path, R_OK))
+		add_excludes_from_file(dir, path);
+	if (excludes_file && !access(excludes_file, R_OK))
+		add_excludes_from_file(dir, excludes_file);
 }

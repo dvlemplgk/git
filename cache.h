@@ -6,7 +6,7 @@
 #include SHA1_HEADER
 #include <zlib.h>
 
-#if ZLIB_VERNUM < 0x1200
+#if defined(NO_DEFLATE_BOUND) || ZLIB_VERNUM < 0x1200
 #define deflateBound(c,s)  ((s) + (((s) + 7) >> 3) + (((s) + 63) >> 6) + 11)
 #endif
 
@@ -571,6 +571,7 @@ extern int pager_in_use;
 extern int pager_use_color;
 
 extern char *editor_program;
+extern char *excludes_file;
 
 /* base85 */
 int decode_85(char *dst, const char *line, int linelen);
