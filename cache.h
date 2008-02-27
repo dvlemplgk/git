@@ -584,11 +584,13 @@ extern int git_parse_ulong(const char *, unsigned long *);
 extern int git_config_int(const char *, const char *);
 extern unsigned long git_config_ulong(const char *, const char *);
 extern int git_config_bool(const char *, const char *);
+extern int git_config_string(const char **, const char *, const char *);
 extern int git_config_set(const char *, const char *);
 extern int git_config_set_multivar(const char *, const char *, const char *, int);
 extern int git_config_rename_section(const char *, const char *);
 extern const char *git_etc_gitconfig(void);
 extern int check_repository_format_version(const char *var, const char *value);
+extern int config_error_nonbool(const char *);
 
 #define MAX_GITNAME (1000)
 extern char git_default_email[MAX_GITNAME];
@@ -608,12 +610,12 @@ extern int write_or_whine_pipe(int fd, const void *buf, size_t count, const char
 
 /* pager.c */
 extern void setup_pager(void);
-extern char *pager_program;
+extern const char *pager_program;
 extern int pager_in_use(void);
 extern int pager_use_color;
 
-extern char *editor_program;
-extern char *excludes_file;
+extern const char *editor_program;
+extern const char *excludes_file;
 
 /* base85 */
 int decode_85(char *dst, const char *line, int linelen);

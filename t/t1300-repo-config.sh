@@ -71,6 +71,25 @@ EOF
 
 test_expect_success 'non-match result' 'cmp .git/config expect'
 
+cat > .git/config <<\EOF
+[alpha]
+bar = foo
+[beta]
+baz = multiple \
+lines
+EOF
+
+test_expect_success 'unset with cont. lines' \
+	'git config --unset beta.baz'
+
+cat > expect <<\EOF
+[alpha]
+bar = foo
+[beta]
+EOF
+
+test_expect_success 'unset with cont. lines is correct' 'cmp .git/config expect'
+
 cat > .git/config << EOF
 [beta] ; silly comment # another comment
 noIndent= sillyValue ; 'nother silly comment
@@ -278,15 +297,38 @@ test_expect_success '--add' \
 cat > .git/config << EOF
 [novalue]
 	variable
+[emptyvalue]
+	variable =
 EOF
 
 test_expect_success 'get variable with no value' \
 	'git config --get novalue.variable ^$'
 
+test_expect_success 'get variable with empty value' \
+	'git config --get emptyvalue.variable ^$'
+
 echo novalue.variable > expect
 
 test_expect_success 'get-regexp variable with no value' \
 	'git config --get-regexp novalue > output &&
+	 cmp output expect'
+
+echo 'emptyvalue.variable ' > expect
+
+test_expect_success 'get-regexp variable with empty value' \
+	'git config --get-regexp emptyvalue > output &&
+	 cmp output expect'
+
+echo true > expect
+
+test_expect_success 'get bool variable with no value' \
+	'git config --bool novalue.variable > output &&
+	 cmp output expect'
+
+echo false > expect
+
+test_expect_success 'get bool variable with empty value' \
+	'git config --bool emptyvalue.variable > output &&
 	 cmp output expect'
 
 git config > output 2>&1
