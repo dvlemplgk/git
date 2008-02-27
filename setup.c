@@ -59,7 +59,7 @@ const char *prefix_path(const char *prefix, int len, const char *path)
 const char *prefix_filename(const char *pfx, int pfx_len, const char *arg)
 {
 	static char path[PATH_MAX];
-	if (!pfx || !*pfx || arg[0] == '/')
+	if (!pfx || !*pfx || is_absolute_path(arg))
 		return arg;
 	memcpy(path, pfx, pfx_len);
 	strcpy(path + pfx_len, arg);
@@ -140,7 +140,7 @@ const char **get_pathspec(const char *prefix, const char **pathspec)
  * Test if it looks like we're at a git directory.
  * We want to see:
  *
- *  - either a objects/ directory _or_ the proper
+ *  - either an objects/ directory _or_ the proper
  *    GIT_OBJECT_DIRECTORY environment variable
  *  - a refs/ directory
  *  - either a HEAD symlink or a HEAD file that is formatted as
@@ -204,6 +204,22 @@ static const char *set_work_tree(const char *dir)
 	inside_work_tree = 1;
 
 	return NULL;
+}
+
+void setup_work_tree(void)
+{
+	const char *work_tree, *git_dir;
+	static int initialized = 0;
+
+	if (initialized)
+		return;
+	work_tree = get_git_work_tree();
+	git_dir = get_git_dir();
+	if (!is_absolute_path(git_dir))
+		set_git_dir(make_absolute_path(git_dir));
+	if (!work_tree || chdir(work_tree))
+		die("This operation must be run in a work tree");
+	initialized = 1;
 }
 
 static int check_repository_format_gently(int *nongit_ok)
@@ -372,7 +388,6 @@ int check_repository_format(void)
 const char *setup_git_directory(void)
 {
 	const char *retval = setup_git_directory_gently(NULL);
-	check_repository_format();
 
 	/* If the work tree is not the default one, recompute prefix */
 	if (inside_work_tree < 0) {

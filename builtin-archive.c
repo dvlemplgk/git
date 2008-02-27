@@ -10,6 +10,7 @@
 #include "exec_cmd.h"
 #include "pkt-line.h"
 #include "sideband.h"
+#include "attr.h"
 
 static const char archive_usage[] = \
 "git-archive --format=<fmt> [--prefix=<prefix>/] [--verbose] [<extra>] <tree-ish> [path...]";
@@ -29,7 +30,7 @@ static int run_remote_archiver(const char *remote, int argc,
 {
 	char *url, buf[LARGE_PACKET_MAX];
 	int fd[2], i, len, rv;
-	pid_t pid;
+	struct child_process *conn;
 	const char *exec = "git-upload-archive";
 	int exec_at = 0;
 
@@ -45,9 +46,7 @@ static int run_remote_archiver(const char *remote, int argc,
 	}
 
 	url = xstrdup(remote);
-	pid = git_connect(fd, url, exec, 0);
-	if (pid < 0)
-		return pid;
+	conn = git_connect(fd, url, exec, 0);
 
 	for (i = 1; i < argc; i++) {
 		if (i == exec_at)
@@ -75,7 +74,7 @@ static int run_remote_archiver(const char *remote, int argc,
 	rv = recv_sideband("archive", fd[0], 1, 2);
 	close(fd[0]);
 	close(fd[1]);
-	rv |= finish_connect(pid);
+	rv |= finish_connect(conn);
 
 	return !!rv;
 }
@@ -109,7 +108,7 @@ void parse_treeish_arg(const char **argv, struct archiver_args *ar_args,
 	const unsigned char *commit_sha1;
 	time_t archive_time;
 	struct tree *tree;
-	struct commit *commit;
+	const struct commit *commit;
 	unsigned char sha1[20];
 
 	if (get_sha1(name, sha1))
@@ -142,6 +141,7 @@ void parse_treeish_arg(const char **argv, struct archiver_args *ar_args,
 	}
 	ar_args->tree = tree;
 	ar_args->commit_sha1 = commit_sha1;
+	ar_args->commit = commit;
 	ar_args->time = archive_time;
 }
 

@@ -59,18 +59,12 @@ esac
 # '
 # . ./test-lib.sh
 
-error () {
-	echo "* error: $*"
-	trap - exit
-	exit 1
-}
-
-say () {
-	echo "* $*"
-}
-
-test "${test_description}" != "" ||
-error "Test script did not set test_description."
+[ "x$TERM" != "xdumb" ] &&
+	[ -t 1 ] &&
+	tput bold >/dev/null 2>&1 &&
+	tput setaf 1 >/dev/null 2>&1 &&
+	tput sgr0 >/dev/null 2>&1 &&
+	color=t
 
 while test "$#" -ne 0
 do
@@ -80,10 +74,13 @@ do
 	-i|--i|--im|--imm|--imme|--immed|--immedi|--immedia|--immediat|--immediate)
 		immediate=t; shift ;;
 	-h|--h|--he|--hel|--help)
-		echo "$test_description"
-		exit 0 ;;
+		help=t; shift ;;
 	-v|--v|--ve|--ver|--verb|--verbo|--verbos|--verbose)
 		verbose=t; shift ;;
+	-q|--q|--qu|--qui|--quie|--quiet)
+		quiet=t; shift ;;
+	--no-color)
+	    color=; shift ;;
 	--no-python)
 		# noop now...
 		shift ;;
@@ -91,6 +88,46 @@ do
 		break ;;
 	esac
 done
+
+if test -n "$color"; then
+	say_color () {
+		case "$1" in
+			error) tput bold; tput setaf 1;; # bold red
+			skip)  tput bold; tput setaf 2;; # bold green
+			pass)  tput setaf 2;;            # green
+			info)  tput setaf 3;;            # brown
+			*) test -n "$quiet" && return;;
+		esac
+		shift
+		echo "* $*"
+		tput sgr0
+	}
+else
+	say_color() {
+		test -z "$1" && test -n "$quiet" && return
+		shift
+		echo "* $*"
+	}
+fi
+
+error () {
+	say_color error "error: $*"
+	trap - exit
+	exit 1
+}
+
+say () {
+	say_color info "$*"
+}
+
+test "${test_description}" != "" ||
+error "Test script did not set test_description."
+
+if test "$help" = "t"
+then
+	echo "$test_description"
+	exit 0
+fi
 
 exec 5>&1
 if test "$verbose" = "t"
@@ -122,13 +159,13 @@ test_tick () {
 
 test_ok_ () {
 	test_count=$(expr "$test_count" + 1)
-	say "  ok $test_count: $@"
+	say_color "" "  ok $test_count: $@"
 }
 
 test_failure_ () {
 	test_count=$(expr "$test_count" + 1)
 	test_failure=$(expr "$test_failure" + 1);
-	say "FAIL $test_count: $1"
+	say_color error "FAIL $test_count: $1"
 	shift
 	echo "$@" | sed -e 's/^/	/'
 	test "$immediate" = "" || { trap - exit; exit 1; }
@@ -158,9 +195,9 @@ test_skip () {
 	done
 	case "$to_skip" in
 	t)
-		say >&3 "skipping test: $@"
+		say_color skip >&3 "skipping test: $@"
 		test_count=$(expr "$test_count" + 1)
-		say "skip $test_count: $1"
+		say_color skip "skip $test_count: $1"
 		: true
 		;;
 	*)
@@ -220,7 +257,7 @@ test_expect_code () {
 	echo >&3 ""
 }
 
-# Most tests can use the created repository, but some amy need to create more.
+# Most tests can use the created repository, but some may need to create more.
 # Usage: test_create_repo <directory>
 test_create_repo () {
 	test "$#" = 1 ||
@@ -247,11 +284,11 @@ test_done () {
 		# The Makefile provided will clean this test area so
 		# we will leave things as they are.
 
-		say "passed all $test_count test(s)"
+		say_color pass "passed all $test_count test(s)"
 		exit 0 ;;
 
 	*)
-		say "failed $test_failure among $test_count test(s)"
+		say_color error "failed $test_failure among $test_count test(s)"
 		exit 1 ;;
 
 	esac
@@ -296,8 +333,8 @@ do
 	done
 	case "$to_skip" in
 	t)
-		say >&3 "skipping test $this_test altogether"
-		say "skip all tests in $this_test"
+		say_color skip >&3 "skipping test $this_test altogether"
+		say_color skip "skip all tests in $this_test"
 		test_done
 	esac
 done

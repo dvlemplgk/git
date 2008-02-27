@@ -1,27 +1,41 @@
 #!/usr/bin/perl -w
 
-# Known limitations:
-# - does not propagate permissions
-# - error handling has not been extensively tested
-#
-
 use strict;
 use Getopt::Std;
 use File::Temp qw(tempdir);
 use Data::Dumper;
 use File::Basename qw(basename dirname);
 
-unless ($ENV{GIT_DIR} && -r $ENV{GIT_DIR}){
-    die "GIT_DIR is not defined or is unreadable";
-}
+our ($opt_h, $opt_P, $opt_p, $opt_v, $opt_c, $opt_f, $opt_a, $opt_m, $opt_d, $opt_u, $opt_w);
 
-our ($opt_h, $opt_P, $opt_p, $opt_v, $opt_c, $opt_f, $opt_a, $opt_m, $opt_d, $opt_u);
-
-getopts('uhPpvcfam:d:');
+getopts('uhPpvcfam:d:w:');
 
 $opt_h && usage();
 
 die "Need at least one commit identifier!" unless @ARGV;
+
+if ($opt_w) {
+	unless ($ENV{GIT_DIR}) {
+		# Remember where our GIT_DIR is before changing to CVS checkout
+		my $gd =`git-rev-parse --git-dir`;
+		chomp($gd);
+		if ($gd eq '.git') {
+			my $wd = `pwd`;
+			chomp($wd);
+			$gd = $wd."/.git"	;
+		}
+		$ENV{GIT_DIR} = $gd;
+	}
+
+	if (! -d $opt_w."/CVS" ) {
+		die "$opt_w is not a CVS checkout";
+	}
+	chdir $opt_w or die "Cannot change to CVS checkout at $opt_w";
+}
+unless ($ENV{GIT_DIR} && -r $ENV{GIT_DIR}){
+    die "GIT_DIR is not defined or is unreadable";
+}
+
 
 my @cvs;
 if ($opt_d) {
@@ -29,11 +43,6 @@ if ($opt_d) {
 } else {
 	@cvs = ('cvs');
 }
-
-# setup a tempdir
-our ($tmpdir, $tmpdirname) = tempdir('git-cvsapplycommit-XXXXXX',
-				     TMPDIR => 1,
-				     CLEANUP => 1);
 
 # resolve target commit
 my $commit;
@@ -141,7 +150,7 @@ my $context = $opt_p ? '' : '-C1';
 print "Checking if patch will apply\n";
 
 my @stat;
-open APPLY, "GIT_DIR= git-apply $context --binary --summary --numstat<.cvsexportcommit.diff|" || die "cannot patch";
+open APPLY, "GIT_DIR= git-apply $context --summary --numstat<.cvsexportcommit.diff|" || die "cannot patch";
 @stat=<APPLY>;
 close APPLY || die "Cannot patch";
 my (@bfiles,@files,@afiles,@dfiles);
@@ -186,11 +195,11 @@ foreach my $f (@files) {
 my %cvsstat;
 if (@canstatusfiles) {
     if ($opt_u) {
-      my @updated = safe_pipe_capture(@cvs, 'update', @canstatusfiles);
+      my @updated = xargs_safe_pipe_capture([@cvs, 'update'], @canstatusfiles);
       print @updated;
     }
     my @cvsoutput;
-    @cvsoutput= safe_pipe_capture(@cvs, 'status', @canstatusfiles);
+    @cvsoutput = xargs_safe_pipe_capture([@cvs, 'status'], @canstatusfiles);
     my $matchcount = 0;
     foreach my $l (@cvsoutput) {
         chomp $l;
@@ -227,7 +236,7 @@ if ($dirty) {
 }
 
 print "Applying\n";
-`GIT_DIR= git-apply $context --binary --summary --numstat --apply <.cvsexportcommit.diff` || die "cannot patch";
+`GIT_DIR= git-apply $context --summary --numstat --apply <.cvsexportcommit.diff` || die "cannot patch";
 
 print "Patch applied successfully. Adding new files and directories to CVS\n";
 my $dirtypatch = 0;
@@ -279,13 +288,14 @@ if ($dirtypatch) {
     print "You'll need to apply the patch in .cvsexportcommit.diff manually\n";
     print "using a patch program. After applying the patch and resolving the\n";
     print "problems you may commit using:";
+    print "\n    cd \"$opt_w\"" if $opt_w;
     print "\n    $cmd\n\n";
     exit(1);
 }
 
 if ($opt_c) {
     print "Autocommit\n  $cmd\n";
-    print safe_pipe_capture(@cvs, 'commit', '-F', '.msg', @files);
+    print xargs_safe_pipe_capture([@cvs, 'commit', '-F', '.msg'], @files);
     if ($?) {
 	die "Exiting: The commit did not succeed";
     }
@@ -306,7 +316,7 @@ sleep(1);
 
 sub usage {
 	print STDERR <<END;
-Usage: GIT_DIR=/path/to/.git ${\basename $0} [-h] [-p] [-v] [-c] [-f] [-m msgprefix] [ parent ] commit
+Usage: GIT_DIR=/path/to/.git ${\basename $0} [-h] [-p] [-v] [-c] [-f] [-u] [-w cvsworkdir] [-m msgprefix] [ parent ] commit
 END
 	exit(1);
 }
@@ -325,15 +335,24 @@ sub safe_pipe_capture {
     return wantarray ? @output : join('',@output);
 }
 
-sub safe_pipe_capture_blob {
-    my $output;
-    if (my $pid = open my $child, '-|') {
-        local $/;
-	undef $/;
-	$output = (<$child>);
-	close $child or die join(' ',@_).": $! $?";
-    } else {
-	exec(@_) or die "$! $?"; # exec() can fail the executable can't be found
-    }
-    return $output;
+sub xargs_safe_pipe_capture {
+	my $MAX_ARG_LENGTH = 65536;
+	my $cmd = shift;
+	my @output;
+	my $output;
+	while(@_) {
+		my @args;
+		my $length = 0;
+		while(@_ && $length < $MAX_ARG_LENGTH) {
+			push @args, shift;
+			$length += length($args[$#args]);
+		}
+		if (wantarray) {
+			push @output, safe_pipe_capture(@$cmd, @args);
+		}
+		else {
+			$output .= safe_pipe_capture(@$cmd, @args);
+		}
+	}
+	return wantarray ? @output : $output;
 }

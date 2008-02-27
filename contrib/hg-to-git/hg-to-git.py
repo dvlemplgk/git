@@ -1,6 +1,6 @@
 #! /usr/bin/python
 
-""" hg-to-svn.py - A Mercurial to GIT converter
+""" hg-to-git.py - A Mercurial to GIT converter
 
     Copyright (C)2007 Stelian Pop <stelian@popies.net>
 
@@ -27,8 +27,12 @@ import re
 hgvers = {}
 # List of children for each hg revision
 hgchildren = {}
+# List of parents for each hg revision
+hgparents = {}
 # Current branch for each hg revision
 hgbranch = {}
+# Number of new changesets converted from hg
+hgnewcsets = 0
 
 #------------------------------------------------------------------------------
 
@@ -40,6 +44,8 @@ def usage():
 options:
     -s, --gitstate=FILE: name of the state to be saved/read
                          for incrementals
+    -n, --nrepack=INT:   number of changesets that will trigger
+                         a repack (default=0, -1 to deactivate)
 
 required:
     hgprj:  name of the HG project to import (directory)
@@ -68,14 +74,16 @@ def getgitenv(user, date):
 #------------------------------------------------------------------------------
 
 state = ''
+opt_nrepack = 0
 
 try:
-    opts, args = getopt.getopt(sys.argv[1:], 's:t:', ['gitstate=', 'tempdir='])
+    opts, args = getopt.getopt(sys.argv[1:], 's:t:n:', ['gitstate=', 'tempdir=', 'nrepack='])
     for o, a in opts:
         if o in ('-s', '--gitstate'):
             state = a
             state = os.path.abspath(state)
-
+        if o in ('-n', '--nrepack'):
+            opt_nrepack = int(a)
     if len(args) != 1:
         raise('params')
 except:
@@ -93,17 +101,19 @@ if state:
     else:
         print 'State does not exist, first run'
 
-tip = os.popen('hg tip | head -1 | cut -f 2 -d :').read().strip()
+tip = os.popen('hg tip --template "{rev}"').read()
 print 'tip is', tip
 
 # Calculate the branches
 print 'analysing the branches...'
 hgchildren["0"] = ()
+hgparents["0"] = (None, None)
 hgbranch["0"] = "master"
 for cset in range(1, int(tip) + 1):
     hgchildren[str(cset)] = ()
-    prnts = os.popen('hg log -r %d | grep ^parent: | cut -f 2 -d :' % cset).readlines()
-    if len(prnts) > 0:
+    prnts = os.popen('hg log -r %d --template "{parents}"' % cset).read().split(' ')
+    prnts = map(lambda x: x[:x.find(':')], prnts)
+    if prnts[0] != '':
         parent = prnts[0].strip()
     else:
         parent = str(cset - 1)
@@ -113,6 +123,8 @@ for cset in range(1, int(tip) + 1):
         hgchildren[mparent] += ( str(cset), )
     else:
         mparent = None
+
+    hgparents[str(cset)] = (parent, mparent)
 
     if mparent:
         # For merge changesets, take either one, preferably the 'master' branch
@@ -138,28 +150,21 @@ for cset in range(int(tip) + 1):
     # incremental, already seen
     if hgvers.has_key(str(cset)):
         continue
+    hgnewcsets += 1
 
     # get info
-    prnts = os.popen('hg log -r %d | grep ^parent: | cut -f 2 -d :' % cset).readlines()
-    if len(prnts) > 0:
-        parent = prnts[0].strip()
-    else:
-        parent = str(cset - 1)
-    if len(prnts) > 1:
-        mparent = prnts[1].strip()
-    else:
-        mparent = None
+    log_data = os.popen('hg log -r %d --template "{tags}\n{date|date}\n{author}\n"' % cset).readlines()
+    tag = log_data[0].strip()
+    date = log_data[1].strip()
+    user = log_data[2].strip()
+    parent = hgparents[str(cset)][0]
+    mparent = hgparents[str(cset)][1]
 
+    #get comment
     (fdcomment, filecomment) = tempfile.mkstemp()
-    csetcomment = os.popen('hg log -r %d -v | grep -v ^changeset: | grep -v ^parent: | grep -v ^user: | grep -v ^date | grep -v ^files: | grep -v ^description: | grep -v ^tag:' % cset).read().strip()
+    csetcomment = os.popen('hg log -r %d --template "{desc}"' % cset).read().strip()
     os.write(fdcomment, csetcomment)
     os.close(fdcomment)
-
-    date = os.popen('hg log -r %d | grep ^date: | cut -f 2- -d :' % cset).read().strip()
-
-    tag = os.popen('hg log -r %d | grep ^tag: | cut -f 2- -d :' % cset).read().strip()
-
-    user = os.popen('hg log -r %d | grep ^user: | cut -f 2- -d :' % cset).read().strip()
 
     print '-----------------------------------------'
     print 'cset:', cset
@@ -167,7 +172,8 @@ for cset in range(int(tip) + 1):
     print 'user:', user
     print 'date:', date
     print 'comment:', csetcomment
-    print 'parent:', parent
+    if parent:
+	print 'parent:', parent
     if mparent:
         print 'mparent:', mparent
     if tag:
@@ -204,7 +210,7 @@ for cset in range(int(tip) + 1):
     os.system('git-ls-files -x .hg --deleted | git-update-index --remove --stdin')
 
     # commit
-    os.system(getgitenv(user, date) + 'git-commit -a -F %s' % filecomment)
+    os.system(getgitenv(user, date) + 'git commit --allow-empty -a -F %s' % filecomment)
     os.unlink(filecomment)
 
     # tag
@@ -217,12 +223,12 @@ for cset in range(int(tip) + 1):
         os.system('git-branch -d %s' % otherbranch)
 
     # retrieve and record the version
-    vvv = os.popen('git-show | head -1').read()
-    vvv = vvv[vvv.index(' ') + 1 : ].strip()
+    vvv = os.popen('git-show --quiet --pretty=format:%H').read()
     print 'record', cset, '->', vvv
     hgvers[str(cset)] = vvv
 
-os.system('git-repack -a -d')
+if hgnewcsets >= opt_nrepack and opt_nrepack != -1:
+    os.system('git-repack -a -d')
 
 # write the state for incrementals
 if state:

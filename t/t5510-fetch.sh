@@ -67,6 +67,18 @@ test_expect_success "fetch test for-merge" '
 	cut -f -2 .git/FETCH_HEAD >actual &&
 	diff expected actual'
 
+test_expect_success 'fetch tags when there is no tags' '
+
+    cd "$D" &&
+
+    mkdir notags &&
+    cd notags &&
+    git init &&
+
+    git fetch -t ..
+
+'
+
 test_expect_success 'fetch following tags' '
 
 	cd "$D" &&
@@ -80,6 +92,31 @@ test_expect_success 'fetch following tags' '
 	git fetch .. :track &&
 	git show-ref --verify refs/tags/anno &&
 	git show-ref --verify refs/tags/light
+
+'
+
+test_expect_failure 'fetch must not resolve short tag name' '
+
+	cd "$D" &&
+
+	mkdir five &&
+	cd five &&
+	git init &&
+
+	git fetch .. anno:five
+
+'
+
+test_expect_failure 'fetch must not resolve short remote name' '
+
+	cd "$D" &&
+	git-update-ref refs/remotes/six/HEAD HEAD
+
+	mkdir six &&
+	cd six &&
+	git init &&
+
+	git fetch .. six:six
 
 '
 
@@ -153,6 +190,56 @@ test_expect_success 'bundle should be able to create a full history' '
 
 '
 
+test "$TEST_RSYNC" && {
+test_expect_success 'fetch via rsync' '
+	git pack-refs &&
+	mkdir rsynced &&
+	cd rsynced &&
+	git init &&
+	git fetch rsync://127.0.0.1$(pwd)/../.git master:refs/heads/master &&
+	git gc --prune &&
+	test $(git rev-parse master) = $(cd .. && git rev-parse master) &&
+	git fsck --full
+'
+
+test_expect_success 'push via rsync' '
+	mkdir ../rsynced2 &&
+	(cd ../rsynced2 &&
+	 git init) &&
+	git push rsync://127.0.0.1$(pwd)/../rsynced2/.git master &&
+	cd ../rsynced2 &&
+	git gc --prune &&
+	test $(git rev-parse master) = $(cd .. && git rev-parse master) &&
+	git fsck --full
+'
+
+test_expect_success 'push via rsync' '
+	cd .. &&
+	mkdir rsynced3 &&
+	(cd rsynced3 &&
+	 git init) &&
+	git push --all rsync://127.0.0.1$(pwd)/rsynced3/.git &&
+	cd rsynced3 &&
+	test $(git rev-parse master) = $(cd .. && git rev-parse master) &&
+	git fsck --full
+'
+}
+
+test_expect_success 'fetch with a non-applying branch.<name>.merge' '
+	git config branch.master.remote yeti &&
+	git config branch.master.merge refs/heads/bigfoot &&
+	git config remote.blub.url one &&
+	git config remote.blub.fetch "refs/heads/*:refs/remotes/one/*" &&
+	git fetch blub
+'
+
+# the strange name is: a\!'b
+test_expect_success 'quoting of a strangely named repo' '
+	! git fetch "a\\!'\''b" > result 2>&1 &&
+	cat result &&
+	grep "fatal: '\''a\\\\!'\''b'\''" result
+'
+
 test_expect_success 'bundle should record HEAD correctly' '
 
 	cd "$D" &&
@@ -164,6 +251,48 @@ test_expect_success 'bundle should record HEAD correctly' '
 	done >expect &&
 	diff -u expect actual
 
+'
+
+test_expect_success 'explicit fetch should not update tracking' '
+
+	cd "$D" &&
+	git branch -f side &&
+	(
+		cd three &&
+		o=$(git rev-parse --verify refs/remotes/origin/master) &&
+		git fetch origin master &&
+		n=$(git rev-parse --verify refs/remotes/origin/master) &&
+		test "$o" = "$n" &&
+		! git rev-parse --verify refs/remotes/origin/side
+	)
+'
+
+test_expect_success 'explicit pull should not update tracking' '
+
+	cd "$D" &&
+	git branch -f side &&
+	(
+		cd three &&
+		o=$(git rev-parse --verify refs/remotes/origin/master) &&
+		git pull origin master &&
+		n=$(git rev-parse --verify refs/remotes/origin/master) &&
+		test "$o" = "$n" &&
+		! git rev-parse --verify refs/remotes/origin/side
+	)
+'
+
+test_expect_success 'configured fetch updates tracking' '
+
+	cd "$D" &&
+	git branch -f side &&
+	(
+		cd three &&
+		o=$(git rev-parse --verify refs/remotes/origin/master) &&
+		git fetch origin &&
+		n=$(git rev-parse --verify refs/remotes/origin/master) &&
+		test "$o" != "$n" &&
+		git rev-parse --verify refs/remotes/origin/side
+	)
 '
 
 test_done

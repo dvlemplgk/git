@@ -2,6 +2,7 @@
 #define CACHE_H
 
 #include "git-compat-util.h"
+#include "strbuf.h"
 
 #include SHA1_HEADER
 #include <zlib.h>
@@ -191,6 +192,13 @@ enum object_type {
 	OBJ_MAX,
 };
 
+static inline enum object_type object_type(unsigned int mode)
+{
+	return S_ISDIR(mode) ? OBJ_TREE :
+		S_ISGITLINK(mode) ? OBJ_COMMIT :
+		OBJ_BLOB;
+}
+
 #define GIT_DIR_ENVIRONMENT "GIT_DIR"
 #define GIT_WORK_TREE_ENVIRONMENT "GIT_WORK_TREE"
 #define DEFAULT_GIT_DIR_ENVIRONMENT ".git"
@@ -221,6 +229,7 @@ extern const char *get_git_work_tree(void);
 #define ALTERNATE_DB_ENVIRONMENT "GIT_ALTERNATE_OBJECT_DIRECTORIES"
 
 extern const char **get_pathspec(const char *prefix, const char **pathspec);
+extern void setup_work_tree(void);
 extern const char *setup_git_directory_gently(int *);
 extern const char *setup_git_directory(void);
 extern const char *prefix_path(const char *prefix, int len, const char *path);
@@ -276,7 +285,6 @@ extern int ie_modified(struct index_state *, struct cache_entry *, struct stat *
 
 extern int ce_path_match(const struct cache_entry *ce, const char **pathspec);
 extern int index_fd(unsigned char *sha1, int fd, struct stat *st, int write_object, enum object_type type, const char *path);
-extern int read_fd(int fd, char **return_buf, unsigned long *return_size);
 extern int index_pipe(unsigned char *sha1, int fd, const char *type, int write_object);
 extern int index_path(unsigned char *sha1, const char *path, struct stat *st, int write_object);
 extern void fill_stat_cache_info(struct cache_entry *ce, struct stat *st);
@@ -289,6 +297,7 @@ extern int refresh_index(struct index_state *, unsigned int flags, const char **
 
 struct lock_file {
 	struct lock_file *next;
+	int fd;
 	pid_t owner;
 	char on_list;
 	char filename[PATH_MAX];
@@ -299,7 +308,7 @@ extern int commit_lock_file(struct lock_file *);
 extern int hold_locked_index(struct lock_file *, int);
 extern int commit_locked_index(struct lock_file *);
 extern void set_alternate_index_output(const char *);
-
+extern int close_lock_file(struct lock_file *);
 extern void rollback_lock_file(struct lock_file *);
 extern int delete_ref(const char *, const unsigned char *sha1);
 
@@ -414,6 +423,10 @@ extern const char *resolve_ref(const char *path, unsigned char *sha1, int, int *
 extern int dwim_ref(const char *str, int len, unsigned char *sha1, char **ref);
 extern int dwim_log(const char *str, int len, unsigned char *sha1, char **ref);
 
+extern int refname_match(const char *abbrev_name, const char *full_name, const char **rules);
+extern const char *ref_rev_parse_rules[];
+extern const char *ref_fetch_rules[];
+
 extern int create_symref(const char *ref, const char *refs_heads_master, const char *logmsg);
 extern int validate_headref(const char *ref);
 
@@ -438,10 +451,15 @@ const char *show_date(unsigned long time, int timezone, enum date_mode mode);
 int parse_date(const char *date, char *buf, int bufsize);
 void datestamp(char *buf, int bufsize);
 unsigned long approxidate(const char *);
+enum date_mode parse_date_format(const char *format);
 
+#define IDENT_WARN_ON_NO_NAME  1
+#define IDENT_ERROR_ON_NO_NAME 2
+#define IDENT_NO_DATE	       4
 extern const char *git_author_info(int);
 extern const char *git_committer_info(int);
 extern const char *fmt_ident(const char *name, const char *email, const char *date_str, int);
+extern const char *fmt_name(const char *name, const char *email);
 
 struct checkout {
 	const char *base_dir;
@@ -497,7 +515,20 @@ struct ref {
 	struct ref *next;
 	unsigned char old_sha1[20];
 	unsigned char new_sha1[20];
-	unsigned char force;
+	unsigned int force:1,
+		merge:1,
+		nonfastforward:1,
+		deletion:1;
+	enum {
+		REF_STATUS_NONE = 0,
+		REF_STATUS_OK,
+		REF_STATUS_REJECT_NONFASTFORWARD,
+		REF_STATUS_REJECT_NODELETE,
+		REF_STATUS_UPTODATE,
+		REF_STATUS_REMOTE_REJECT,
+		REF_STATUS_EXPECTING_REPORT,
+	} status;
+	char *remote_status;
 	struct ref *peer_ref; /* when renaming */
 	char name[FLEX_ARRAY]; /* more */
 };
@@ -506,9 +537,11 @@ struct ref {
 #define REF_HEADS	(1u << 1)
 #define REF_TAGS	(1u << 2)
 
+extern struct ref *find_ref_by_name(struct ref *list, const char *name);
+
 #define CONNECT_VERBOSE       (1u << 0)
-extern pid_t git_connect(int fd[2], char *url, const char *prog, int flags);
-extern int finish_connect(pid_t pid);
+extern struct child_process *git_connect(int fd[2], const char *url, const char *prog, int flags);
+extern int finish_connect(struct child_process *conn);
 extern int path_match(const char *path, int nr, char **match);
 extern int get_ack(int fd, unsigned char *result_sha1);
 extern struct ref **get_remote_heads(int in, struct ref **list, int nr_match, char **match, unsigned int flags);
@@ -528,6 +561,7 @@ extern struct packed_git *find_sha1_pack(const unsigned char *sha1,
 extern void pack_report(void);
 extern int open_pack_index(struct packed_git *);
 extern unsigned char* use_pack(struct packed_git *, struct pack_window **, off_t, unsigned int *);
+extern void close_pack_windows(struct packed_git *);
 extern void unuse_pack(struct pack_window **);
 extern struct packed_git *add_packed_git(const char *, int, int);
 extern const unsigned char *nth_packed_object_sha1(struct packed_git *, uint32_t);
@@ -536,6 +570,7 @@ extern void *unpack_entry(struct packed_git *, off_t, enum object_type *, unsign
 extern unsigned long unpack_object_header_gently(const unsigned char *buf, unsigned long len, enum object_type *type, unsigned long *sizep);
 extern unsigned long get_size_from_delta(struct packed_git *, struct pack_window **, off_t);
 extern const char *packed_object_info_detail(struct packed_git *, off_t, unsigned long *, unsigned long *, unsigned int *, unsigned char *);
+extern int matches_pack_name(struct packed_git *p, const char *name);
 
 /* Dumb servers support */
 extern int update_server_info(int);
@@ -552,6 +587,7 @@ extern int git_config_bool(const char *, const char *);
 extern int git_config_set(const char *, const char *);
 extern int git_config_set_multivar(const char *, const char *, const char *, int);
 extern int git_config_rename_section(const char *, const char *);
+extern const char *git_etc_gitconfig(void);
 extern int check_repository_format_version(const char *var, const char *value);
 
 #define MAX_GITNAME (1000)
@@ -573,7 +609,7 @@ extern int write_or_whine_pipe(int fd, const void *buf, size_t count, const char
 /* pager.c */
 extern void setup_pager(void);
 extern char *pager_program;
-extern int pager_in_use;
+extern int pager_in_use(void);
 extern int pager_use_color;
 
 extern char *editor_program;
@@ -592,20 +628,42 @@ extern void *alloc_object_node(void);
 extern void alloc_report(void);
 
 /* trace.c */
-extern int nfasprintf(char **str, const char *fmt, ...);
-extern int nfvasprintf(char **str, const char *fmt, va_list va);
 extern void trace_printf(const char *format, ...);
-extern void trace_argv_printf(const char **argv, int count, const char *format, ...);
+extern void trace_argv_printf(const char **argv, const char *format, ...);
 
 /* convert.c */
-extern char *convert_to_git(const char *path, const char *src, unsigned long *sizep);
-extern char *convert_to_working_tree(const char *path, const char *src, unsigned long *sizep);
-extern void *convert_sha1_file(const char *path, const unsigned char *sha1, unsigned int mode, enum object_type *type, unsigned long *size);
+/* returns 1 if *dst was used */
+extern int convert_to_git(const char *path, const char *src, size_t len, struct strbuf *dst);
+extern int convert_to_working_tree(const char *path, const char *src, size_t len, struct strbuf *dst);
+
+/* add */
+void add_files_to_cache(int verbose, const char *prefix, const char **pathspec);
 
 /* diff.c */
 extern int diff_auto_refresh_index;
 
 /* match-trees.c */
 void shift_tree(const unsigned char *, const unsigned char *, unsigned char *, int);
+
+/*
+ * whitespace rules.
+ * used by both diff and apply
+ */
+#define WS_TRAILING_SPACE	01
+#define WS_SPACE_BEFORE_TAB	02
+#define WS_INDENT_WITH_NON_TAB	04
+#define WS_DEFAULT_RULE (WS_TRAILING_SPACE|WS_SPACE_BEFORE_TAB)
+extern unsigned whitespace_rule_cfg;
+extern unsigned whitespace_rule(const char *);
+extern unsigned parse_whitespace_rule(const char *);
+extern unsigned check_and_emit_line(const char *line, int len, unsigned ws_rule,
+    FILE *stream, const char *set,
+    const char *reset, const char *ws);
+extern char *whitespace_error_string(unsigned ws);
+
+/* ls-files */
+int pathspec_match(const char **spec, char *matched, const char *filename, int skiplen);
+int report_path_error(const char *ps_matched, const char **pathspec, int prefix_offset);
+void overlay_tree_on_cache(const char *tree_name, const char *prefix);
 
 #endif /* CACHE_H */

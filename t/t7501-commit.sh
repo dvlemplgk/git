@@ -4,7 +4,7 @@
 #
 
 # FIXME: Test the various index usages, -i and -o, test reflog,
-# signoff, hooks
+# signoff
 
 test_description='git-commit'
 . ./test-lib.sh
@@ -79,7 +79,8 @@ test_expect_success \
 
 cat >editor <<\EOF
 #!/bin/sh
-sed -i -e "s/a file/an amend commit/g" $1
+sed -e "s/a file/an amend commit/g" < $1 > $1-
+mv $1- $1
 EOF
 chmod 755 editor
 
@@ -98,7 +99,8 @@ test_expect_success \
 
 cat >editor <<\EOF
 #!/bin/sh
-sed -i -e "s/amend/older/g" $1
+sed -e "s/amend/older/g"  < $1 > $1-
+mv $1- $1
 EOF
 chmod 755 editor
 
@@ -170,6 +172,158 @@ test_expect_success 'partial commit that involves removal (3)' '
 	git diff-tree --name-status HEAD^ HEAD >current &&
 	echo "M	elif" >expected &&
 	diff expected current
+
+'
+
+author="The Real Author <someguy@his.email.org>"
+test_expect_success 'amend commit to fix author' '
+
+	oldtick=$GIT_AUTHOR_DATE &&
+	test_tick &&
+	git reset --hard &&
+	git cat-file -p HEAD |
+	sed -e "s/author.*/author $author $oldtick/" \
+		-e "s/^\(committer.*> \).*$/\1$GIT_COMMITTER_DATE/" > \
+		expected &&
+	git commit --amend --author="$author" &&
+	git cat-file -p HEAD > current &&
+	diff expected current
+
+'
+
+test_expect_success 'sign off (1)' '
+
+	echo 1 >positive &&
+	git add positive &&
+	git commit -s -m "thank you" &&
+	git cat-file commit HEAD | sed -e "1,/^\$/d" >actual &&
+	(
+		echo thank you
+		echo
+		git var GIT_COMMITTER_IDENT |
+		sed -e "s/>.*/>/" -e "s/^/Signed-off-by: /"
+	) >expected &&
+	diff -u expected actual
+
+'
+
+test_expect_success 'sign off (2)' '
+
+	echo 2 >positive &&
+	git add positive &&
+	existing="Signed-off-by: Watch This <watchthis@example.com>" &&
+	git commit -s -m "thank you
+
+$existing" &&
+	git cat-file commit HEAD | sed -e "1,/^\$/d" >actual &&
+	(
+		echo thank you
+		echo
+		echo $existing
+		git var GIT_COMMITTER_IDENT |
+		sed -e "s/>.*/>/" -e "s/^/Signed-off-by: /"
+	) >expected &&
+	diff -u expected actual
+
+'
+
+test_expect_success 'multiple -m' '
+
+	>negative &&
+	git add negative &&
+	git commit -m "one" -m "two" -m "three" &&
+	git cat-file commit HEAD | sed -e "1,/^\$/d" >actual &&
+	(
+		echo one
+		echo
+		echo two
+		echo
+		echo three
+	) >expected &&
+	diff -u expected actual
+
+'
+
+author="The Real Author <someguy@his.email.org>"
+test_expect_success 'amend commit to fix author' '
+
+	oldtick=$GIT_AUTHOR_DATE &&
+	test_tick &&
+	git reset --hard &&
+	git cat-file -p HEAD |
+	sed -e "s/author.*/author $author $oldtick/" \
+		-e "s/^\(committer.*> \).*$/\1$GIT_COMMITTER_DATE/" > \
+		expected &&
+	git commit --amend --author="$author" &&
+	git cat-file -p HEAD > current &&
+	diff expected current
+
+'
+
+test_expect_success 'git commit <file> with dirty index' '
+	echo tacocat > elif &&
+	echo tehlulz > chz &&
+	git add chz &&
+	git commit elif -m "tacocat is a palindrome" &&
+	git show --stat | grep elif &&
+	git diff --cached | grep chz
+'
+
+test_expect_success 'same tree (single parent)' '
+
+	git reset --hard
+
+	if git commit -m empty
+	then
+		echo oops -- should have complained
+		false
+	else
+		: happy
+	fi
+
+'
+
+test_expect_success 'same tree (single parent) --allow-empty' '
+
+	git commit --allow-empty -m "forced empty" &&
+	git cat-file commit HEAD | grep forced
+
+'
+
+test_expect_success 'same tree (merge and amend merge)' '
+
+	git checkout -b side HEAD^ &&
+	echo zero >zero &&
+	git add zero &&
+	git commit -m "add zero" &&
+	git checkout master &&
+
+	git merge -s ours side -m "empty ok" &&
+	git diff HEAD^ HEAD >actual &&
+	: >expected &&
+	diff -u expected actual &&
+
+	git commit --amend -m "empty really ok" &&
+	git diff HEAD^ HEAD >actual &&
+	: >expected &&
+	diff -u expected actual
+
+'
+
+test_expect_success 'amend using the message from another commit' '
+
+	git reset --hard &&
+	test_tick &&
+	git commit --allow-empty -m "old commit" &&
+	old=$(git rev-parse --verify HEAD) &&
+	test_tick &&
+	git commit --allow-empty -m "new commit" &&
+	new=$(git rev-parse --verify HEAD) &&
+	test_tick &&
+	git commit --allow-empty --amend -C "$old" &&
+	git show --pretty="format:%ad %s" "$old" >expected &&
+	git show --pretty="format:%ad %s" HEAD >actual &&
+	diff -u expected actual
 
 '
 

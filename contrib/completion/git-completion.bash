@@ -291,7 +291,7 @@ __git_commands ()
 	for i in $(git help -a|egrep '^ ')
 	do
 		case $i in
-		add--interactive) : plumbing;;
+		*--*)             : helper pattern;;
 		applymbox)        : ask gittus;;
 		applypatch)       : ask gittus;;
 		archimport)       : import;;
@@ -299,7 +299,6 @@ __git_commands ()
 		check-attr)       : plumbing;;
 		check-ref-format) : plumbing;;
 		commit-tree)      : plumbing;;
-		convert-objects)  : plumbing;;
 		cvsexportcommit)  : export;;
 		cvsimport)        : import;;
 		cvsserver)        : daemon;;
@@ -309,7 +308,6 @@ __git_commands ()
 		diff-tree)        : plumbing;;
 		fast-import)      : import;;
 		fsck-objects)     : plumbing;;
-		fetch--tool)      : plumbing;;
 		fetch-pack)       : plumbing;;
 		fmt-merge-msg)    : plumbing;;
 		for-each-ref)     : plumbing;;
@@ -335,7 +333,7 @@ __git_commands ()
 		read-tree)        : plumbing;;
 		receive-pack)     : plumbing;;
 		reflog)           : plumbing;;
-		repo-config)      : plumbing;;
+		repo-config)      : deprecated;;
 		rerere)           : plumbing;;
 		rev-list)         : plumbing;;
 		rev-parse)        : plumbing;;
@@ -347,7 +345,6 @@ __git_commands ()
 		ssh-*)            : transport;;
 		stripspace)       : plumbing;;
 		svn)              : import export;;
-		svnimport)        : import;;
 		symbolic-ref)     : plumbing;;
 		tar-tree)         : deprecated;;
 		unpack-file)      : plumbing;;
@@ -553,6 +550,20 @@ _git_describe ()
 
 _git_diff ()
 {
+	local cur="${COMP_WORDS[COMP_CWORD]}"
+	case "$cur" in
+	--*)
+		__gitcomp "--cached --stat --numstat --shortstat --summary
+			--patch-with-stat --name-only --name-status --color
+			--no-color --color-words --no-renames --check
+			--full-index --binary --abbrev --diff-filter
+			--find-copies-harder --pickaxe-all --pickaxe-regex
+			--text --ignore-space-at-eol --ignore-space-change
+			--ignore-all-space --exit-code --quiet --ext-diff
+			--no-ext-diff"
+		return
+		;;
+	esac
 	__git_complete_file
 }
 
@@ -959,18 +970,18 @@ _git_remote ()
 	while [ $c -lt $COMP_CWORD ]; do
 		i="${COMP_WORDS[c]}"
 		case "$i" in
-		add|show|prune|update) command="$i"; break ;;
+		add|rm|show|prune|update) command="$i"; break ;;
 		esac
 		c=$((++c))
 	done
 
 	if [ $c -eq $COMP_CWORD -a -z "$command" ]; then
-		__gitcomp "add show prune update"
+		__gitcomp "add rm show prune update"
 		return
 	fi
 
 	case "$command" in
-	show|prune)
+	rm|show|prune)
 		__gitcomp "$(__git_remotes)"
 		;;
 	update)

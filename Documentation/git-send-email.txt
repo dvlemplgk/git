@@ -75,6 +75,12 @@ The --cc option must be repeated for each user you want on the cc list.
 	Make git-send-email less verbose.  One line per email should be
 	all that is output.
 
+--identity::
+	A configuration identity. When given, causes values in the
+	'sendemail.<identity>' subsection to take precedence over
+	values in the 'sendemail' section. The default identity is
+	the value of 'sendemail.identity'.
+
 --smtp-server::
 	If set, specifies the outgoing SMTP server to use (e.g.
 	`smtp.example.com` or a raw IP address).  Alternatively it can
@@ -85,14 +91,29 @@ The --cc option must be repeated for each user you want on the cc list.
 	`/usr/lib/sendmail` if such program is available, or
 	`localhost` otherwise.
 
+--smtp-server-port::
+	Specifies a port different from the default port (SMTP
+	servers typically listen to smtp port 25 and ssmtp port
+	465).
+
+--smtp-user, --smtp-pass::
+	Username and password for SMTP-AUTH. Defaults are the values of
+	the configuration values 'sendemail.smtpuser' and
+	'sendemail.smtppass', but see also 'sendemail.identity'.
+	If not set, authentication is not attempted.
+
+--smtp-ssl::
+	If set, connects to the SMTP server using SSL.
+	Default is the value of the 'sendemail.smtpssl' configuration value;
+	if that is unspecified, does not use SSL.
+
 --subject::
 	Specify the initial subject of the email thread.
 	Only necessary if --compose is also set.  If --compose
 	is not set, this will be prompted for.
 
 --suppress-from, --no-suppress-from::
-        If this is set, do not add the From: address to the cc: list, if it
-        shows up in a From: line.
+        If this is set, do not add the From: address to the cc: list.
         Default is the value of 'sendemail.suppressfrom' configuration value;
         if that is unspecified, default to --no-suppress-from.
 
@@ -116,12 +137,21 @@ The --cc option must be repeated for each user you want on the cc list.
 	Specify the primary recipient of the emails generated.
 	Generally, this will be the upstream maintainer of the
 	project involved.
+	Default is the value of the 'sendemail.to' configuration value;
+	if that is unspecified, this will be prompted for.
 +
 The --to option must be repeated for each user you want on the to list.
 
 
 CONFIGURATION
 -------------
+sendemail.identity::
+	The default configuration identity. When specified,
+	'sendemail.<identity>.<item>' will have higher precedence than
+	'sendemail.<item>'. This is useful to declare multiple SMTP
+	identities and to hoist sensitive authentication information
+	out of the repository and into the global configuration file.
+
 sendemail.aliasesfile::
 	To avoid typing long email addresses, point this to one or more
 	email aliases files.  You must also supply 'sendemail.aliasfiletype'.
@@ -129,6 +159,9 @@ sendemail.aliasesfile::
 sendemail.aliasfiletype::
 	Format of the file(s) specified in sendemail.aliasesfile. Must be
 	one of 'mutt', 'mailrc', 'pine', or 'gnus'.
+
+sendemail.to::
+	Email address (or alias) to always send to.
 
 sendemail.cccmd::
 	Command to execute to generate per patch file specific "Cc:"s.
@@ -141,7 +174,16 @@ sendemail.chainreplyto::
 	parameter.
 
 sendemail.smtpserver::
-	Default smtp server to use.
+	Default SMTP server to use.
+
+sendemail.smtpuser::
+	Default SMTP-AUTH username.
+
+sendemail.smtppass::
+	Default SMTP-AUTH password.
+
+sendemail.smtpssl::
+	Boolean value specifying the default to the '--smtp-ssl' parameter.
 
 Author
 ------
@@ -156,4 +198,4 @@ Documentation by Ryan Anderson
 
 GIT
 ---
-Part of the gitlink:git[7] suite
+Part of the linkgit:git[7] suite

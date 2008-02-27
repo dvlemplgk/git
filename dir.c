@@ -118,25 +118,40 @@ int match_pathspec(const char **pathspec, const char *name, int namelen, int pre
 	return retval;
 }
 
+static int no_wildcard(const char *string)
+{
+	return string[strcspn(string, "*?[{")] == '\0';
+}
+
 void add_exclude(const char *string, const char *base,
 		 int baselen, struct exclude_list *which)
 {
 	struct exclude *x = xmalloc(sizeof (*x));
 
+	x->to_exclude = 1;
+	if (*string == '!') {
+		x->to_exclude = 0;
+		string++;
+	}
 	x->pattern = string;
+	x->patternlen = strlen(string);
 	x->base = base;
 	x->baselen = baselen;
-	if (which->nr == which->alloc) {
-		which->alloc = alloc_nr(which->alloc);
-		which->excludes = xrealloc(which->excludes,
-					   which->alloc * sizeof(x));
-	}
+	x->flags = 0;
+	if (!strchr(string, '/'))
+		x->flags |= EXC_FLAG_NODIR;
+	if (no_wildcard(string))
+		x->flags |= EXC_FLAG_NOWILDCARD;
+	if (*string == '*' && no_wildcard(string+1))
+		x->flags |= EXC_FLAG_ENDSWITH;
+	ALLOC_GROW(which->excludes, which->nr + 1, which->alloc);
 	which->excludes[which->nr++] = x;
 }
 
 static int add_excludes_from_file_1(const char *fname,
 				    const char *base,
 				    int baselen,
+				    char **buf_p,
 				    struct exclude_list *which)
 {
 	struct stat st;
@@ -154,9 +169,14 @@ static int add_excludes_from_file_1(const char *fname,
 	}
 	buf = xmalloc(size+1);
 	if (read_in_full(fd, buf, size) != size)
+	{
+		free(buf);
 		goto err;
+	}
 	close(fd);
 
+	if (buf_p)
+		*buf_p = buf;
 	buf[size++] = '\n';
 	entry = buf;
 	for (i = 0; i < size; i++) {
@@ -178,38 +198,70 @@ static int add_excludes_from_file_1(const char *fname,
 
 void add_excludes_from_file(struct dir_struct *dir, const char *fname)
 {
-	if (add_excludes_from_file_1(fname, "", 0,
+	if (add_excludes_from_file_1(fname, "", 0, NULL,
 				     &dir->exclude_list[EXC_FILE]) < 0)
 		die("cannot use %s as an exclude file", fname);
 }
 
-int push_exclude_per_directory(struct dir_struct *dir, const char *base, int baselen)
+static void prep_exclude(struct dir_struct *dir, const char *base, int baselen)
 {
-	char exclude_file[PATH_MAX];
-	struct exclude_list *el = &dir->exclude_list[EXC_DIRS];
-	int current_nr = el->nr;
+	struct exclude_list *el;
+	struct exclude_stack *stk = NULL;
+	int current;
 
-	if (dir->exclude_per_dir) {
-		memcpy(exclude_file, base, baselen);
-		strcpy(exclude_file + baselen, dir->exclude_per_dir);
-		add_excludes_from_file_1(exclude_file, base, baselen, el);
+	if ((!dir->exclude_per_dir) ||
+	    (baselen + strlen(dir->exclude_per_dir) >= PATH_MAX))
+		return; /* too long a path -- ignore */
+
+	/* Pop the ones that are not the prefix of the path being checked. */
+	el = &dir->exclude_list[EXC_DIRS];
+	while ((stk = dir->exclude_stack) != NULL) {
+		if (stk->baselen <= baselen &&
+		    !strncmp(dir->basebuf, base, stk->baselen))
+			break;
+		dir->exclude_stack = stk->prev;
+		while (stk->exclude_ix < el->nr)
+			free(el->excludes[--el->nr]);
+		free(stk->filebuf);
+		free(stk);
 	}
-	return current_nr;
-}
 
-void pop_exclude_per_directory(struct dir_struct *dir, int stk)
-{
-	struct exclude_list *el = &dir->exclude_list[EXC_DIRS];
+	/* Read from the parent directories and push them down. */
+	current = stk ? stk->baselen : -1;
+	while (current < baselen) {
+		struct exclude_stack *stk = xcalloc(1, sizeof(*stk));
+		const char *cp;
 
-	while (stk < el->nr)
-		free(el->excludes[--el->nr]);
+		if (current < 0) {
+			cp = base;
+			current = 0;
+		}
+		else {
+			cp = strchr(base + current + 1, '/');
+			if (!cp)
+				die("oops in prep_exclude");
+			cp++;
+		}
+		stk->prev = dir->exclude_stack;
+		stk->baselen = cp - base;
+		stk->exclude_ix = el->nr;
+		memcpy(dir->basebuf + current, base + current,
+		       stk->baselen - current);
+		strcpy(dir->basebuf + stk->baselen, dir->exclude_per_dir);
+		add_excludes_from_file_1(dir->basebuf,
+					 dir->basebuf, stk->baselen,
+					 &stk->filebuf, el);
+		dir->exclude_stack = stk;
+		current = stk->baselen;
+	}
+	dir->basebuf[baselen] = '\0';
 }
 
 /* Scan the list and let the last match determines the fate.
  * Return 1 for exclude, 0 for include and -1 for undecided.
  */
 static int excluded_1(const char *pathname,
-		      int pathlen,
+		      int pathlen, const char *basename,
 		      struct exclude_list *el)
 {
 	int i;
@@ -218,19 +270,21 @@ static int excluded_1(const char *pathname,
 		for (i = el->nr - 1; 0 <= i; i--) {
 			struct exclude *x = el->excludes[i];
 			const char *exclude = x->pattern;
-			int to_exclude = 1;
+			int to_exclude = x->to_exclude;
 
-			if (*exclude == '!') {
-				to_exclude = 0;
-				exclude++;
-			}
-
-			if (!strchr(exclude, '/')) {
+			if (x->flags & EXC_FLAG_NODIR) {
 				/* match basename */
-				const char *basename = strrchr(pathname, '/');
-				basename = (basename) ? basename+1 : pathname;
-				if (fnmatch(exclude, basename, 0) == 0)
-					return to_exclude;
+				if (x->flags & EXC_FLAG_NOWILDCARD) {
+					if (!strcmp(exclude, basename))
+						return to_exclude;
+				} else if (x->flags & EXC_FLAG_ENDSWITH) {
+					if (x->patternlen - 1 <= pathlen &&
+					    !strcmp(exclude + 1, pathname + pathlen - x->patternlen + 1))
+						return to_exclude;
+				} else {
+					if (fnmatch(exclude, basename, 0) == 0)
+						return to_exclude;
+				}
 			}
 			else {
 				/* match with FNM_PATHNAME:
@@ -246,9 +300,14 @@ static int excluded_1(const char *pathname,
 				    strncmp(pathname, x->base, baselen))
 				    continue;
 
-				if (fnmatch(exclude, pathname+baselen,
-					    FNM_PATHNAME) == 0)
-					return to_exclude;
+				if (x->flags & EXC_FLAG_NOWILDCARD) {
+					if (!strcmp(exclude, pathname + baselen))
+						return to_exclude;
+				} else {
+					if (fnmatch(exclude, pathname+baselen,
+						    FNM_PATHNAME) == 0)
+					    return to_exclude;
+				}
 			}
 		}
 	}
@@ -259,9 +318,12 @@ int excluded(struct dir_struct *dir, const char *pathname)
 {
 	int pathlen = strlen(pathname);
 	int st;
+	const char *basename = strrchr(pathname, '/');
+	basename = (basename) ? basename+1 : pathname;
 
+	prep_exclude(dir, pathname, basename-pathname);
 	for (st = EXC_CMDL; st <= EXC_FILE; st++) {
-		switch (excluded_1(pathname, pathlen, &dir->exclude_list[st])) {
+		switch (excluded_1(pathname, pathlen, basename, &dir->exclude_list[st])) {
 		case 0:
 			return 0;
 		case 1:
@@ -271,7 +333,8 @@ int excluded(struct dir_struct *dir, const char *pathname)
 	return 0;
 }
 
-static struct dir_entry *dir_entry_new(const char *pathname, int len) {
+static struct dir_entry *dir_entry_new(const char *pathname, int len)
+{
 	struct dir_entry *ent;
 
 	ent = xmalloc(sizeof(*ent) + len + 1);
@@ -476,12 +539,9 @@ static int read_directory_recursive(struct dir_struct *dir, const char *path, co
 	int contents = 0;
 
 	if (fdir) {
-		int exclude_stk;
 		struct dirent *de;
 		char fullname[PATH_MAX + 1];
 		memcpy(fullname, base, baselen);
-
-		exclude_stk = push_exclude_per_directory(dir, base, baselen);
 
 		while ((de = readdir(fdir)) != NULL) {
 			int len, dtype;
@@ -556,8 +616,6 @@ static int read_directory_recursive(struct dir_struct *dir, const char *path, co
 		}
 exit_early:
 		closedir(fdir);
-
-		pop_exclude_per_directory(dir, exclude_stk);
 	}
 
 	return contents;
@@ -626,47 +684,18 @@ static void free_simplify(struct path_simplify *simplify)
 int read_directory(struct dir_struct *dir, const char *path, const char *base, int baselen, const char **pathspec)
 {
 	struct path_simplify *simplify = create_simplify(pathspec);
-	char *pp = NULL;
-
-	/*
-	 * Make sure to do the per-directory exclude for all the
-	 * directories leading up to our base.
-	 */
-	if (baselen) {
-		if (dir->exclude_per_dir) {
-			char *p;
-			pp = xmalloc(baselen+1);
-			memcpy(pp, base, baselen+1);
-			p = pp;
-			while (1) {
-				char save = *p;
-				*p = 0;
-				push_exclude_per_directory(dir, pp, p-pp);
-				*p++ = save;
-				if (!save)
-					break;
-				p = strchr(p, '/');
-				if (p)
-					p++;
-				else
-					p = pp + baselen;
-			}
-		}
-	}
 
 	read_directory_recursive(dir, path, base, baselen, 0, simplify);
 	free_simplify(simplify);
-	free(pp);
 	qsort(dir->entries, dir->nr, sizeof(struct dir_entry *), cmp_name);
 	qsort(dir->ignored, dir->ignored_nr, sizeof(struct dir_entry *), cmp_name);
 	return dir->nr;
 }
 
-int
-file_exists(const char *f)
+int file_exists(const char *f)
 {
-  struct stat sb;
-  return stat(f, &sb) == 0;
+	struct stat sb;
+	return lstat(f, &sb) == 0;
 }
 
 /*
@@ -710,6 +739,47 @@ int is_inside_dir(const char *dir)
 {
 	char buffer[PATH_MAX];
 	return get_relative_cwd(buffer, sizeof(buffer), dir) != NULL;
+}
+
+int remove_dir_recursively(struct strbuf *path, int only_empty)
+{
+	DIR *dir = opendir(path->buf);
+	struct dirent *e;
+	int ret = 0, original_len = path->len, len;
+
+	if (!dir)
+		return -1;
+	if (path->buf[original_len - 1] != '/')
+		strbuf_addch(path, '/');
+
+	len = path->len;
+	while ((e = readdir(dir)) != NULL) {
+		struct stat st;
+		if ((e->d_name[0] == '.') &&
+		    ((e->d_name[1] == 0) ||
+		     ((e->d_name[1] == '.') && e->d_name[2] == 0)))
+			continue; /* "." and ".." */
+
+		strbuf_setlen(path, len);
+		strbuf_addstr(path, e->d_name);
+		if (lstat(path->buf, &st))
+			; /* fall thru */
+		else if (S_ISDIR(st.st_mode)) {
+			if (!remove_dir_recursively(path, only_empty))
+				continue; /* happy */
+		} else if (!only_empty && !unlink(path->buf))
+			continue; /* happy, too */
+
+		/* path too long, stat fails, or non-directory still exists */
+		ret = -1;
+		break;
+	}
+	closedir(dir);
+
+	strbuf_setlen(path, original_len);
+	if (!ret)
+		ret = rmdir(path->buf);
+	return ret;
 }
 
 void setup_standard_excludes(struct dir_struct *dir)

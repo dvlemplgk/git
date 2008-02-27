@@ -3,7 +3,19 @@
 # Copyright (c) 2005 Junio C Hamano
 #
 
-USAGE='[-n] [--summary] [--no-commit] [--squash] [-s <strategy>] [-m=<merge-message>] <commit>+'
+OPTIONS_KEEPDASHDASH=
+OPTIONS_SPEC="\
+git-merge [options] <remote>...
+git-merge [options] <msg> HEAD <remote>
+--
+summary              show a diffstat at the end of the merge
+n,no-summary         don't show a diffstat at the end of the merge
+squash               create a single commit instead of doing a merge
+commit               perform a commit if the merge sucesses (default)
+ff                   allow fast forward (default)
+s,strategy=          merge strategy to use
+m,message=           message to be used for the merge commit (if any)
+"
 
 SUBDIRECTORY_OK=Yes
 . git-sh-setup
@@ -28,20 +40,19 @@ allow_trivial_merge=t
 
 dropsave() {
 	rm -f -- "$GIT_DIR/MERGE_HEAD" "$GIT_DIR/MERGE_MSG" \
-		 "$GIT_DIR/MERGE_SAVE" || exit 1
+		 "$GIT_DIR/MERGE_STASH" || exit 1
 }
 
 savestate() {
 	# Stash away any local modifications.
-	git diff-index -z --name-only $head |
-	cpio -0 -o >"$GIT_DIR/MERGE_SAVE"
+	git stash create >"$GIT_DIR/MERGE_STASH"
 }
 
 restorestate() {
-        if test -f "$GIT_DIR/MERGE_SAVE"
+        if test -f "$GIT_DIR/MERGE_STASH"
 	then
 		git reset --hard $head >/dev/null
-		cpio -iuv <"$GIT_DIR/MERGE_SAVE"
+		git stash apply $(cat "$GIT_DIR/MERGE_STASH")
 		git update-index --refresh >/dev/null
 	fi
 }
@@ -59,7 +70,7 @@ finish_up_to_date () {
 squash_message () {
 	echo Squashed commit of the following:
 	echo
-	git log --no-merges ^"$head" $remote
+	git log --no-merges ^"$head" $remoteheads
 }
 
 finish () {
@@ -82,6 +93,7 @@ finish () {
 			;;
 		*)
 			git update-ref -m "$rlogm" HEAD "$1" "$head" || exit 1
+			git gc --auto
 			;;
 		esac
 		;;
@@ -97,6 +109,19 @@ finish () {
 		fi
 		;;
 	esac
+
+	# Run a post-merge hook
+        if test -x "$GIT_DIR"/hooks/post-merge
+        then
+	    case "$squash" in
+	    t)
+                "$GIT_DIR"/hooks/post-merge 1
+		;;
+	    '')
+                "$GIT_DIR"/hooks/post-merge 0
+		;;
+	    esac
+        fi
 }
 
 merge_name () {
@@ -119,57 +144,64 @@ merge_name () {
 	fi
 }
 
-case "$#" in 0) usage ;; esac
+parse_config () {
+	while test $# != 0; do
+		case "$1" in
+		-n|--no-summary)
+			show_diffstat=false ;;
+		--summary)
+			show_diffstat=t ;;
+		--squash)
+			allow_fast_forward=t squash=t no_commit=t ;;
+		--no-squash)
+			allow_fast_forward=t squash= no_commit= ;;
+		--commit)
+			allow_fast_forward=t squash= no_commit= ;;
+		--no-commit)
+			allow_fast_forward=t squash= no_commit=t ;;
+		--ff)
+			allow_fast_forward=t squash= no_commit= ;;
+		--no-ff)
+			allow_fast_forward=false squash= no_commit= ;;
+		-s|--strategy)
+			shift
+			case " $all_strategies " in
+			*" $1 "*)
+				use_strategies="$use_strategies$1 " ;;
+			*)
+				die "available strategies are: $all_strategies" ;;
+			esac
+			;;
+		-m|--message)
+			shift
+			merge_msg="$1"
+			have_message=t
+			;;
+		--)
+			shift
+			break ;;
+		*)	usage ;;
+		esac
+		shift
+	done
+	args_left=$#
+}
+
+test $# != 0 || usage
 
 have_message=
-while test $# != 0
-do
-	case "$1" in
-	-n|--n|--no|--no-|--no-s|--no-su|--no-sum|--no-summ|\
-		--no-summa|--no-summar|--no-summary)
-		show_diffstat=false ;;
-	--summary)
-		show_diffstat=t ;;
-	--sq|--squ|--squa|--squas|--squash)
-		squash=t no_commit=t ;;
-	--no-c|--no-co|--no-com|--no-comm|--no-commi|--no-commit)
-		no_commit=t ;;
-	-s=*|--s=*|--st=*|--str=*|--stra=*|--strat=*|--strate=*|\
-		--strateg=*|--strategy=*|\
-	-s|--s|--st|--str|--stra|--strat|--strate|--strateg|--strategy)
-		case "$#,$1" in
-		*,*=*)
-			strategy=`expr "z$1" : 'z-[^=]*=\(.*\)'` ;;
-		1,*)
-			usage ;;
-		*)
-			strategy="$2"
-			shift ;;
-		esac
-		case " $all_strategies " in
-		*" $strategy "*)
-			use_strategies="$use_strategies$strategy " ;;
-		*)
-			die "available strategies are: $all_strategies" ;;
-		esac
-		;;
-	-m=*|--m=*|--me=*|--mes=*|--mess=*|--messa=*|--messag=*|--message=*)
-		merge_msg=`expr "z$1" : 'z-[^=]*=\(.*\)'`
-		have_message=t
-		;;
-	-m|--m|--me|--mes|--mess|--messa|--messag|--message)
-		shift
-		case "$#" in
-		1)	usage ;;
-		esac
-		merge_msg="$1"
-		have_message=t
-		;;
-	-*)	usage ;;
-	*)	break ;;
-	esac
-	shift
-done
+
+if branch=$(git-symbolic-ref -q HEAD)
+then
+	mergeopts=$(git config "branch.${branch#refs/heads/}.mergeoptions")
+	if test -n "$mergeopts"
+	then
+		parse_config $mergeopts --
+	fi
+fi
+
+parse_config "$@"
+while test $args_left -lt $#; do shift; done
 
 if test -z "$show_diffstat"; then
     test "$(git config --bool merge.diffstat)" = false && show_diffstat=false
@@ -386,7 +418,7 @@ case "$use_strategies" in
     single_strategy=no
     ;;
 *)
-    rm -f "$GIT_DIR/MERGE_SAVE"
+    rm -f "$GIT_DIR/MERGE_STASH"
     single_strategy=yes
     ;;
 esac
@@ -444,7 +476,13 @@ done
 # auto resolved the merge cleanly.
 if test '' != "$result_tree"
 then
-    parents=$(git show-branch --independent "$head" "$@" | sed -e 's/^/-p /')
+    if test "$allow_fast_forward" = "t"
+    then
+        parents=$(git show-branch --independent "$head" "$@")
+    else
+        parents=$(git rev-parse "$head" "$@")
+    fi
+    parents=$(echo "$parents" | sed -e 's/^/-p /')
     result_commit=$(printf '%s\n' "$merge_msg" | git commit-tree $result_tree $parents) || exit
     finish "$result_commit" "Merge made by $wt_strategy."
     dropsave

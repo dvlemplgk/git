@@ -88,7 +88,7 @@ sub write_author_info($) {
 	close ($f);
 }
 
-# convert getopts specs for use by git-repo-config
+# convert getopts specs for use by git config
 sub read_repo_config {
     # Split the string between characters, unless there is a ':'
     # So "abc:de" becomes ["a", "b", "c:", "d", "e"]
@@ -96,7 +96,7 @@ sub read_repo_config {
 	foreach my $o (@opts) {
 		my $key = $o;
 		$key =~ s/://g;
-		my $arg = 'git-repo-config';
+		my $arg = 'git config';
 		$arg .= ' --bool' if ($o !~ /:$/);
 
         chomp(my $tmp = `$arg --get cvsimport.$key`);
@@ -116,7 +116,7 @@ getopts($opts) or usage();
 usage if $opt_h;
 
 if (@ARGV == 0) {
-		chomp(my $module = `git-repo-config --get cvsimport.module`);
+		chomp(my $module = `git config --get cvsimport.module`);
 		push(@ARGV, $module) if $? == 0;
 }
 @ARGV <= 1 or usage("You can't specify more than one CVS module");
@@ -223,7 +223,8 @@ sub conn {
 			}
 		}
 
-		$user="anonymous" unless defined $user;
+		# if username is not explicit in CVSROOT, then use current user, as cvs would
+		$user=(getlogin() || $ENV{'LOGNAME'} || $ENV{'USER'} || "anonymous") unless $user;
 		my $rr2 = "-";
 		unless ($port) {
 			$rr2 = ":pserver:$user\@$serv:$repo";
@@ -631,6 +632,7 @@ unless ($opt_P) {
 	    print $cvspsfh $_;
 	}
 	close CVSPS;
+	$? == 0 or die "git-cvsimport: fatal: cvsps reported error\n";
 	close $cvspsfh;
 } else {
 	$cvspsfile = $opt_P;
@@ -847,7 +849,7 @@ while (<CVS>) {
 		}
 		if (!$opt_a && $starttime - 300 - (defined $opt_z ? $opt_z : 300) <= $date) {
 			# skip if the commit is too recent
-			# that the cvsps default fuzz is 300s, we give ourselves another
+			# given that the cvsps default fuzz is 300s, we give ourselves another
 			# 300s just in case -- this also prevents skipping commits
 			# due to server clock drift
 			print "skip patchset $patchset: $date too recent\n" if $opt_v;

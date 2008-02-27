@@ -448,6 +448,23 @@ test_expect_success numbers '
 	test z1048576 = "z$m"
 '
 
+cat > expect <<EOF
+fatal: bad config value for 'aninvalid.unit' in .git/config
+EOF
+
+test_expect_success 'invalid unit' '
+
+	git config aninvalid.unit "1auto" &&
+	s=$(git config aninvalid.unit) &&
+	test "z1auto" = "z$s" &&
+	if git config --int --get aninvalid.unit 2>actual
+	then
+		echo config should have failed
+		false
+	fi &&
+	cmp actual expect
+'
+
 cat > expect << EOF
 true
 false
@@ -591,12 +608,12 @@ Qsection.sub=section.val4
 Qsection.sub=section.val5Q
 EOF
 
-git config --null --list | tr '[\000]' 'Q' > result
+git config --null --list | tr '\000' 'Q' > result
 echo >>result
 
 test_expect_success '--null --list' 'cmp result expect'
 
-git config --null --get-regexp 'val[0-9]' | tr '[\000]' 'Q' > result
+git config --null --get-regexp 'val[0-9]' | tr '\000' 'Q' > result
 echo >>result
 
 test_expect_success '--null --get-regexp' 'cmp result expect'

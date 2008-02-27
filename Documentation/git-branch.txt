@@ -10,6 +10,7 @@ SYNOPSIS
 [verse]
 'git-branch' [--color | --no-color] [-r | -a]
 	   [-v [--abbrev=<length> | --no-abbrev]]
+	   [--contains <commit>]
 'git-branch' [--track | --no-track] [-l] [-f] <branchname> [<start-point>]
 'git-branch' (-m | -M) [<oldbranch>] <newbranch>
 'git-branch' (-d | -D) [-r] <branchname>...
@@ -20,6 +21,9 @@ With no arguments given a list of existing branches
 will be shown, the current branch will be highlighted with an asterisk.
 Option `-r` causes the remote-tracking branches to be listed,
 and option `-a` shows both.
+With `--contains <commit>`, shows only the branches that
+contains the named commit (in other words, the branches whose
+tip commits are descendant of the named commit).
 
 In its second form, a new branch named <branchname> will be created.
 It will start out with a head equal to the one given as <start-point>.
@@ -31,7 +35,7 @@ working tree to it; use "git checkout <newbranch>" to switch to the
 new branch.
 
 When a local branch is started off a remote branch, git can setup the
-branch so that gitlink:git-pull[1] will appropriately merge from that
+branch so that linkgit:git-pull[1] will appropriately merge from that
 remote branch.  If this behavior is desired, it is possible to make it
 the default using the global `branch.autosetupmerge` configuration
 flag.  Otherwise, it can be chosen per-branch using the `--track`
@@ -49,8 +53,8 @@ has a reflog then the reflog will also be deleted.
 
 Use -r together with -d to delete remote-tracking branches. Note, that it
 only makes sense to delete remote-tracking branches if they no longer exist
-in remote repository or if gitlink:git-fetch[1] was configured not to fetch
-them again. See also 'prune' subcommand of gitlink:git-remote[1] for way to
+in remote repository or if linkgit:git-fetch[1] was configured not to fetch
+them again. See also 'prune' subcommand of linkgit:git-remote[1] for way to
 clean up all obsolete remote-tracking branches.
 
 
@@ -90,7 +94,7 @@ OPTIONS
 -a::
 	List both remote-tracking branches and local branches.
 
--v::
+-v, --verbose::
 	Show sha1 and commit subject line for each head.
 
 --abbrev=<length>::
@@ -118,7 +122,7 @@ OPTIONS
 <branchname>::
 	The name of the branch to create or delete.
 	The new branch name must pass all checks defined by
-	gitlink:git-check-ref-format[1].  Some of these checks
+	linkgit:git-check-ref-format[1].  Some of these checks
 	may restrict the characters allowed in a branch name.
 
 <start-point>::
@@ -160,7 +164,7 @@ $ git branch -D test                                    <2>
 +
 <1> Delete remote-tracking branches "todo", "html", "man". Next 'fetch' or
 'pull' will create them again unless you configure them not to. See
-gitlink:git-fetch[1].
+linkgit:git-fetch[1].
 <2> Delete "test" branch even if the "master" branch (or whichever branch is
 currently checked out) does not have all commits from test branch.
 
@@ -183,4 +187,4 @@ Documentation by Junio C Hamano and the git-list <git@vger.kernel.org>.
 
 GIT
 ---
-Part of the gitlink:git[7] suite
+Part of the linkgit:git[7] suite

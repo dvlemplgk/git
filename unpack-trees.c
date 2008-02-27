@@ -71,11 +71,7 @@ static int unpack_trees_rec(struct tree_entry_list **posns, int len,
 	int remove;
 	int baselen = strlen(base);
 	int src_size = len + 1;
-	int i_stk = i_stk;
 	int retval = 0;
-
-	if (o->dir)
-		i_stk = push_exclude_per_directory(o->dir, base, strlen(base));
 
 	do {
 		int i;
@@ -255,8 +251,6 @@ static int unpack_trees_rec(struct tree_entry_list **posns, int len,
 	} while (1);
 
  leave_directory:
-	if (o->dir)
-		pop_exclude_per_directory(o->dir, i_stk);
 	return retval;
 }
 
@@ -297,7 +291,7 @@ static void check_updates(struct cache_entry **src, int nr,
 {
 	unsigned short mask = htons(CE_UPDATE);
 	unsigned cnt = 0, total = 0;
-	struct progress progress;
+	struct progress *progress = NULL;
 	char last_symlink[PATH_MAX];
 
 	if (o->update && o->verbose_update) {
@@ -307,8 +301,8 @@ static void check_updates(struct cache_entry **src, int nr,
 				total++;
 		}
 
-		start_progress_delay(&progress, "Checking %u files out...",
-				     "", total, 50, 2);
+		progress = start_progress_delay("Checking out files",
+						total, 50, 2);
 		cnt = 0;
 	}
 
@@ -316,9 +310,8 @@ static void check_updates(struct cache_entry **src, int nr,
 	while (nr--) {
 		struct cache_entry *ce = *src++;
 
-		if (total)
-			if (!ce->ce_mode || ce->ce_flags & mask)
-				display_progress(&progress, ++cnt);
+		if (!ce->ce_mode || ce->ce_flags & mask)
+			display_progress(progress, ++cnt);
 		if (!ce->ce_mode) {
 			if (o->update)
 				unlink_entry(ce->name, last_symlink);
@@ -332,8 +325,7 @@ static void check_updates(struct cache_entry **src, int nr,
 			}
 		}
 	}
-	if (total)
-		stop_progress(&progress);;
+	stop_progress(&progress);
 }
 
 int unpack_trees(unsigned len, struct tree_desc *t, struct unpack_trees_options *o)
@@ -598,7 +590,7 @@ static int merged_entry(struct cache_entry *merge, struct cache_entry *old,
 		 * a match.
 		 */
 		if (same(old, merge)) {
-			*merge = *old;
+			memcpy(merge, old, offsetof(struct cache_entry, name));
 		} else {
 			verify_uptodate(old, o);
 			invalidate_ce_path(old);

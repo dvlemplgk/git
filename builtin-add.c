@@ -12,10 +12,14 @@
 #include "diffcore.h"
 #include "commit.h"
 #include "revision.h"
+#include "run-command.h"
+#include "parse-options.h"
 
-static const char builtin_add_usage[] =
-"git-add [-n] [-v] [-f] [--interactive | -i] [-u] [--refresh] [--] <filepattern>...";
-
+static const char * const builtin_add_usage[] = {
+	"git-add [options] [--] <filepattern>...",
+	NULL
+};
+static int patch_interactive = 0, add_interactive = 0;
 static int take_worktree_changes;
 
 static void prune_directory(struct dir_struct *dir, const char **pathspec, int prefix)
@@ -66,12 +70,8 @@ static void fill_directory(struct dir_struct *dir, const char **pathspec,
 	baselen = common_prefix(pathspec);
 	path = ".";
 	base = "";
-	if (baselen) {
-		char *common = xmalloc(baselen + 1);
-		memcpy(common, *pathspec, baselen);
-		common[baselen] = 0;
-		path = base = common;
-	}
+	if (baselen)
+		path = base = xmemdupz(*pathspec, baselen);
 
 	/* Read the directory and prune it */
 	read_directory(dir, path, base, baselen, pathspec);
@@ -98,7 +98,6 @@ static void update_callback(struct diff_queue_struct *q,
 			break;
 		case DIFF_STATUS_DELETED:
 			remove_file_from_cache(path);
-			cache_tree_invalidate_path(active_cache_tree, path);
 			if (verbose)
 				printf("remove '%s'\n", path);
 			break;
@@ -106,17 +105,15 @@ static void update_callback(struct diff_queue_struct *q,
 	}
 }
 
-static void update(int verbose, const char *prefix, const char **files)
+void add_files_to_cache(int verbose, const char *prefix, const char **pathspec)
 {
 	struct rev_info rev;
 	init_revisions(&rev, prefix);
 	setup_revisions(0, NULL, &rev, NULL);
-	rev.prune_data = get_pathspec(prefix, files);
+	rev.prune_data = pathspec;
 	rev.diffopt.output_format = DIFF_FORMAT_CALLBACK;
 	rev.diffopt.format_callback = update_callback;
 	rev.diffopt.format_callback_data = &verbose;
-	if (read_cache() < 0)
-		die("index file corrupt");
 	run_diff_files(&rev, DIFF_RACY_IS_MODIFIED);
 }
 
@@ -138,80 +135,93 @@ static void refresh(int verbose, const char **pathspec)
         free(seen);
 }
 
+static const char **validate_pathspec(int argc, const char **argv, const char *prefix)
+{
+	const char **pathspec = get_pathspec(prefix, argv);
+
+	return pathspec;
+}
+
+int interactive_add(int argc, const char **argv, const char *prefix)
+{
+	int status, ac;
+	const char **args;
+	const char **pathspec = NULL;
+
+	if (argc) {
+		pathspec = validate_pathspec(argc, argv, prefix);
+		if (!pathspec)
+			return -1;
+	}
+
+	args = xcalloc(sizeof(const char *), (argc + 4));
+	ac = 0;
+	args[ac++] = "add--interactive";
+	if (patch_interactive)
+		args[ac++] = "--patch";
+	args[ac++] = "--";
+	if (argc) {
+		memcpy(&(args[ac]), pathspec, sizeof(const char *) * argc);
+		ac += argc;
+	}
+	args[ac] = NULL;
+
+	status = run_command_v_opt(args, RUN_GIT_CMD);
+	free(args);
+	return status;
+}
+
 static struct lock_file lock_file;
 
 static const char ignore_error[] =
 "The following paths are ignored by one of your .gitignore files:\n";
 
+static int verbose = 0, show_only = 0, ignored_too = 0, refresh_only = 0;
+
+static struct option builtin_add_options[] = {
+	OPT__DRY_RUN(&show_only),
+	OPT__VERBOSE(&verbose),
+	OPT_GROUP(""),
+	OPT_BOOLEAN('i', "interactive", &add_interactive, "interactive picking"),
+	OPT_BOOLEAN('p', "patch", &patch_interactive, "interactive patching"),
+	OPT_BOOLEAN('f', NULL, &ignored_too, "allow adding otherwise ignored files"),
+	OPT_BOOLEAN('u', NULL, &take_worktree_changes, "update tracked files"),
+	OPT_BOOLEAN( 0 , "refresh", &refresh_only, "don't add, only refresh the index"),
+	OPT_END(),
+};
+
 int cmd_add(int argc, const char **argv, const char *prefix)
 {
 	int i, newfd;
-	int verbose = 0, show_only = 0, ignored_too = 0, refresh_only = 0;
 	const char **pathspec;
 	struct dir_struct dir;
-	int add_interactive = 0;
 
-	for (i = 1; i < argc; i++) {
-		if (!strcmp("--interactive", argv[i]) ||
-		    !strcmp("-i", argv[i]))
-			add_interactive++;
-	}
-	if (add_interactive) {
-		const char *args[] = { "add--interactive", NULL };
-
-		if (add_interactive != 1 || argc != 2)
-			die("add --interactive does not take any parameters");
-		execv_git_cmd(args);
-		exit(1);
-	}
+	argc = parse_options(argc, argv, builtin_add_options,
+			  builtin_add_usage, 0);
+	if (patch_interactive)
+		add_interactive = 1;
+	if (add_interactive)
+		exit(interactive_add(argc, argv, prefix));
 
 	git_config(git_default_config);
 
 	newfd = hold_locked_index(&lock_file, 1);
 
-	for (i = 1; i < argc; i++) {
-		const char *arg = argv[i];
-
-		if (arg[0] != '-')
-			break;
-		if (!strcmp(arg, "--")) {
-			i++;
-			break;
-		}
-		if (!strcmp(arg, "-n")) {
-			show_only = 1;
-			continue;
-		}
-		if (!strcmp(arg, "-f")) {
-			ignored_too = 1;
-			continue;
-		}
-		if (!strcmp(arg, "-v")) {
-			verbose = 1;
-			continue;
-		}
-		if (!strcmp(arg, "-u")) {
-			take_worktree_changes = 1;
-			continue;
-		}
-		if (!strcmp(arg, "--refresh")) {
-			refresh_only = 1;
-			continue;
-		}
-		usage(builtin_add_usage);
-	}
-
 	if (take_worktree_changes) {
-		update(verbose, prefix, argv + i);
+		const char **pathspec;
+		if (read_cache() < 0)
+			die("index file corrupt");
+		pathspec = get_pathspec(prefix, argv);
+		add_files_to_cache(verbose, prefix, pathspec);
 		goto finish;
 	}
 
-	if (argc <= i) {
+	if (argc == 0) {
 		fprintf(stderr, "Nothing specified, nothing added.\n");
 		fprintf(stderr, "Maybe you wanted to say 'git add .'?\n");
 		return 0;
 	}
-	pathspec = get_pathspec(prefix, argv + i);
+	pathspec = get_pathspec(prefix, argv);
 
 	if (refresh_only) {
 		refresh(verbose, pathspec);
@@ -249,7 +259,7 @@ int cmd_add(int argc, const char **argv, const char *prefix)
  finish:
 	if (active_cache_changed) {
 		if (write_cache(newfd, active_cache, active_nr) ||
-		    close(newfd) || commit_locked_index(&lock_file))
+		    commit_locked_index(&lock_file))
 			die("Unable to write new index file");
 	}
 

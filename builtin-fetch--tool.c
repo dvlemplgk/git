@@ -3,26 +3,14 @@
 #include "refs.h"
 #include "commit.h"
 
-#define CHUNK_SIZE 1024
-
 static char *get_stdin(void)
 {
-	size_t offset = 0;
-	char *data = xmalloc(CHUNK_SIZE);
-
-	while (1) {
-		ssize_t cnt = xread(0, data + offset, CHUNK_SIZE);
-		if (cnt < 0)
-			die("error reading standard input: %s",
-			    strerror(errno));
-		if (cnt == 0) {
-			data[offset] = 0;
-			break;
-		}
-		offset += cnt;
-		data = xrealloc(data, offset + CHUNK_SIZE);
+	struct strbuf buf;
+	strbuf_init(&buf, 0);
+	if (strbuf_read(&buf, 0, 1024) < 0) {
+		die("error reading standard input: %s", strerror(errno));
 	}
-	return data;
+	return strbuf_detach(&buf, NULL);
 }
 
 static void show_new(enum object_type type, unsigned char *sha1_new)
@@ -31,24 +19,19 @@ static void show_new(enum object_type type, unsigned char *sha1_new)
 		find_unique_abbrev(sha1_new, DEFAULT_ABBREV));
 }
 
-static int update_ref(const char *action,
+static int update_ref_env(const char *action,
 		      const char *refname,
 		      unsigned char *sha1,
 		      unsigned char *oldval)
 {
 	char msg[1024];
-	char *rla = getenv("GIT_REFLOG_ACTION");
-	static struct ref_lock *lock;
+	const char *rla = getenv("GIT_REFLOG_ACTION");
 
 	if (!rla)
 		rla = "(reflog update)";
-	snprintf(msg, sizeof(msg), "%s: %s", rla, action);
-	lock = lock_any_ref_for_update(refname, oldval, 0);
-	if (!lock)
-		return 1;
-	if (write_ref_sha1(lock, sha1, msg) < 0)
-		return 1;
-	return 0;
+	if (snprintf(msg, sizeof(msg), "%s: %s", rla, action) >= sizeof(msg))
+		warning("reflog message too long: %.*s...", 50, msg);
+	return update_ref(msg, refname, sha1, oldval, 0, QUIET_ON_ERR);
 }
 
 static int update_local_ref(const char *name,
@@ -78,7 +61,7 @@ static int update_local_ref(const char *name,
 	}
 
 	if (get_sha1(name, sha1_old)) {
-		char *msg;
+		const char *msg;
 	just_store:
 		/* new ref */
 		if (!strncmp(name, "refs/tags/", 10))
@@ -88,7 +71,7 @@ static int update_local_ref(const char *name,
 		fprintf(stderr, "* %s: storing %s\n",
 			name, note);
 		show_new(type, sha1_new);
-		return update_ref(msg, name, sha1_new, NULL);
+		return update_ref_env(msg, name, sha1_new, NULL);
 	}
 
 	if (!hashcmp(sha1_old, sha1_new)) {
@@ -102,7 +85,7 @@ static int update_local_ref(const char *name,
 	if (!strncmp(name, "refs/tags/", 10)) {
 		fprintf(stderr, "* %s: updating with %s\n", name, note);
 		show_new(type, sha1_new);
-		return update_ref("updating tag", name, sha1_new, NULL);
+		return update_ref_env("updating tag", name, sha1_new, NULL);
 	}
 
 	current = lookup_commit_reference(sha1_old);
@@ -117,7 +100,7 @@ static int update_local_ref(const char *name,
 		fprintf(stderr, "* %s: fast forward to %s\n",
 			name, note);
 		fprintf(stderr, "  old..new: %s..%s\n", oldh, newh);
-		return update_ref("fast forward", name, sha1_new, sha1_old);
+		return update_ref_env("fast forward", name, sha1_new, sha1_old);
 	}
 	if (!force) {
 		fprintf(stderr,
@@ -131,7 +114,7 @@ static int update_local_ref(const char *name,
 		"* %s: forcing update to non-fast forward %s\n",
 		name, note);
 	fprintf(stderr, "  old...new: %s...%s\n", oldh, newh);
-	return update_ref("forced-update", name, sha1_new, sha1_old);
+	return update_ref_env("forced-update", name, sha1_new, sha1_old);
 }
 
 static int append_fetch_head(FILE *fp,
@@ -239,19 +222,15 @@ static char *find_local_name(const char *remote_name, const char *refs,
 		}
 		if (!strncmp(remote_name, ref, len) && ref[len] == ':') {
 			const char *local_part = ref + len + 1;
-			char *ret;
 			int retlen;
 
 			if (!next)
 				retlen = strlen(local_part);
 			else
 				retlen = next - local_part;
-			ret = xmalloc(retlen + 1);
-			memcpy(ret, local_part, retlen);
-			ret[retlen] = 0;
 			*force_p = single_force;
 			*not_for_merge_p = not_for_merge;
-			return ret;
+			return xmemdupz(local_part, retlen);
 		}
 		ref = next;
 	}
@@ -456,9 +435,7 @@ static int pick_rref(int sha1_only, const char *rref, const char *ls_remote_resu
 				cp++;
 			if (!*cp)
 				break;
-			np = strchr(cp, '\n');
-			if (!np)
-				np = cp + strlen(cp);
+			np = strchrnul(cp, '\n');
 			if (pass) {
 				lrr_list[i].line = cp;
 				lrr_list[i].name = cp + 41;
@@ -482,9 +459,7 @@ static int pick_rref(int sha1_only, const char *rref, const char *ls_remote_resu
 			rref++;
 		if (!*rref)
 			break;
-		next = strchr(rref, '\n');
-		if (!next)
-			next = rref + strlen(rref);
+		next = strchrnul(rref, '\n');
 		rreflen = next - rref;
 
 		for (i = 0; i < lrr_count; i++) {
@@ -536,10 +511,14 @@ int cmd_fetch__tool(int argc, const char **argv, const char *prefix)
 	if (!strcmp("append-fetch-head", argv[1])) {
 		int result;
 		FILE *fp;
+		char *filename;
 
 		if (argc != 8)
 			return error("append-fetch-head takes 6 args");
-		fp = fopen(git_path("FETCH_HEAD"), "a");
+		filename = git_path("FETCH_HEAD");
+		fp = fopen(filename, "a");
+		if (!fp)
+			return error("cannot open %s: %s\n", filename, strerror(errno));
 		result = append_fetch_head(fp, argv[2], argv[3],
 					   argv[4], argv[5],
 					   argv[6], !!argv[7][0],
@@ -550,10 +529,14 @@ int cmd_fetch__tool(int argc, const char **argv, const char *prefix)
 	if (!strcmp("native-store", argv[1])) {
 		int result;
 		FILE *fp;
+		char *filename;
 
 		if (argc != 5)
 			return error("fetch-native-store takes 3 args");
-		fp = fopen(git_path("FETCH_HEAD"), "a");
+		filename = git_path("FETCH_HEAD");
+		fp = fopen(filename, "a");
+		if (!fp)
+			return error("cannot open %s: %s\n", filename, strerror(errno));
 		result = fetch_native_store(fp, argv[2], argv[3], argv[4],
 					    verbose, force);
 		fclose(fp);

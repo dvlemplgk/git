@@ -35,7 +35,7 @@ static void stuff_change(struct diff_options *opt,
 	    !hashcmp(old_sha1, new_sha1) && (old_mode == new_mode))
 		return;
 
-	if (opt->reverse_diff) {
+	if (DIFF_OPT_TST(opt, REVERSE_DIFF)) {
 		unsigned tmp;
 		const unsigned char *tmp_u;
 		const char *tmp_c;
@@ -176,18 +176,6 @@ static int builtin_diff_combined(struct rev_info *revs,
 	return 0;
 }
 
-void add_head(struct rev_info *revs)
-{
-	unsigned char sha1[20];
-	struct object *obj;
-	if (get_sha1("HEAD", sha1))
-		return;
-	obj = parse_object(sha1);
-	if (!obj)
-		return;
-	add_pending_object(revs, obj, "HEAD");
-}
-
 static void refresh_index_quietly(void)
 {
 	struct lock_file *lock_file;
@@ -202,7 +190,7 @@ static void refresh_index_quietly(void)
 	refresh_cache(REFRESH_QUIET|REFRESH_UNMERGED);
 
 	if (active_cache_changed &&
-	    !write_cache(fd, active_cache, active_nr) && !close(fd))
+	    !write_cache(fd, active_cache, active_nr))
 		commit_locked_index(lock_file);
 
 	rollback_lock_file(lock_file);
@@ -253,13 +241,14 @@ int cmd_diff(int argc, const char **argv, const char *prefix)
 		if (diff_setup_done(&rev.diffopt) < 0)
 			die("diff_setup_done failed");
 	}
-	rev.diffopt.allow_external = 1;
-	rev.diffopt.recursive = 1;
+	DIFF_OPT_SET(&rev.diffopt, ALLOW_EXTERNAL);
+	DIFF_OPT_SET(&rev.diffopt, RECURSIVE);
 
-	/* If the user asked for our exit code then don't start a
+	/*
+	 * If the user asked for our exit code then don't start a
 	 * pager or we would end up reporting its exit code instead.
 	 */
-	if (!rev.diffopt.exit_with_status)
+	if (!DIFF_OPT_TST(&rev.diffopt, EXIT_WITH_STATUS))
 		setup_pager();
 
 	/* Do we have --cached and not have a pending object, then
@@ -272,7 +261,7 @@ int cmd_diff(int argc, const char **argv, const char *prefix)
 			if (!strcmp(arg, "--"))
 				break;
 			else if (!strcmp(arg, "--cached")) {
-				add_head(&rev);
+				add_head_to_pending(&rev);
 				if (!rev.pending.nr)
 					die("No HEAD commit to compare with (yet)");
 				break;
@@ -363,9 +352,7 @@ int cmd_diff(int argc, const char **argv, const char *prefix)
 	else
 		result = builtin_diff_combined(&rev, argc, argv,
 					     ent, ents);
-	if (rev.diffopt.exit_with_status)
-		result = rev.diffopt.has_changes;
-
+	result = diff_result_code(&rev.diffopt, result);
 	if (1 < rev.diffopt.skip_stat_unmatch)
 		refresh_index_quietly();
 	return result;

@@ -80,7 +80,7 @@ cat "$1".tmp
 action=pick
 for line in $FAKE_LINES; do
 	case $line in
-	squash)
+	squash|edit)
 		action="$line";;
 	*)
 		echo sed -n "${line}s/^pick/$action/p"
@@ -149,7 +149,8 @@ test_expect_success 'stop on conflicting pick' '
 	diff -u expect .git/.dotest-merge/patch &&
 	diff -u expect2 file1 &&
 	test 4 = $(grep -v "^#" < .git/.dotest-merge/done | wc -l) &&
-	test 0 = $(grep -v "^#" < .git/.dotest-merge/git-rebase-todo | wc -l)
+	test 0 = $(grep -ve "^#" -e "^$" < .git/.dotest-merge/git-rebase-todo |
+		wc -l)
 '
 
 test_expect_success 'abort' '
@@ -181,6 +182,12 @@ test_expect_success 'squash' '
 
 test_expect_success 'retain authorship when squashing' '
 	git show HEAD | grep "^Author: Twerp Snog"
+'
+
+test_expect_success '-p handles "no changes" gracefully' '
+	HEAD=$(git rev-parse HEAD) &&
+	git rebase -i -p HEAD^ &&
+	test $HEAD = $(git rev-parse HEAD)
 '
 
 test_expect_success 'preserve merges with -p' '
@@ -295,6 +302,42 @@ test_expect_success 'ignore patch if in upstream' '
 	git cherry-pick $HEAD &&
 	EXPECT_COUNT=1 git rebase -i $HEAD &&
 	test $HEAD = $(git rev-parse HEAD^)
+'
+
+test_expect_success '--continue tries to commit, even for "edit"' '
+	parent=$(git rev-parse HEAD^) &&
+	test_tick &&
+	FAKE_LINES="edit 1" git rebase -i HEAD^ &&
+	echo edited > file7 &&
+	git add file7 &&
+	FAKE_COMMIT_MESSAGE="chouette!" git rebase --continue &&
+	test edited = $(git show HEAD:file7) &&
+	git show HEAD | grep chouette &&
+	test $parent = $(git rev-parse HEAD^)
+'
+
+test_expect_success 'rebase a detached HEAD' '
+	grandparent=$(git rev-parse HEAD~2) &&
+	git checkout $(git rev-parse HEAD) &&
+	test_tick &&
+	FAKE_LINES="2 1" git rebase -i HEAD~2 &&
+	test $grandparent = $(git rev-parse HEAD~2)
+'
+
+test_expect_success 'rebase a commit violating pre-commit' '
+
+	mkdir -p .git/hooks &&
+	PRE_COMMIT=.git/hooks/pre-commit &&
+	echo "#!/bin/sh" > $PRE_COMMIT &&
+	echo "test -z \"\$(git diff --cached --check)\"" >> $PRE_COMMIT &&
+	chmod a+x $PRE_COMMIT &&
+	echo "monde! " >> file1 &&
+	test_tick &&
+	! git commit -m doesnt-verify file1 &&
+	git commit -m doesnt-verify --no-verify file1 &&
+	test_tick &&
+	FAKE_LINES=2 git rebase -i HEAD~2
+
 '
 
 test_done
