@@ -1535,9 +1535,14 @@ sub find_by_url { # repos_root and, path are optional
 			                    $remotes->{$repo_id}->{$_});
 		}
 		my $p = $path;
+		my $rwr = rewrite_root({repo_id => $repo_id});
 		unless (defined $p) {
 			$p = $full_url;
-			$p =~ s#^\Q$u\E(?:/|$)## or next;
+			my $z = $u;
+			if ($rwr) {
+				$z = $rwr;
+			}
+			$p =~ s#^\Q$z\E(?:/|$)## or next;
 		}
 		foreach my $f (keys %$fetch) {
 			next if $f ne $p;
@@ -3632,6 +3637,7 @@ sub _auth_providers () {
 	  SVN::Client::get_ssl_client_cert_file_provider(),
 	  SVN::Client::get_ssl_client_cert_prompt_provider(
 	    \&Git::SVN::Prompt::ssl_client_cert, 2),
+	  SVN::Client::get_ssl_client_cert_pw_file_provider(),
 	  SVN::Client::get_ssl_client_cert_pw_prompt_provider(
 	    \&Git::SVN::Prompt::ssl_client_cert_pw, 2),
 	  SVN::Client::get_username_provider(),
