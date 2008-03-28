@@ -63,7 +63,7 @@ continue_merge () {
 	cmt=`cat "$dotest/current"`
 	if ! git diff-index --quiet HEAD --
 	then
-		if ! git-commit -C "$cmt"
+		if ! git commit --no-verify -C "$cmt"
 		then
 			echo "Commit failed, please do not call \"git commit\""
 			echo "directly, but instead do one of the following: "
@@ -208,16 +208,15 @@ do
 		if test -d "$dotest"
 		then
 			move_to_original_branch
-			rm -r "$dotest"
 		elif test -d .dotest
 		then
 			dotest=.dotest
 			move_to_original_branch
-			rm -r .dotest
 		else
 			die "No rebase in progress?"
 		fi
-		git reset --hard ORIG_HEAD
+		git reset --hard $(cat $dotest/orig-head)
+		rm -r "$dotest"
 		exit
 		;;
 	--onto)

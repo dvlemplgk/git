@@ -40,6 +40,8 @@ static struct option builtin_fetch_options[] = {
 		    "force overwrite of local branch"),
 	OPT_SET_INT('t', "tags", &tags,
 		    "fetch all tags and associated objects", TAGS_SET),
+	OPT_SET_INT('n', NULL, &tags,
+		    "do not fetch all tags (--no-tags)", TAGS_UNSET),
 	OPT_BOOLEAN('k', "keep", &keep, "keep downloaded pack"),
 	OPT_BOOLEAN('u', "update-head-ok", &update_head_ok,
 		    "allow updating of HEAD ref"),
@@ -628,5 +630,6 @@ int cmd_fetch(int argc, const char **argv, const char *prefix)
 
 	signal(SIGINT, unlock_pack_on_signal);
 	atexit(unlock_pack);
-	return do_fetch(transport, parse_ref_spec(ref_nr, refs), ref_nr);
+	return do_fetch(transport,
+			parse_fetch_refspec(ref_nr, refs), ref_nr);
 }

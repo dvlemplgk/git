@@ -519,7 +519,8 @@ sub cmd_dcommit {
 }
 
 sub cmd_find_rev {
-	my $revision_or_hash = shift;
+	my $revision_or_hash = shift or die "SVN or git revision required ",
+	                                    "as a command-line argument\n";
 	my $result;
 	if ($revision_or_hash =~ /^r\d+$/) {
 		my $head = shift;
@@ -954,9 +955,10 @@ sub complete_url_ls_init {
 		    "wanted to set to: $gs->{url}\n";
 	}
 	command_oneline('config', $k, $gs->{url}) unless $orig_url;
-	my $remote_path = "$ra->{svn_path}/$repo_path/*";
+	my $remote_path = "$ra->{svn_path}/$repo_path";
 	$remote_path =~ s#/+#/#g;
 	$remote_path =~ s#^/##g;
+	$remote_path .= "/*" if $remote_path !~ /\*/;
 	my ($n) = ($switch =~ /^--(\w+)/);
 	if (length $pfx && $pfx !~ m#/$#) {
 		die "--prefix='$pfx' must have a trailing slash '/'\n";
