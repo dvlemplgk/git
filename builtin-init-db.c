@@ -120,9 +120,9 @@ static void copy_templates(const char *git_dir, int len, const char *template_di
 		 */
 		template_dir = DEFAULT_GIT_TEMPLATE_DIR;
 		if (!is_absolute_path(template_dir)) {
-			const char *exec_path = git_exec_path();
-			template_dir = prefix_path(exec_path, strlen(exec_path),
-						   template_dir);
+			struct strbuf d = STRBUF_INIT;
+			strbuf_addf(&d, "%s/%s", git_exec_path(), template_dir);
+			template_dir = strbuf_detach(&d, NULL);
 		}
 	}
 	strcpy(template_path, template_dir);
@@ -167,9 +167,9 @@ static int create_default_files(const char *git_dir, const char *template_path)
 {
 	unsigned len = strlen(git_dir);
 	static char path[PATH_MAX];
-	unsigned char sha1[20];
 	struct stat st1;
 	char repo_version_string[10];
+	char junk[2];
 	int reinit;
 	int filemode;
 
@@ -219,7 +219,8 @@ static int create_default_files(const char *git_dir, const char *template_path)
 	 * branch, if it does not exist yet.
 	 */
 	strcpy(path + len, "HEAD");
-	reinit = !read_ref("HEAD", sha1);
+	reinit = (!access(path, R_OK)
+		  || readlink(path, junk, sizeof(junk)-1) != -1);
 	if (!reinit) {
 		if (create_symref("HEAD", "refs/heads/master", NULL) < 0)
 			exit(1);

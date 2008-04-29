@@ -472,7 +472,7 @@ v_issue_imap_cmd( imap_store_t *ctx, struct imap_cmd_cb *cb,
 	if (socket_write( &imap->buf.sock, buf, bufl ) != bufl) {
 		free( cmd->cmd );
 		free( cmd );
-		if (cb && cb->data)
+		if (cb)
 			free( cb->data );
 		return NULL;
 	}
@@ -858,8 +858,7 @@ get_cmd_result( imap_store_t *ctx, struct imap_cmd *tcmd )
 		  normal:
 			if (cmdp->cb.done)
 				cmdp->cb.done( ctx, cmdp, resp );
-			if (cmdp->cb.data)
-				free( cmdp->cb.data );
+			free( cmdp->cb.data );
 			free( cmdp->cmd );
 			free( cmdp );
 			if (!tcmd || tcmd == cmdp)
@@ -1301,6 +1300,10 @@ main(int argc, char **argv)
 
 	if (!imap_folder) {
 		fprintf( stderr, "no imap store specified\n" );
+		return 1;
+	}
+	if (!server.host) {
+		fprintf( stderr, "no imap host specified\n" );
 		return 1;
 	}
 

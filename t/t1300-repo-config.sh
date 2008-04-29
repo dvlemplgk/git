@@ -200,8 +200,9 @@ test_expect_success 'non-match' \
 test_expect_success 'non-match value' \
 	'test wow = $(git config --get nextsection.nonewline !for)'
 
-test_expect_failure 'ambiguous get' \
-	'git config --get nextsection.nonewline'
+test_expect_success 'ambiguous get' '
+	! git config --get nextsection.nonewline
+'
 
 test_expect_success 'get multivar' \
 	'git config --get-all nextsection.nonewline'
@@ -221,13 +222,17 @@ EOF
 
 test_expect_success 'multivar replace' 'cmp .git/config expect'
 
-test_expect_failure 'ambiguous value' 'git config nextsection.nonewline'
+test_expect_success 'ambiguous value' '
+	! git config nextsection.nonewline
+'
 
-test_expect_failure 'ambiguous unset' \
-	'git config --unset nextsection.nonewline'
+test_expect_success 'ambiguous unset' '
+	! git config --unset nextsection.nonewline
+'
 
-test_expect_failure 'invalid unset' \
-	'git config --unset somesection.nonewline'
+test_expect_success 'invalid unset' '
+	! git config --unset somesection.nonewline
+'
 
 git config --unset nextsection.nonewline "wow3$"
 
@@ -243,7 +248,7 @@ EOF
 
 test_expect_success 'multivar unset' 'cmp .git/config expect'
 
-test_expect_failure 'invalid key' 'git config inval.2key blabla'
+test_expect_success 'invalid key' '! git config inval.2key blabla'
 
 test_expect_success 'correct key' 'git config 123456.a123 987'
 
@@ -424,8 +429,9 @@ EOF
 
 test_expect_success "rename succeeded" "git diff expect .git/config"
 
-test_expect_failure "rename non-existing section" \
-	'git config --rename-section branch."world domination" branch.drei'
+test_expect_success "rename non-existing section" '
+	! git config --rename-section branch."world domination" branch.drei
+'
 
 test_expect_success "rename succeeded" "git diff expect .git/config"
 
@@ -536,14 +542,14 @@ test_expect_success bool '
         done &&
 	cmp expect result'
 
-test_expect_failure 'invalid bool (--get)' '
+test_expect_success 'invalid bool (--get)' '
 
 	git config bool.nobool foobar &&
-	git config --bool --get bool.nobool'
+	! git config --bool --get bool.nobool'
 
-test_expect_failure 'invalid bool (set)' '
+test_expect_success 'invalid bool (set)' '
 
-	git config --bool bool.nobool foobar'
+	! git config --bool bool.nobool foobar'
 
 rm .git/config
 
@@ -604,8 +610,9 @@ EOF
 
 test_expect_success 'quoting' 'cmp .git/config expect'
 
-test_expect_failure 'key with newline' 'git config key.with\\\
-newline 123'
+test_expect_success 'key with newline' '
+	! git config "key.with
+newline" 123'
 
 test_expect_success 'value with newline' 'git config key.sub value.with\\\
 newline'
@@ -650,12 +657,12 @@ Qsection.sub=section.val4
 Qsection.sub=section.val5Q
 EOF
 
-git config --null --list | tr '\000' 'Q' > result
+git config --null --list | perl -pe 'y/\000/Q/' > result
 echo >>result
 
 test_expect_success '--null --list' 'cmp result expect'
 
-git config --null --get-regexp 'val[0-9]' | tr '\000' 'Q' > result
+git config --null --get-regexp 'val[0-9]' | perl -pe 'y/\000/Q/' > result
 echo >>result
 
 test_expect_success '--null --get-regexp' 'cmp result expect'

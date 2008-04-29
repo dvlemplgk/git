@@ -78,9 +78,9 @@ test_expect_success \
      git diff-tree -r -M --name-status  HEAD^ HEAD | \
      grep "^R100..*path2/README..*path1/path2/README"'
 
-test_expect_failure \
+test_expect_success \
     'do not move directory over existing directory' \
-    'mkdir path0 && mkdir path0/path2 && git mv path2 path0'
+    'mkdir path0 && mkdir path0/path2 && ! git mv path2 path0'
 
 test_expect_success \
     'move into "."' \
@@ -117,5 +117,43 @@ test_expect_success "Sergey Vlasov's test case" '
 	git commit -m 'initial' &&
 	git mv ab a
 '
+
+test_expect_success 'absolute pathname' '(
+
+	rm -fr mine &&
+	mkdir mine &&
+	cd mine &&
+	test_create_repo one &&
+	cd one &&
+	mkdir sub &&
+	>sub/file &&
+	git add sub/file &&
+
+	git mv sub "$(pwd)/in" &&
+	! test -d sub &&
+	test -d in &&
+	git ls-files --error-unmatch in/file
+
+
+)'
+
+test_expect_success 'absolute pathname outside should fail' '(
+
+	rm -fr mine &&
+	mkdir mine &&
+	cd mine &&
+	out=$(pwd) &&
+	test_create_repo one &&
+	cd one &&
+	mkdir sub &&
+	>sub/file &&
+	git add sub/file &&
+
+	! git mv sub "$out/out" &&
+	test -d sub &&
+	! test -d ../in &&
+	git ls-files --error-unmatch sub/file
+
+)'
 
 test_done

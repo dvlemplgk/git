@@ -186,6 +186,9 @@ my %cmd = (
 		    "Show info about the latest SVN revision
 		     on the current branch",
 		    { 'url' => \$_url, } ],
+	'blame' => [ \&Git::SVN::Log::cmd_blame,
+	            "Show what revision and author last modified each line of a file",
+	            {} ],
 );
 
 my $cmd;
@@ -1117,7 +1120,7 @@ sub cmt_metadata {
 
 sub working_head_info {
 	my ($head, $refs) = @_;
-	my @args = ('log', '--no-color', '--first-parent');
+	my @args = ('log', '--no-color', '--first-parent', '--pretty=medium');
 	my ($fh, $ctx) = command_output_pipe(@args, $head);
 	my $hash;
 	my %max;
@@ -1249,7 +1252,8 @@ use File::Path qw/mkpath/;
 use File::Copy qw/copy/;
 use IPC::Open3;
 
-my $_repack_nr;
+my ($_gc_nr, $_gc_period);
+
 # properties that we do not log:
 my %SKIP_PROP;
 BEGIN {
@@ -1410,9 +1414,10 @@ sub read_all_remotes {
 }
 
 sub init_vars {
-	$_repack = 1000 unless (defined $_repack && $_repack > 0);
-	$_repack_nr = $_repack;
-	$_repack_flags ||= '-d';
+	$_gc_nr = $_gc_period = 1000;
+	if (defined $_repack || defined $_repack_flags) {
+	       warn "Repack options are obsolete; they have no effect.\n";
+	}
 }
 
 sub verify_remotes_sanity {
@@ -1895,7 +1900,7 @@ sub prop_walk {
 
 	foreach (sort keys %$dirent) {
 		next if $dirent->{$_}->{kind} != $SVN::Node::dir;
-		$self->prop_walk($path . '/' . $_, $rev, $sub);
+		$self->prop_walk($p . $_, $rev, $sub);
 	}
 }
 
@@ -2103,6 +2108,10 @@ sub restore_commit_header_env {
 	}
 }
 
+sub gc {
+	command_noisy('gc', '--auto');
+};
+
 sub do_git_commit {
 	my ($self, $log_entry) = @_;
 	my $lr = $self->last_rev;
@@ -2156,12 +2165,9 @@ sub do_git_commit {
 		                   0, $self->svm_uuid);
 	}
 	print " = $commit ($self->{ref_id})\n";
-	if ($_repack && (--$_repack_nr == 0)) {
-		$_repack_nr = $_repack;
-		# repack doesn't use any arguments with spaces in them, does it?
-		print "Running git repack $_repack_flags ...\n";
-		command_noisy('repack', split(/\s+/, $_repack_flags));
-		print "Done repacking\n";
+	if (--$_gc_nr == 0) {
+		$_gc_nr = $_gc_period;
+		gc();
 	}
 	return $commit;
 }
@@ -2233,7 +2239,13 @@ sub find_parent_branch {
 		# just grow a tail if we're not unique enough :x
 		$ref_id .= '-' while find_ref($ref_id);
 		print STDERR "Initializing parent: $ref_id\n";
-		$gs = Git::SVN->init($new_url, '', $ref_id, $ref_id, 1);
+		my ($u, $p, $repo_id) = ($new_url, '', $ref_id);
+		if ($u =~ s#^\Q$url\E(/|$)##) {
+			$p = $u;
+			$u = $url;
+			$repo_id = $self->{repo_id};
+		}
+		$gs = Git::SVN->init($u, $p, $repo_id, $ref_id, 1);
 	}
 	my ($r0, $parent) = $gs->find_rev_before($r, 1);
 	if (!defined $r0 || !defined $parent) {
@@ -3654,7 +3666,7 @@ sub escape_uri_only {
 	my ($uri) = @_;
 	my @tmp;
 	foreach (split m{/}, $uri) {
-		s/([^\w.-])/sprintf("%%%02X",ord($1))/eg;
+		s/([^\w.%-]|%(?![a-fA-F0-9]{2}))/sprintf("%%%02X",ord($1))/eg;
 		push @tmp, $_;
 	}
 	join('/', @tmp);
@@ -3991,6 +4003,7 @@ sub gs_fetch_loop_common {
 		$max += $inc;
 		$max = $head if ($max > $head);
 	}
+	Git::SVN::gc();
 }
 
 sub match_globs {
@@ -4445,6 +4458,24 @@ sub cmd_show_log {
 out:
 	close $log;
 	print commit_log_separator unless $incremental || $oneline;
+}
+
+sub cmd_blame {
+	my $path = shift;
+
+	config_pager();
+	run_pager();
+
+	my ($fh, $ctx) = command_output_pipe('blame', @_, $path);
+	while (my $line = <$fh>) {
+		if ($line =~ /^\^?([[:xdigit:]]+)\s/) {
+			my (undef, $rev, undef) = ::cmt_metadata($1);
+			$rev = sprintf('%-10s', $rev);
+			$line =~ s/^\^?[[:xdigit:]]+(\s)/$rev$1/;
+		}
+		print $line;
+	}
+	command_close_pipe($fh, $ctx);
 }
 
 package Git::SVN::Migration;

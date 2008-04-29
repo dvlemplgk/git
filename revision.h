@@ -33,6 +33,7 @@ struct rev_info {
 			prune:1,
 			no_merges:1,
 			no_walk:1,
+			show_all:1,
 			remove_empty_trees:1,
 			simplify_history:1,
 			lifo:1,
@@ -74,7 +75,7 @@ struct rev_info {
 	struct log_info *loginfo;
 	int		nr, total;
 	const char	*mime_boundary;
-	const char	*message_id;
+	char		*message_id;
 	const char	*ref_message_id;
 	const char	*add_signoff;
 	const char	*extra_headers;

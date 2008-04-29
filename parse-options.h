@@ -4,6 +4,7 @@
 enum parse_opt_type {
 	/* special types */
 	OPTION_END,
+	OPTION_ARGUMENT,
 	OPTION_GROUP,
 	/* options with no arguments */
 	OPTION_BIT,
@@ -18,6 +19,7 @@ enum parse_opt_type {
 
 enum parse_opt_flags {
 	PARSE_OPT_KEEP_DASHDASH = 1,
+	PARSE_OPT_STOP_AT_NON_OPTION = 2,
 };
 
 enum parse_opt_option_flags {
@@ -84,6 +86,7 @@ struct option {
 };
 
 #define OPT_END()                   { OPTION_END }
+#define OPT_ARGUMENT(l, h)          { OPTION_ARGUMENT, 0, (l), NULL, NULL, (h) }
 #define OPT_GROUP(h)                { OPTION_GROUP, 0, NULL, NULL, NULL, (h) }
 #define OPT_BIT(s, l, v, h, b)      { OPTION_BIT, (s), (l), (v), NULL, (h), 0, NULL, (b) }
 #define OPT_BOOLEAN(s, l, v, h)     { OPTION_BOOLEAN, (s), (l), (v), NULL, (h) }
@@ -91,6 +94,9 @@ struct option {
 #define OPT_SET_PTR(s, l, v, h, p)  { OPTION_SET_PTR, (s), (l), (v), NULL, (h), 0, NULL, (p) }
 #define OPT_INTEGER(s, l, v, h)     { OPTION_INTEGER, (s), (l), (v), NULL, (h) }
 #define OPT_STRING(s, l, v, a, h)   { OPTION_STRING,  (s), (l), (v), (a), (h) }
+#define OPT_DATE(s, l, v, h) \
+	{ OPTION_CALLBACK, (s), (l), (v), "time",(h), 0, \
+	  parse_opt_approxidate_cb }
 #define OPT_CALLBACK(s, l, v, a, h, f) \
 	{ OPTION_CALLBACK, (s), (l), (v), (a), (h), 0, (f) }
 
@@ -107,6 +113,7 @@ extern NORETURN void usage_with_options(const char * const *usagestr,
 
 /*----- some often used options -----*/
 extern int parse_opt_abbrev_cb(const struct option *, const char *, int);
+extern int parse_opt_approxidate_cb(const struct option *, const char *, int);
 
 #define OPT__VERBOSE(var)  OPT_BOOLEAN('v', "verbose", (var), "be verbose")
 #define OPT__QUIET(var)    OPT_BOOLEAN('q', "quiet",   (var), "be quiet")

@@ -18,8 +18,7 @@ original <branch> and remove the .dotest working files, use the command
 git rebase --abort instead.
 
 Note that if <branch> is not specified on the command line, the
-currently checked out branch is used.  You must be in the top
-directory of your project to start (or continue) a rebase.
+currently checked out branch is used.
 
 Example:       git-rebase master~1 topic
 
@@ -376,7 +375,7 @@ fi
 if test -z "$do_merge"
 then
 	git format-patch -k --stdout --full-index --ignore-if-in-upstream "$upstream"..ORIG_HEAD |
-	git am $git_am_opt --binary -3 -k --resolvemsg="$RESOLVEMSG" &&
+	git am $git_am_opt --rebasing --resolvemsg="$RESOLVEMSG" &&
 	move_to_original_branch
 	ret=$?
 	test 0 != $ret -a -d .dotest &&

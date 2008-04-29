@@ -280,11 +280,18 @@ int git_parse_ulong(const char *value, unsigned long *ret)
 	return 0;
 }
 
+static void die_bad_config(const char *name)
+{
+	if (config_file_name)
+		die("bad config value for '%s' in %s", name, config_file_name);
+	die("bad config value for '%s'", name);
+}
+
 int git_config_int(const char *name, const char *value)
 {
 	long ret;
 	if (!git_parse_long(value, &ret))
-		die("bad config value for '%s' in %s", name, config_file_name);
+		die_bad_config(name);
 	return ret;
 }
 
@@ -292,7 +299,7 @@ unsigned long git_config_ulong(const char *name, const char *value)
 {
 	unsigned long ret;
 	if (!git_parse_ulong(value, &ret))
-		die("bad config value for '%s' in %s", name, config_file_name);
+		die_bad_config(name);
 	return ret;
 }
 
@@ -415,6 +422,15 @@ int git_default_config(const char *var, const char *value)
 		return 0;
 	}
 
+	if (!strcmp(var, "core.safecrlf")) {
+		if (value && !strcasecmp(value, "warn")) {
+			safe_crlf = SAFE_CRLF_WARN;
+			return 0;
+		}
+		safe_crlf = git_config_bool(var, value);
+		return 0;
+	}
+
 	if (!strcmp(var, "user.name")) {
 		if (!value)
 			return config_error_nonbool(var);
@@ -455,6 +471,14 @@ int git_default_config(const char *var, const char *value)
 		whitespace_rule_cfg = parse_whitespace_rule(value);
 		return 0;
 	}
+	if (!strcmp(var, "branch.autosetupmerge")) {
+		if (value && !strcasecmp(value, "always")) {
+			git_branch_track = BRANCH_TRACK_ALWAYS;
+			return 0;
+		}
+		git_branch_track = git_config_bool(var, value);
+		return 0;
+	}
 
 	/* Add other config variables here and to Documentation/config.txt. */
 	return 0;
@@ -485,12 +509,28 @@ const char *git_etc_gitconfig(void)
 		system_wide = ETC_GITCONFIG;
 		if (!is_absolute_path(system_wide)) {
 			/* interpret path relative to exec-dir */
-			const char *exec_path = git_exec_path();
-			system_wide = prefix_path(exec_path, strlen(exec_path),
-						system_wide);
+			struct strbuf d = STRBUF_INIT;
+			strbuf_addf(&d, "%s/%s", git_exec_path(), system_wide);
+			system_wide = strbuf_detach(&d, NULL);
 		}
 	}
 	return system_wide;
+}
+
+int git_env_bool(const char *k, int def)
+{
+	const char *v = getenv(k);
+	return v ? git_config_bool(k, v) : def;
+}
+
+int git_config_system(void)
+{
+	return !git_env_bool("GIT_CONFIG_NOSYSTEM", 0);
+}
+
+int git_config_global(void)
+{
+	return !git_env_bool("GIT_CONFIG_NOGLOBAL", 0);
 }
 
 int git_config(config_fn_t fn)
@@ -505,7 +545,7 @@ int git_config(config_fn_t fn)
 	 * config file otherwise. */
 	filename = getenv(CONFIG_ENVIRONMENT);
 	if (!filename) {
-		if (!access(git_etc_gitconfig(), R_OK))
+		if (git_config_system() && !access(git_etc_gitconfig(), R_OK))
 			ret += git_config_from_file(fn, git_etc_gitconfig());
 		home = getenv("HOME");
 		filename = getenv(CONFIG_LOCAL_ENVIRONMENT);
@@ -513,7 +553,7 @@ int git_config(config_fn_t fn)
 			filename = repo_config = xstrdup(git_path("config"));
 	}
 
-	if (home) {
+	if (git_config_global() && home) {
 		char *user_config = xstrdup(mkpath("%s/.gitconfig", home));
 		if (!access(user_config, R_OK))
 			ret = git_config_from_file(fn, user_config);

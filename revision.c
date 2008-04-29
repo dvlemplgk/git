@@ -46,6 +46,8 @@ void add_object(struct object *obj,
 
 static void mark_blob_uninteresting(struct blob *blob)
 {
+	if (!blob)
+		return;
 	if (blob->object.flags & UNINTERESTING)
 		return;
 	blob->object.flags |= UNINTERESTING;
@@ -57,6 +59,8 @@ void mark_tree_uninteresting(struct tree *tree)
 	struct name_entry entry;
 	struct object *obj = &tree->object;
 
+	if (!tree)
+		return;
 	if (obj->flags & UNINTERESTING)
 		return;
 	obj->flags |= UNINTERESTING;
@@ -173,6 +177,8 @@ static struct commit *handle_commit(struct rev_info *revs, struct object *object
 		struct tag *tag = (struct tag *) object;
 		if (revs->tag_objects && !(flags & UNINTERESTING))
 			add_pending_object(revs, object, tag->tag);
+		if (!tag->tagged)
+			die("bad tag");
 		object = parse_object(tag->tagged->sha1);
 		if (!object)
 			die("bad object %s", sha1_to_hex(tag->tagged->sha1));
@@ -558,8 +564,39 @@ static void cherry_pick_list(struct commit_list *list, struct rev_info *revs)
 	free_patch_ids(&ids);
 }
 
+/* How many extra uninteresting commits we want to see.. */
+#define SLOP 5
+
+static int still_interesting(struct commit_list *src, unsigned long date, int slop)
+{
+	/*
+	 * No source list at all? We're definitely done..
+	 */
+	if (!src)
+		return 0;
+
+	/*
+	 * Does the destination list contain entries with a date
+	 * before the source list? Definitely _not_ done.
+	 */
+	if (date < src->item->date)
+		return SLOP;
+
+	/*
+	 * Does the source list still have interesting commits in
+	 * it? Definitely not done..
+	 */
+	if (!everybody_uninteresting(src))
+		return SLOP;
+
+	/* Ok, we're closing in.. */
+	return slop-1;
+}
+
 static int limit_list(struct rev_info *revs)
 {
+	int slop = SLOP;
+	unsigned long date = ~0ul;
 	struct commit_list *list = revs->commits;
 	struct commit_list *newlist = NULL;
 	struct commit_list **p = &newlist;
@@ -579,12 +616,19 @@ static int limit_list(struct rev_info *revs)
 			return -1;
 		if (obj->flags & UNINTERESTING) {
 			mark_parents_uninteresting(commit);
-			if (everybody_uninteresting(list))
-				break;
-			continue;
+			if (revs->show_all)
+				p = &commit_list_insert(commit, p)->next;
+			slop = still_interesting(list, date, slop);
+			if (slop)
+				continue;
+			/* If showing all, add the whole pending list to the end */
+			if (revs->show_all)
+				*p = list;
+			break;
 		}
 		if (revs->min_age != -1 && (commit->date > revs->min_age))
 			continue;
+		date = commit->date;
 		p = &commit_list_insert(commit, p)->next;
 
 		show = show_early_output;
@@ -617,12 +661,13 @@ static int handle_one_ref(const char *path, const unsigned char *sha1, int flag,
 	return 0;
 }
 
-static void handle_all(struct rev_info *revs, unsigned flags)
+static void handle_refs(struct rev_info *revs, unsigned flags,
+		int (*for_each)(each_ref_fn, void *))
 {
 	struct all_refs_cb cb;
 	cb.all_revs = revs;
 	cb.all_flags = flags;
-	for_each_ref(handle_one_ref, &cb);
+	for_each(handle_one_ref, &cb);
 }
 
 static void handle_one_reflog_commit(unsigned char *sha1, void *cb_data)
@@ -685,6 +730,8 @@ static int add_parents_only(struct rev_info *revs, const char *arg, int flags)
 		it = get_reference(revs, arg, sha1, 0);
 		if (it->type != OBJ_TAG)
 			break;
+		if (!((struct tag*)it)->tagged)
+			return 0;
 		hashcpy(sha1, ((struct tag*)it)->tagged->sha1);
 	}
 	if (it->type != OBJ_COMMIT)
@@ -720,6 +767,10 @@ void init_revisions(struct rev_info *revs, const char *prefix)
 	revs->commit_format = CMIT_FMT_DEFAULT;
 
 	diff_setup(&revs->diffopt);
+	if (prefix && !revs->diffopt.prefix) {
+		revs->diffopt.prefix = prefix;
+		revs->diffopt.prefix_length = strlen(prefix);
+	}
 }
 
 static void add_pending_commit_list(struct rev_info *revs,
@@ -920,6 +971,7 @@ int setup_revisions(int argc, const char **argv, struct rev_info *revs, const ch
 	int left = 1;
 	int all_match = 0;
 	int regflags = 0;
+	int fixed = 0;
 
 	/* First, search for "--" */
 	seen_dashdash = 0;
@@ -988,7 +1040,19 @@ int setup_revisions(int argc, const char **argv, struct rev_info *revs, const ch
 				continue;
 			}
 			if (!strcmp(arg, "--all")) {
-				handle_all(revs, flags);
+				handle_refs(revs, flags, for_each_ref);
+				continue;
+			}
+			if (!strcmp(arg, "--branches")) {
+				handle_refs(revs, flags, for_each_branch_ref);
+				continue;
+			}
+			if (!strcmp(arg, "--tags")) {
+				handle_refs(revs, flags, for_each_tag_ref);
+				continue;
+			}
+			if (!strcmp(arg, "--remotes")) {
+				handle_refs(revs, flags, for_each_remote_ref);
 				continue;
 			}
 			if (!strcmp(arg, "--first-parent")) {
@@ -1019,6 +1083,7 @@ int setup_revisions(int argc, const char **argv, struct rev_info *revs, const ch
 				continue;
 			}
 			if (!strcmp(arg, "--topo-order")) {
+				revs->lifo = 1;
 				revs->topo_order = 1;
 				continue;
 			}
@@ -1049,6 +1114,10 @@ int setup_revisions(int argc, const char **argv, struct rev_info *revs, const ch
 			}
 			if (!strcmp(arg, "--sparse")) {
 				revs->dense = 0;
+				continue;
+			}
+			if (!strcmp(arg, "--show-all")) {
+				revs->show_all = 1;
 				continue;
 			}
 			if (!strcmp(arg, "--remove-empty")) {
@@ -1212,6 +1281,11 @@ int setup_revisions(int argc, const char **argv, struct rev_info *revs, const ch
 				regflags |= REG_ICASE;
 				continue;
 			}
+			if (!strcmp(arg, "--fixed-strings") ||
+			    !strcmp(arg, "-F")) {
+				fixed = 1;
+				continue;
+			}
 			if (!strcmp(arg, "--all-match")) {
 				all_match = 1;
 				continue;
@@ -1267,8 +1341,10 @@ int setup_revisions(int argc, const char **argv, struct rev_info *revs, const ch
 		}
 	}
 
-	if (revs->grep_filter)
+	if (revs->grep_filter) {
 		revs->grep_filter->regflags |= regflags;
+		revs->grep_filter->fixed = fixed;
+	}
 
 	if (show_merge)
 		prepare_show_merge(revs);
@@ -1434,6 +1510,8 @@ enum commit_action simplify_commit(struct rev_info *revs, struct commit *commit)
 		return commit_ignore;
 	if (revs->unpacked && has_sha1_pack(commit->object.sha1, revs->ignore_packed))
 		return commit_ignore;
+	if (revs->show_all)
+		return commit_show;
 	if (commit->object.flags & UNINTERESTING)
 		return commit_ignore;
 	if (revs->min_age != -1 && (commit->date > revs->min_age))

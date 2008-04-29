@@ -8,6 +8,7 @@
 #include "exec_cmd.h"
 #include "utf8.h"
 #include "parse-options.h"
+#include "cache-tree.h"
 #include "diff.h"
 #include "revision.h"
 
@@ -283,7 +284,7 @@ static int revert_or_cherry_pick(int argc, const char **argv)
 		 * that represents the "current" state for merge-recursive
 		 * to work on.
 		 */
-		if (write_tree(head, 0, NULL))
+		if (write_cache_as_tree(head, 0, NULL))
 			die ("Your index file is unmerged.");
 	} else {
 		if (get_sha1("HEAD", head))
@@ -369,7 +370,7 @@ static int revert_or_cherry_pick(int argc, const char **argv)
 	if (merge_recursive(sha1_to_hex(base->object.sha1),
 				sha1_to_hex(head), "HEAD",
 				sha1_to_hex(next->object.sha1), oneline) ||
-			write_tree(head, 0, NULL)) {
+			write_cache_as_tree(head, 0, NULL)) {
 		add_to_msg("\nConflicts:\n\n");
 		read_cache();
 		for (i = 0; i < active_nr;) {
@@ -408,8 +409,7 @@ static int revert_or_cherry_pick(int argc, const char **argv)
 		else
 			return execl_git_cmd("commit", "-n", "-F", defmsg, NULL);
 	}
-	if (reencoded_message)
-		free(reencoded_message);
+	free(reencoded_message);
 
 	return 0;
 }

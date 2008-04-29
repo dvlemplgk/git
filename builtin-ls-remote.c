@@ -31,7 +31,7 @@ int cmd_ls_remote(int argc, const char **argv, const char *prefix)
 {
 	int i;
 	const char *dest = NULL;
-	int nongit = 0;
+	int nongit;
 	unsigned flags = 0;
 	const char *uploadpack = NULL;
 	const char **pattern = NULL;
@@ -94,6 +94,8 @@ int cmd_ls_remote(int argc, const char **argv, const char *prefix)
 		transport_set_option(transport, TRANS_OPT_UPLOADPACK, uploadpack);
 
 	ref = transport_get_remote_refs(transport);
+	if (transport_disconnect(transport))
+		return 1;
 	for ( ; ref; ref = ref->next) {
 		if (!check_ref_type(ref, flags))
 			continue;

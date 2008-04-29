@@ -123,8 +123,7 @@ static inline struct origin *origin_incref(struct origin *o)
 static void origin_decref(struct origin *o)
 {
 	if (o && --o->refcnt <= 0) {
-		if (o->file.ptr)
-			free(o->file.ptr);
+		free(o->file.ptr);
 		free(o);
 	}
 }
@@ -1894,9 +1893,7 @@ static unsigned parse_score(const char *arg)
 
 static const char *add_prefix(const char *prefix, const char *path)
 {
-	if (!prefix || !prefix[0])
-		return path;
-	return prefix_path(prefix, strlen(prefix), path);
+	return prefix_path(prefix, prefix ? strlen(prefix) : 0, path);
 }
 
 /*
@@ -2073,7 +2070,7 @@ static struct commit *fake_working_tree_commit(const char *path, const char *con
 		if (strbuf_read(&buf, 0, 0) < 0)
 			die("read error %s from stdin", strerror(errno));
 	}
-	convert_to_git(path, buf.buf, buf.len, &buf);
+	convert_to_git(path, buf.buf, buf.len, &buf, 0);
 	origin->file.ptr = buf.buf;
 	origin->file.size = buf.len;
 	pretend_sha1_file(buf.buf, buf.len, OBJ_BLOB, origin->blob_sha1);
@@ -2092,7 +2089,7 @@ static struct commit *fake_working_tree_commit(const char *path, const char *con
 	if (!mode) {
 		int pos = cache_name_pos(path, len);
 		if (0 <= pos)
-			mode = ntohl(active_cache[pos]->ce_mode);
+			mode = active_cache[pos]->ce_mode;
 		else
 			/* Let's not bother reading from HEAD tree */
 			mode = S_IFREG | 0644;
@@ -2369,7 +2366,8 @@ int cmd_blame(int argc, const char **argv, const char *prefix)
 	 * bottom commits we would reach while traversing as
 	 * uninteresting.
 	 */
-	prepare_revision_walk(&revs);
+	if (prepare_revision_walk(&revs))
+		die("revision walk setup failed");
 
 	if (is_null_sha1(sb.final->object.sha1)) {
 		char *buf;

@@ -71,6 +71,24 @@ test_expect_success 'bisect start with one bad and good' '
 	git bisect next
 '
 
+test_expect_success 'bisect fails if given any junk instead of revs' '
+	git bisect reset &&
+	test_must_fail git bisect start foo $HASH1 -- &&
+	test_must_fail git bisect start $HASH4 $HASH1 bar -- &&
+	test -z "$(git for-each-ref "refs/bisect/*")" &&
+	test_must_fail ls .git/BISECT_* &&
+	git bisect start &&
+	test_must_fail git bisect good foo $HASH1 &&
+	test_must_fail git bisect good $HASH1 bar &&
+	test_must_fail git bisect bad frotz &&
+	test_must_fail git bisect bad $HASH3 $HASH4 &&
+	test_must_fail git bisect skip bar $HASH3 &&
+	test_must_fail git bisect skip $HASH1 foo &&
+	test -z "$(git for-each-ref "refs/bisect/*")" &&
+	git bisect good $HASH1 &&
+	git bisect bad $HASH4
+'
+
 test_expect_success 'bisect reset: back in the master branch' '
 	git bisect reset &&
 	echo "* master" > branch.expect &&
@@ -219,7 +237,7 @@ test_expect_success 'bisect run & skip: cannot tell between 2' '
 	add_line_into_file "6: Yet a line." hello &&
 	HASH6=$(git rev-parse --verify HEAD) &&
 	echo "#"\!"/bin/sh" > test_script.sh &&
-	echo "tail -1 hello | grep Ciao > /dev/null && exit 125" >> test_script.sh &&
+	echo "sed -ne \\\$p hello | grep Ciao > /dev/null && exit 125" >> test_script.sh &&
 	echo "grep line hello > /dev/null" >> test_script.sh &&
 	echo "test \$? -ne 0" >> test_script.sh &&
 	chmod +x test_script.sh &&
@@ -244,8 +262,8 @@ test_expect_success 'bisect run & skip: find first bad' '
 	add_line_into_file "7: Should be the last line." hello &&
 	HASH7=$(git rev-parse --verify HEAD) &&
 	echo "#"\!"/bin/sh" > test_script.sh &&
-	echo "tail -1 hello | grep Ciao > /dev/null && exit 125" >> test_script.sh &&
-	echo "tail -1 hello | grep day > /dev/null && exit 125" >> test_script.sh &&
+	echo "sed -ne \\\$p hello | grep Ciao > /dev/null && exit 125" >> test_script.sh &&
+	echo "sed -ne \\\$p hello | grep day > /dev/null && exit 125" >> test_script.sh &&
 	echo "grep Yet hello > /dev/null" >> test_script.sh &&
 	echo "test \$? -ne 0" >> test_script.sh &&
 	chmod +x test_script.sh &&

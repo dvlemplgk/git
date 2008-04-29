@@ -139,6 +139,51 @@ core.autocrlf::
 	"text" (i.e. be subjected to the autocrlf mechanism) is
 	decided purely based on the contents.
 
+core.safecrlf::
+	If true, makes git check if converting `CRLF` as controlled by
+	`core.autocrlf` is reversible.  Git will verify if a command
+	modifies a file in the work tree either directly or indirectly.
+	For example, committing a file followed by checking out the
+	same file should yield the original file in the work tree.  If
+	this is not the case for the current setting of
+	`core.autocrlf`, git will reject the file.  The variable can
+	be set to "warn", in which case git will only warn about an
+	irreversible conversion but continue the operation.
++
+CRLF conversion bears a slight chance of corrupting data.
+autocrlf=true will convert CRLF to LF during commit and LF to
+CRLF during checkout.  A file that contains a mixture of LF and
+CRLF before the commit cannot be recreated by git.  For text
+files this is the right thing to do: it corrects line endings
+such that we have only LF line endings in the repository.
+But for binary files that are accidentally classified as text the
+conversion can corrupt data.
++
+If you recognize such corruption early you can easily fix it by
+setting the conversion type explicitly in .gitattributes.  Right
+after committing you still have the original file in your work
+tree and this file is not yet corrupted.  You can explicitly tell
+git that this file is binary and git will handle the file
+appropriately.
++
+Unfortunately, the desired effect of cleaning up text files with
+mixed line endings and the undesired effect of corrupting binary
+files cannot be distinguished.  In both cases CRLFs are removed
+in an irreversible way.  For text files this is the right thing
+to do because CRLFs are line endings, while for binary files
+converting CRLFs corrupts data.
++
+Note, this safety check does not mean that a checkout will generate a
+file identical to the original file for a different setting of
+`core.autocrlf`, but only for the current one.  For example, a text
+file with `LF` would be accepted with `core.autocrlf=input` and could
+later be checked out with `core.autocrlf=true`, in which case the
+resulting file would contain `CRLF`, although the original file
+contained `LF`.  However, in both work trees the line endings would be
+consistent, that is either all `LF` or all `CRLF`, but never mixed.  A
+file with mixed line endings would be reported by the `core.safecrlf`
+mechanism.
+
 core.symlinks::
 	If false, symbolic links are checked out as small plain files that
 	contain the link text. linkgit:git-update-index[1] and
@@ -308,6 +353,10 @@ core.whitespace::
   error (enabled by default).
 * `indent-with-non-tab` treats a line that is indented with 8 or more
   space characters as an error (not enabled by default).
+* `cr-at-eol` treats a carriage-return at the end of line as
+  part of the line terminator, i.e. with it, `trailing-space`
+  does not trigger if the character before such a carriage-return
+  is not a whitespace (not enabled by default).
 
 alias.*::
 	Command aliases for the linkgit:git[1] command wrapper - e.g.
@@ -330,10 +379,14 @@ apply.whitespace::
 
 branch.autosetupmerge::
 	Tells `git-branch` and `git-checkout` to setup new branches
-	so that linkgit:git-pull[1] will appropriately merge from that
-	remote branch.  Note that even if this option is not set,
+	so that linkgit:git-pull[1] will appropriately merge from the
+	starting point branch. Note that even if this option is not set,
 	this behavior can be chosen per-branch using the `--track`
-	and `--no-track` options.  This option defaults to true.
+	and `--no-track` options. The valid settings are: `false` -- no
+	automatic setup is done; `true` -- automatic setup is done when the
+	starting point is a remote branch; `always` -- automatic setup is
+	done when the starting point is either a local branch or remote
+	branch. This option defaults to true.
 
 branch.<name>.remote::
 	When in branch <name>, it tells `git fetch` which remote to fetch.
@@ -366,6 +419,11 @@ branch.<name>.rebase::
 	*NOTE*: this is a possibly dangerous operation; do *not* use
 	it unless you understand the implications (see linkgit:git-rebase[1]
 	for details).
+
+browser.<tool>.cmd::
+	Specify the command to invoke the specified browser. The
+	specified command is evaluated in shell with the URLs passed
+	as arguments. (See linkgit:git-web--browse[1].)
 
 browser.<tool>.path::
 	Override the path for the given tool that may be used to
@@ -444,6 +502,13 @@ color.status.<slot>::
 commit.template::
 	Specify a file to use as the template for new commit messages.
 
+color.ui::
+	When set to `always`, always use colors in all git commands which
+	are capable of colored output. When false (or `never`), never. When
+	set to `true` or `auto`, use colors only when the output is to the
+	terminal. When more specific variables of color.* are set, they always
+	take precedence over this setting. Defaults to false.
+
 diff.autorefreshindex::
 	When using `git diff` to compare with work tree
 	files, do not consider stat-only change as changed.
@@ -496,6 +561,11 @@ format.suffix::
 	`.patch`. Use this variable to change that suffix (make sure to
 	include the dot if you want it).
 
+format.pretty::
+	The default pretty format for log/show/whatchanged command,
+	See linkgit:git-log[1], linkgit:git-show[1],
+	linkgit:git-whatchanged[1].
+
 gc.aggressiveWindow::
 	The window size parameter used in the delta compression
 	algorithm used by 'git gc --aggressive'.  This defaults
@@ -512,7 +582,7 @@ gc.autopacklimit::
 	When there are more than this many packs that are not
 	marked with `*.keep` file in the repository, `git gc
 	--auto` consolidates them into one larger pack.  The
-	default	value is 20.  Setting this to 0 disables it.
+	default	value is 50.  Setting this to 0 disables it.
 
 gc.packrefs::
 	`git gc` does not run `git pack-refs` in a bare repository by
@@ -524,6 +594,10 @@ gc.packrefs::
 	support such clients.  The default setting will change to `true`
 	at some stage, and setting this to `false` will continue to
 	prevent `git pack-refs` from being run from `git gc`.
+
+gc.pruneexpire::
+	When `git gc` is run, it will call `prune --expire 2.weeks.ago`.
+	Override the grace period with this config variable.
 
 gc.reflogexpire::
 	`git reflog expire` removes reflog entries older than
@@ -586,6 +660,13 @@ gitcvs.dbuser, gitcvs.dbpass::
 	since SQLite has no concept of database users and/or passwords.
 	'gitcvs.dbuser' supports variable substitution (see
 	linkgit:git-cvsserver[1] for details).
+
+gitcvs.dbTableNamePrefix::
+	Database table name prefix.  Prepended to the names of any
+	database tables used, allowing a single database to be used
+	for several repositories.  Supports variable substitution (see
+	linkgit:git-cvsserver[1] for details).  Any non-alphabetic
+	characters will be replaced with underscores.
 
 All gitcvs variables except for 'gitcvs.allbinary' can also be
 specified as 'gitcvs.<access_method>.<varname>' (where 'access_method'
@@ -683,14 +764,20 @@ log.showroot::
 	Tools like linkgit:git-log[1] or linkgit:git-whatchanged[1], which
 	normally hide the root commit will now show it. True by default.
 
+man.viewer::
+	Specify the programs that may be used to display help in the
+	'man' format. See linkgit:git-help[1].
+
 merge.summary::
 	Whether to include summaries of merged commits in newly created
 	merge commit messages. False by default.
 
 merge.tool::
 	Controls which merge resolution program is used by
-	linkgit:git-mergetool[1].  Valid values are: "kdiff3", "tkdiff",
-	"meld", "xxdiff", "emerge", "vimdiff", "gvimdiff", and "opendiff".
+	linkgit:git-mergetool[1].  Valid built-in values are: "kdiff3",
+	"tkdiff", "meld", "xxdiff", "emerge", "vimdiff", "gvimdiff", and
+	"opendiff".  Any other value is treated is custom merge tool
+	and there must be a corresponing mergetool.<tool>.cmd option.
 
 merge.verbosity::
 	Controls the amount of output shown by the recursive merge
@@ -716,6 +803,31 @@ merge.<driver>.recursive::
 mergetool.<tool>.path::
 	Override the path for the given tool.  This is useful in case
 	your tool is not in the PATH.
+
+mergetool.<tool>.cmd::
+	Specify the command to invoke the specified merge tool.  The
+	specified command is evaluated in shell with the following
+	variables available: 'BASE' is the name of a temporary file
+	containing the common base of the files to be merged, if available;
+	'LOCAL' is the name of a temporary file containing the contents of
+	the file on the current branch; 'REMOTE' is the name of a temporary
+	file containing the contents of the file from the branch being
+	merged; 'MERGED' contains the name of the file to which the merge
+	tool should write the results of a successful merge.
+
+mergetool.<tool>.trustExitCode::
+	For a custom merge command, specify whether the exit code of
+	the merge command can be used to determine whether the merge was
+	successful.  If this is not set to true then the merge target file
+	timestamp is checked and the merge assumed to have been successful
+	if the file has been updated, otherwise the user is prompted to
+	indicate the success of the merge.
+
+mergetool.keepBackup::
+	After performing a merge, the original file with conflict markers
+	can be saved as a file with a `.orig` extension.  If this variable
+	is set to `false` then this file is not preserved.  Defaults to
+	`true` (i.e. keep the backup files).
 
 pack.window::
 	The size of the window used by linkgit:git-pack-objects[1] when no
@@ -756,6 +868,8 @@ pack.threads::
 	warning. This is meant to reduce packing time on multiprocessor
 	machines. The required amount of memory for the delta search window
 	is however multiplied by the number of threads.
+	Specifying 0 will cause git to auto-detect the number of CPU's
+	and set the number of threads accordingly.
 
 pack.indexVersion::
 	Specify the default pack index version.  Valid values are 1 for
@@ -765,6 +879,12 @@ pack.indexVersion::
 	packs.  Version 2 is selected and this config option ignored
 	whenever the corresponding pack is larger than 2 GB.  Otherwise
 	the default is 1.
+
+pack.packSizeLimit::
+	The default maximum size of a pack.  This setting only affects
+	packing to a file, i.e. the git:// protocol is unaffected.  It
+	can be overridden by the `\--max-pack-size` option of
+	linkgit:git-repack[1].
 
 pull.octopus::
 	The default merge strategy to use when pulling multiple branches
@@ -834,6 +954,17 @@ tar.umask::
 	world write bit.  The special value "user" indicates that the
 	archiving user's umask will be used instead.  See umask(2) and
 	linkgit:git-archive[1].
+
+url.<base>.insteadOf::
+	Any URL that starts with this value will be rewritten to
+	start, instead, with <base>. In cases where some site serves a
+	large number of repositories, and serves them with multiple
+	access methods, and some users need to use different access
+	methods, this feature allows people to specify any of the
+	equivalent URLs and have git automatically rewrite the URL to
+	the best alternative for the particular user, even for a
+	never-before-seen repository on the site.  When more than one
+	insteadOf strings match a given URL, the longest match is used.
 
 user.email::
 	Your email address to be recorded in any newly created commits.

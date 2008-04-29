@@ -25,13 +25,14 @@ static const char * const builtin_gc_usage[] = {
 static int pack_refs = 1;
 static int aggressive_window = -1;
 static int gc_auto_threshold = 6700;
-static int gc_auto_pack_limit = 20;
+static int gc_auto_pack_limit = 50;
+static char *prune_expire = "2.weeks.ago";
 
 #define MAX_ADD 10
 static const char *argv_pack_refs[] = {"pack-refs", "--all", "--prune", NULL};
 static const char *argv_reflog[] = {"reflog", "expire", "--all", NULL};
 static const char *argv_repack[MAX_ADD] = {"repack", "-d", "-l", NULL};
-static const char *argv_prune[] = {"prune", NULL};
+static const char *argv_prune[] = {"prune", "--expire", NULL, NULL};
 static const char *argv_rerere[] = {"rerere", "gc", NULL};
 
 static int gc_config(const char *var, const char *value)
@@ -53,6 +54,17 @@ static int gc_config(const char *var, const char *value)
 	}
 	if (!strcmp(var, "gc.autopacklimit")) {
 		gc_auto_pack_limit = git_config_int(var, value);
+		return 0;
+	}
+	if (!strcmp(var, "gc.pruneexpire")) {
+		if (!value)
+			return config_error_nonbool(var);
+		if (strcmp(value, "now")) {
+			unsigned long now = approxidate("now");
+			if (approxidate(value) >= now)
+				return error("Invalid %s: '%s'", var, value);
+		}
+		prune_expire = xstrdup(value);
 		return 0;
 	}
 	return git_default_config(var, value);
@@ -148,10 +160,10 @@ static int too_many_packs(void)
 static int need_to_gc(void)
 {
 	/*
-	 * Setting gc.auto and gc.autopacklimit to 0 or negative can
-	 * disable the automatic gc.
+	 * Setting gc.auto to 0 or negative can disable the
+	 * automatic gc.
 	 */
-	if (gc_auto_threshold <= 0 && gc_auto_pack_limit <= 0)
+	if (gc_auto_threshold <= 0)
 		return 0;
 
 	/*
@@ -172,12 +184,14 @@ int cmd_gc(int argc, const char **argv, const char *prefix)
 	int prune = 0;
 	int aggressive = 0;
 	int auto_gc = 0;
+	int quiet = 0;
 	char buf[80];
 
 	struct option builtin_gc_options[] = {
 		OPT_BOOLEAN(0, "prune", &prune, "prune unreferenced objects"),
 		OPT_BOOLEAN(0, "aggressive", &aggressive, "be more thorough (increased runtime)"),
 		OPT_BOOLEAN(0, "auto", &auto_gc, "enable auto-gc mode"),
+		OPT_BOOLEAN('q', "quiet", &quiet, "suppress progress reports"),
 		OPT_END()
 	};
 
@@ -197,6 +211,8 @@ int cmd_gc(int argc, const char **argv, const char *prefix)
 			append_option(argv_repack, buf, MAX_ADD);
 		}
 	}
+	if (quiet)
+		append_option(argv_repack, "-q", MAX_ADD);
 
 	if (auto_gc) {
 		/*
@@ -230,7 +246,8 @@ int cmd_gc(int argc, const char **argv, const char *prefix)
 	if (run_command_v_opt(argv_repack, RUN_GIT_CMD))
 		return error(FAILED_RUN, argv_repack[0]);
 
-	if (prune && run_command_v_opt(argv_prune, RUN_GIT_CMD))
+	argv_prune[2] = prune_expire;
+	if (run_command_v_opt(argv_prune, RUN_GIT_CMD))
 		return error(FAILED_RUN, argv_prune[0]);
 
 	if (run_command_v_opt(argv_rerere, RUN_GIT_CMD))

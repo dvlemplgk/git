@@ -4,7 +4,7 @@ test_description='git-filter-branch'
 . ./test-lib.sh
 
 make_commit () {
-	lower=$(echo $1 | tr A-Z a-z)
+	lower=$(echo $1 | tr '[A-Z]' '[a-z]')
 	echo $lower > $lower
 	git add $lower
 	test_tick
@@ -17,6 +17,8 @@ test_expect_success 'setup' '
 	make_commit B
 	git checkout -b branch B
 	make_commit D
+	mkdir dir
+	make_commit dir/D
 	make_commit E
 	git checkout master
 	make_commit C
@@ -41,9 +43,23 @@ test_expect_success 'rewrite, renaming a specific file' '
 '
 
 test_expect_success 'test that the file was renamed' '
-	test d = $(git show HEAD:doh) &&
+	test d = "$(git show HEAD:doh --)" &&
+	! test -f d &&
 	test -f doh &&
-	test d = $(cat doh)
+	test d = "$(cat doh)"
+'
+
+test_expect_success 'rewrite, renaming a specific directory' '
+	git-filter-branch -f --tree-filter "mv dir diroh || :" HEAD
+'
+
+test_expect_success 'test that the directory was renamed' '
+	test dir/d = "$(git show HEAD:diroh/d --)" &&
+	! test -d dir &&
+	test -d diroh &&
+	! test -d diroh/dir &&
+	test -f diroh/d &&
+	test dir/d = "$(cat diroh/d)"
 '
 
 git tag oldD HEAD~4
@@ -78,7 +94,7 @@ test_expect_success 'filter subdirectory only' '
 test_expect_success 'subdirectory filter result looks okay' '
 	test 2 = $(git rev-list sub | wc -l) &&
 	git show sub:new &&
-	! git show sub:subdir
+	test_must_fail git show sub:subdir
 '
 
 test_expect_success 'setup and filter history that requires --full-history' '
@@ -100,7 +116,7 @@ test_expect_success 'subdirectory filter result looks okay' '
 	test 3 = $(git rev-list -1 --parents sub-master | wc -w) &&
 	git show sub-master^:new &&
 	git show sub-master^2:new &&
-	! git show sub:subdir
+	test_must_fail git show sub:subdir
 '
 
 test_expect_success 'use index-filter to move into a subdirectory' '
@@ -114,7 +130,7 @@ test_expect_success 'use index-filter to move into a subdirectory' '
 
 test_expect_success 'stops when msg filter fails' '
 	old=$(git rev-parse HEAD) &&
-	! git-filter-branch -f --msg-filter false HEAD &&
+	test_must_fail git-filter-branch -f --msg-filter false HEAD &&
 	test $old = $(git rev-parse HEAD) &&
 	rm -rf .git-rewrite
 '
@@ -151,8 +167,8 @@ test_expect_success "remove a certain author's commits" '
 '
 
 test_expect_success 'barf on invalid name' '
-	! git filter-branch -f master xy-problem &&
-	! git filter-branch -f HEAD^
+	test_must_fail git filter-branch -f master xy-problem &&
+	test_must_fail git filter-branch -f HEAD^
 '
 
 test_expect_success '"map" works in commit filter' '
@@ -174,7 +190,7 @@ test_expect_success 'Name needing quotes' '
 	git add foo &&
 	git commit -m "Adding a file" &&
 	git filter-branch --tree-filter "rm -fr foo" &&
-	! git ls-files --error-unmatch "foo/$name" &&
+	test_must_fail git ls-files --error-unmatch "foo/$name" &&
 	test $(git rev-parse --verify rerere) != $(git rev-parse --verify A)
 
 '

@@ -20,12 +20,19 @@ int start_command(struct child_process *cmd)
 	int need_in, need_out, need_err;
 	int fdin[2], fdout[2], fderr[2];
 
+	/*
+	 * In case of errors we must keep the promise to close FDs
+	 * that have been passed in via ->in and ->out.
+	 */
+
 	need_in = !cmd->no_stdin && cmd->in < 0;
 	if (need_in) {
-		if (pipe(fdin) < 0)
+		if (pipe(fdin) < 0) {
+			if (cmd->out > 0)
+				close(cmd->out);
 			return -ERR_RUN_COMMAND_PIPE;
+		}
 		cmd->in = fdin[1];
-		cmd->close_in = 1;
 	}
 
 	need_out = !cmd->no_stdout
@@ -35,10 +42,11 @@ int start_command(struct child_process *cmd)
 		if (pipe(fdout) < 0) {
 			if (need_in)
 				close_pair(fdin);
+			else if (cmd->in)
+				close(cmd->in);
 			return -ERR_RUN_COMMAND_PIPE;
 		}
 		cmd->out = fdout[0];
-		cmd->close_out = 1;
 	}
 
 	need_err = !cmd->no_stderr && cmd->err < 0;
@@ -46,8 +54,12 @@ int start_command(struct child_process *cmd)
 		if (pipe(fderr) < 0) {
 			if (need_in)
 				close_pair(fdin);
+			else if (cmd->in)
+				close(cmd->in);
 			if (need_out)
 				close_pair(fdout);
+			else if (cmd->out)
+				close(cmd->out);
 			return -ERR_RUN_COMMAND_PIPE;
 		}
 		cmd->err = fderr[0];
@@ -57,8 +69,12 @@ int start_command(struct child_process *cmd)
 	if (cmd->pid < 0) {
 		if (need_in)
 			close_pair(fdin);
+		else if (cmd->in)
+			close(cmd->in);
 		if (need_out)
 			close_pair(fdout);
+		else if (cmd->out)
+			close(cmd->out);
 		if (need_err)
 			close_pair(fderr);
 		return -ERR_RUN_COMMAND_FORK;
@@ -75,6 +91,13 @@ int start_command(struct child_process *cmd)
 			close(cmd->in);
 		}
 
+		if (cmd->no_stderr)
+			dup_devnull(2);
+		else if (need_err) {
+			dup2(fderr[1], 2);
+			close_pair(fderr);
+		}
+
 		if (cmd->no_stdout)
 			dup_devnull(1);
 		else if (cmd->stdout_to_stderr)
@@ -85,13 +108,6 @@ int start_command(struct child_process *cmd)
 		} else if (cmd->out > 1) {
 			dup2(cmd->out, 1);
 			close(cmd->out);
-		}
-
-		if (cmd->no_stderr)
-			dup_devnull(2);
-		else if (need_err) {
-			dup2(fderr[1], 2);
-			close_pair(fderr);
 		}
 
 		if (cmd->dir && chdir(cmd->dir))
@@ -120,7 +136,7 @@ int start_command(struct child_process *cmd)
 
 	if (need_out)
 		close(fdout[1]);
-	else if (cmd->out > 1)
+	else if (cmd->out)
 		close(cmd->out);
 
 	if (need_err)
@@ -157,10 +173,6 @@ static int wait_or_whine(pid_t pid)
 
 int finish_command(struct child_process *cmd)
 {
-	if (cmd->close_in)
-		close(cmd->in);
-	if (cmd->close_out)
-		close(cmd->out);
 	return wait_or_whine(cmd->pid);
 }
 

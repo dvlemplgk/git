@@ -128,7 +128,8 @@ int verify_bundle(struct bundle_header *header, int verbose)
 		add_object_array(e->item, e->name, &refs);
 	}
 
-	prepare_revision_walk(&revs);
+	if (prepare_revision_walk(&revs))
+		die("revision walk setup failed");
 
 	i = req_nr;
 	while (i && (commit = get_revision(&revs)))
@@ -332,10 +333,12 @@ int create_bundle(struct bundle_header *header, const char *path,
 		write_or_die(rls.in, sha1_to_hex(object->sha1), 40);
 		write_or_die(rls.in, "\n", 1);
 	}
+	close(rls.in);
 	if (finish_command(&rls))
 		return error ("pack-objects died");
-
-	return bundle_to_stdout ? close(bundle_fd) : commit_lock_file(&lock);
+	if (!bundle_to_stdout)
+		commit_lock_file(&lock);
+	return 0;
 }
 
 int unbundle(struct bundle_header *header, int bundle_fd)

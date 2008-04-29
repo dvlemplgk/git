@@ -193,7 +193,7 @@ static void prepare_commit_graft(void)
 	commit_graft_prepared = 1;
 }
 
-static struct commit_graft *lookup_commit_graft(const unsigned char *sha1)
+struct commit_graft *lookup_commit_graft(const unsigned char *sha1)
 {
 	int pos;
 	prepare_commit_graft();
@@ -290,17 +290,6 @@ int parse_commit_buffer(struct commit *item, void *buffer, unsigned long size)
 	}
 	item->date = parse_commit_date(bufptr, tail);
 
-	if (track_object_refs) {
-		unsigned i = 0;
-		struct commit_list *p;
-		struct object_refs *refs = alloc_object_refs(n_refs);
-		if (item->tree)
-			refs->ref[i++] = &item->tree->object;
-		for (p = item->parents; p; p = p->next)
-			refs->ref[i++] = &p->item->object;
-		set_object_refs(&item->object, refs);
-	}
-
 	return 0;
 }
 
@@ -311,6 +300,8 @@ int parse_commit(struct commit *item)
 	unsigned long size;
 	int ret;
 
+	if (!item)
+		return -1;
 	if (item->object.parsed)
 		return 0;
 	buffer = read_sha1_file(item->object.sha1, &type, &size);
@@ -385,8 +376,7 @@ struct commit *pop_most_recent_commit(struct commit_list **list,
 
 	while (parents) {
 		struct commit *commit = parents->item;
-		parse_commit(commit);
-		if (!(commit->object.flags & mark)) {
+		if (!parse_commit(commit) && !(commit->object.flags & mark)) {
 			commit->object.flags |= mark;
 			insert_by_date(commit, list);
 		}
@@ -552,8 +542,10 @@ static struct commit_list *merge_bases(struct commit *one, struct commit *two)
 		 */
 		return commit_list_insert(one, &result);
 
-	parse_commit(one);
-	parse_commit(two);
+	if (parse_commit(one))
+		return NULL;
+	if (parse_commit(two))
+		return NULL;
 
 	one->object.flags |= PARENT1;
 	two->object.flags |= PARENT2;
@@ -586,7 +578,8 @@ static struct commit_list *merge_bases(struct commit *one, struct commit *two)
 			parents = parents->next;
 			if ((p->object.flags & flags) == flags)
 				continue;
-			parse_commit(p);
+			if (parse_commit(p))
+				return NULL;
 			p->object.flags |= flags;
 			insert_by_date(p, &list);
 		}

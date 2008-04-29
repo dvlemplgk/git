@@ -85,7 +85,7 @@ test_expect_success 'verbose' '
 	git add negative &&
 	git status -v | sed -ne "/^diff --git /p" >actual &&
 	echo "diff --git a/negative b/negative" >expect &&
-	diff -u expect actual
+	test_cmp expect actual
 
 '
 
@@ -95,7 +95,7 @@ test_expect_success 'cleanup commit messages (verbatim,-t)' '
 	{ echo;echo "# text";echo; } >expect &&
 	git commit --cleanup=verbatim -t expect -a &&
 	git cat-file -p HEAD |sed -e "1,/^\$/d" |head -n 3 >actual &&
-	diff -u expect actual
+	test_cmp expect actual
 
 '
 
@@ -104,7 +104,7 @@ test_expect_success 'cleanup commit messages (verbatim,-F)' '
 	echo >>negative &&
 	git commit --cleanup=verbatim -F expect -a &&
 	git cat-file -p HEAD |sed -e "1,/^\$/d">actual &&
-	diff -u expect actual
+	test_cmp expect actual
 
 '
 
@@ -113,7 +113,7 @@ test_expect_success 'cleanup commit messages (verbatim,-m)' '
 	echo >>negative &&
 	git commit --cleanup=verbatim -m "$(cat expect)" -a &&
 	git cat-file -p HEAD |sed -e "1,/^\$/d">actual &&
-	diff -u expect actual
+	test_cmp expect actual
 
 '
 
@@ -124,7 +124,7 @@ test_expect_success 'cleanup commit messages (whitespace,-F)' '
 	echo "# text" >expect &&
 	git commit --cleanup=whitespace -F text -a &&
 	git cat-file -p HEAD |sed -e "1,/^\$/d">actual &&
-	diff -u expect actual
+	test_cmp expect actual
 
 '
 
@@ -135,7 +135,7 @@ test_expect_success 'cleanup commit messages (strip,-F)' '
 	echo sample >expect &&
 	git commit --cleanup=strip -F text -a &&
 	git cat-file -p HEAD |sed -e "1,/^\$/d">actual &&
-	diff -u expect actual
+	test_cmp expect actual
 
 '
 
@@ -150,8 +150,37 @@ test_expect_success 'cleanup commit messages (strip,-F,-e)' '
 	{ echo;echo sample;echo; } >text &&
 	git commit -e -F text -a &&
 	head -n 4 .git/COMMIT_EDITMSG >actual &&
-	diff -u expect actual
+	test_cmp expect actual
 
+'
+
+pwd=`pwd`
+cat >> .git/FAKE_EDITOR << EOF
+#! /bin/sh
+echo editor started > "$pwd/.git/result"
+exit 0
+EOF
+chmod +x .git/FAKE_EDITOR
+
+test_expect_success 'do not fire editor in the presence of conflicts' '
+
+	git clean
+	echo f>g
+	git add g
+	git commit -myes
+	git branch second
+	echo master>g
+	echo g>h
+	git add g h
+	git commit -mmaster
+	git checkout second
+	echo second>g
+	git add g
+	git commit -msecond
+	git cherry-pick -n master
+	echo "editor not started" > .git/result
+	GIT_EDITOR=`pwd`/.git/FAKE_EDITOR git commit && exit 1  # should fail
+	test "`cat .git/result`" = "editor not started"
 '
 
 test_done

@@ -385,6 +385,9 @@ new commit.
 Omitting the `from` command in the first commit of a new branch
 will cause fast-import to create that commit with no ancestor. This
 tends to be desired only for the initial commit of a project.
+If the frontend creates all files from scratch when making a new
+branch, a `merge` command may be used instead of `from` to start
+the commit with an empty tree.
 Omitting the `from` command on existing branches is usually desired,
 as the current commit on that branch is automatically assumed to
 be the first ancestor of the new commit.
@@ -427,13 +430,15 @@ existing value of the branch.
 
 `merge`
 ^^^^^^^
-Includes one additional ancestor commit, and makes the current
-commit a merge commit.  An unlimited number of `merge` commands per
+Includes one additional ancestor commit.  If the `from` command is
+omitted when creating a new branch, the first `merge` commit will be
+the first ancestor of the current commit, and the branch will start
+out with no files.  An unlimited number of `merge` commands per
 commit are permitted by fast-import, thereby establishing an n-way merge.
 However Git's other tools never create commits with more than 15
 additional ancestors (forming a 16-way merge).  For this reason
 it is suggested that frontends do not use more than 15 `merge`
-commands per commit.
+commands per commit; 16, if starting a new, empty branch.
 
 Here `<committish>` is any of the commit specification expressions
 also accepted by `from` (see above).
@@ -804,6 +809,93 @@ remove the leading part of the line, for example:
 Placing a `progress` command immediately after a `checkpoint` will
 inform the reader when the `checkpoint` has been completed and it
 can safely access the refs that fast-import updated.
+
+Crash Reports
+-------------
+If fast-import is supplied invalid input it will terminate with a
+non-zero exit status and create a crash report in the top level of
+the Git repository it was importing into.  Crash reports contain
+a snapshot of the internal fast-import state as well as the most
+recent commands that lead up to the crash.
+
+All recent commands (including stream comments, file changes and
+progress commands) are shown in the command history within the crash
+report, but raw file data and commit messages are excluded from the
+crash report.  This exclusion saves space within the report file
+and reduces the amount of buffering that fast-import must perform
+during execution.
+
+After writing a crash report fast-import will close the current
+packfile and export the marks table.  This allows the frontend
+developer to inspect the repository state and resume the import from
+the point where it crashed.  The modified branches and tags are not
+updated during a crash, as the import did not complete successfully.
+Branch and tag information can be found in the crash report and
+must be applied manually if the update is needed.
+
+An example crash:
+
+====
+	$ cat >in <<END_OF_INPUT
+	# my very first test commit
+	commit refs/heads/master
+	committer Shawn O. Pearce <spearce> 19283 -0400
+	# who is that guy anyway?
+	data <<EOF
+	this is my commit
+	EOF
+	M 644 inline .gitignore
+	data <<EOF
+	.gitignore
+	EOF
+	M 777 inline bob
+	END_OF_INPUT
+
+	$ git-fast-import <in
+	fatal: Corrupt mode: M 777 inline bob
+	fast-import: dumping crash report to .git/fast_import_crash_8434
+
+	$ cat .git/fast_import_crash_8434
+	fast-import crash report:
+	    fast-import process: 8434
+	    parent process     : 1391
+	    at Sat Sep 1 00:58:12 2007
+
+	fatal: Corrupt mode: M 777 inline bob
+
+	Most Recent Commands Before Crash
+	---------------------------------
+	  # my very first test commit
+	  commit refs/heads/master
+	  committer Shawn O. Pearce <spearce> 19283 -0400
+	  # who is that guy anyway?
+	  data <<EOF
+	  M 644 inline .gitignore
+	  data <<EOF
+	* M 777 inline bob
+
+	Active Branch LRU
+	-----------------
+	    active_branches = 1 cur, 5 max
+
+	  pos  clock name
+	  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	   1)      0 refs/heads/master
+
+	Inactive Branches
+	-----------------
+	refs/heads/master:
+	  status      : active loaded dirty
+	  tip commit  : 0000000000000000000000000000000000000000
+	  old tree    : 0000000000000000000000000000000000000000
+	  cur tree    : 0000000000000000000000000000000000000000
+	  commit clock: 0
+	  last pack   :
+
+
+	-------------------
+	END OF CRASH REPORT
+====
 
 Tips and Tricks
 ---------------

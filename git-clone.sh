@@ -210,11 +210,28 @@ if base=$(get_repo_base "$repo"); then
 	then
 		local=yes
 	fi
+elif test -f "$repo"
+then
+	case "$repo" in /*) ;; *) repo="$PWD/$repo" ;; esac
 fi
 
-dir="$2"
-# Try using "humanish" part of source repo if user didn't specify one
-[ -z "$dir" ] && dir=$(echo "$repo" | sed -e 's|/$||' -e 's|:*/*\.git$||' -e 's|.*[/:]||g')
+# Decide the directory name of the new repository
+if test -n "$2"
+then
+	dir="$2"
+else
+	# Derive one from the repository name
+	# Try using "humanish" part of source repo if user didn't specify one
+	if test -f "$repo"
+	then
+		# Cloning from a bundle
+		dir=$(echo "$repo" | sed -e 's|/*\.bundle$||' -e 's|.*/||g')
+	else
+		dir=$(echo "$repo" |
+			sed -e 's|/$||' -e 's|:*/*\.git$||' -e 's|.*[/:]||g')
+	fi
+fi
+
 [ -e "$dir" ] && die "destination directory '$dir' already exists."
 [ yes = "$bare" ] && unset GIT_WORK_TREE
 [ -n "$GIT_WORK_TREE" ] && [ -e "$GIT_WORK_TREE" ] &&
@@ -293,6 +310,9 @@ yes)
 		mkdir -p "$GIT_DIR/objects/info"
 		echo "$repo/objects" >>"$GIT_DIR/objects/info/alternates"
 	else
+		cpio_quiet_flag=""
+		cpio --help 2>&1 | grep -- --quiet >/dev/null && \
+			cpio_quiet_flag=--quiet
 		l= &&
 		if test "$use_local_hardlink" = yes
 		then
@@ -313,7 +333,8 @@ yes)
 			fi
 		fi &&
 		cd "$repo" &&
-		find objects -depth -print | cpio -pumd$l "$GIT_DIR/" || exit 1
+		find objects -depth -print | cpio $cpio_quiet_flag -pumd$l "$GIT_DIR/" || \
+			exit 1
 	fi
 	git-ls-remote "$repo" >"$GIT_DIR/CLONE_HEAD" || exit 1
 	;;
@@ -364,11 +385,17 @@ yes)
 		fi
 		;;
 	*)
-		case "$upload_pack" in
-		'') git-fetch-pack --all -k $quiet $depth $no_progress "$repo";;
-		*) git-fetch-pack --all -k $quiet "$upload_pack" $depth $no_progress "$repo" ;;
-		esac >"$GIT_DIR/CLONE_HEAD" ||
+		if [ -f "$repo" ] ; then
+			git bundle unbundle "$repo" > "$GIT_DIR/CLONE_HEAD" ||
+			die "unbundle from '$repo' failed."
+		else
+			case "$upload_pack" in
+			'') git-fetch-pack --all -k $quiet $depth $no_progress "$repo";;
+			*) git-fetch-pack --all -k \
+				$quiet "$upload_pack" $depth $no_progress "$repo" ;;
+			esac >"$GIT_DIR/CLONE_HEAD" ||
 			die "fetch-pack from '$repo' failed."
+		fi
 		;;
 	esac
 	;;

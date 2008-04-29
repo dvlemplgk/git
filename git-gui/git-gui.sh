@@ -611,7 +611,9 @@ set default_config(gui.matchtrackingbranch) false
 set default_config(gui.pruneduringfetch) false
 set default_config(gui.trustmtime) false
 set default_config(gui.diffcontext) 5
+set default_config(gui.commitmsgwidth) 75
 set default_config(gui.newbranchtemplate) {}
+set default_config(gui.spellingdictionary) {}
 set default_config(gui.fontui) [font configure font_ui]
 set default_config(gui.fontdiff) [font configure font_diff]
 set font_descs {
@@ -1683,6 +1685,7 @@ set is_quitting 0
 proc do_quit {} {
 	global ui_comm is_quitting repo_config commit_type
 	global GITGUI_BCK_exists GITGUI_BCK_i
+	global ui_comm_spell
 
 	if {$is_quitting} return
 	set is_quitting 1
@@ -1708,6 +1711,12 @@ proc do_quit {} {
 			} else {
 				catch {file delete $save}
 			}
+		}
+
+		# -- Cancel our spellchecker if its running.
+		#
+		if {[info exists ui_comm_spell]} {
+			$ui_comm_spell stop
 		}
 
 		# -- Remove our editor backup, its not needed.
@@ -1835,6 +1844,22 @@ proc add_range_to_selection {w x y} {
 		set selected_paths($path) 1
 	}
 	$w tag add in_sel $begin.0 [expr {$end + 1}].0
+}
+
+proc show_more_context {} {
+	global repo_config
+	if {$repo_config(gui.diffcontext) < 99} {
+		incr repo_config(gui.diffcontext)
+		reshow_diff
+	}
+}
+
+proc show_less_context {} {
+	global repo_config
+	if {$repo_config(gui.diffcontext) >= 1} {
+		incr repo_config(gui.diffcontext) -1
+		reshow_diff
+	}
 }
 
 ######################################################################
@@ -2037,6 +2062,16 @@ if {[is_enabled multicommit] || [is_enabled singlecommit]} {
 
 	.mbar.commit add separator
 
+	.mbar.commit add command -label [mc "Show Less Context"] \
+		-command show_less_context \
+		-accelerator $M1T-\-
+
+	.mbar.commit add command -label [mc "Show More Context"] \
+		-command show_more_context \
+		-accelerator $M1T-=
+
+	.mbar.commit add separator
+
 	.mbar.commit add command -label [mc "Sign Off"] \
 		-command do_signoff \
 		-accelerator $M1T-S
@@ -2080,7 +2115,7 @@ if {[is_enabled transport]} {
 if {[is_MacOSX]} {
 	# -- Apple Menu (Mac OS X only)
 	#
-	.mbar add cascade -label [mc Apple] -menu .mbar.apple
+	.mbar add cascade -label Apple -menu .mbar.apple
 	menu .mbar.apple
 
 	.mbar.apple add command -label [mc "About %s" [appname]] \
@@ -2281,8 +2316,9 @@ pack .vpane -anchor n -side top -fill both -expand 1
 #
 frame .vpane.files.index -height 100 -width 200
 label .vpane.files.index.title -text [mc "Staged Changes (Will Commit)"] \
-	-background lightgreen
-text $ui_index -background white -borderwidth 0 \
+	-background lightgreen -foreground black
+text $ui_index -background white -foreground black \
+	-borderwidth 0 \
 	-width 20 -height 10 \
 	-wrap none \
 	-cursor $cursor_ptr \
@@ -2300,8 +2336,9 @@ pack $ui_index -side left -fill both -expand 1
 #
 frame .vpane.files.workdir -height 100 -width 200
 label .vpane.files.workdir.title -text [mc "Unstaged Changes"] \
-	-background lightsalmon
-text $ui_workdir -background white -borderwidth 0 \
+	-background lightsalmon -foreground black
+text $ui_workdir -background white -foreground black \
+	-borderwidth 0 \
 	-width 20 -height 10 \
 	-wrap none \
 	-cursor $cursor_ptr \
@@ -2408,12 +2445,13 @@ pack $ui_coml -side left -fill x
 pack .vpane.lower.commarea.buffer.header.amend -side right
 pack .vpane.lower.commarea.buffer.header.new -side right
 
-text $ui_comm -background white -borderwidth 1 \
+text $ui_comm -background white -foreground black \
+	-borderwidth 1 \
 	-undo true \
 	-maxundo 20 \
 	-autoseparators true \
 	-relief sunken \
-	-width 75 -height 9 -wrap none \
+	-width $repo_config(gui.commitmsgwidth) -height 9 -wrap none \
 	-font font_diff \
 	-yscrollcommand {.vpane.lower.commarea.buffer.sby set}
 scrollbar .vpane.lower.commarea.buffer.sby \
@@ -2454,7 +2492,7 @@ $ctxm add separator
 $ctxm add command \
 	-label [mc "Sign Off"] \
 	-command do_signoff
-bind_button3 $ui_comm "tk_popup $ctxm %X %Y"
+set ui_comm_ctxm $ctxm
 
 # -- Diff Header
 #
@@ -2485,15 +2523,18 @@ trace add variable current_diff_path write trace_current_diff_path
 frame .vpane.lower.diff.header -background gold
 label .vpane.lower.diff.header.status \
 	-background gold \
+	-foreground black \
 	-width $max_status_desc \
 	-anchor w \
 	-justify left
 label .vpane.lower.diff.header.file \
 	-background gold \
+	-foreground black \
 	-anchor w \
 	-justify left
 label .vpane.lower.diff.header.path \
 	-background gold \
+	-foreground black \
 	-anchor w \
 	-justify left
 pack .vpane.lower.diff.header.status -side left
@@ -2517,7 +2558,8 @@ bind_button3 .vpane.lower.diff.header.path "tk_popup $ctxm %X %Y"
 #
 frame .vpane.lower.diff.body
 set ui_diff .vpane.lower.diff.body.t
-text $ui_diff -background white -borderwidth 0 \
+text $ui_diff -background white -foreground black \
+	-borderwidth 0 \
 	-width 80 -height 15 -wrap none \
 	-font font_diff \
 	-xscrollcommand {.vpane.lower.diff.body.sbx set} \
@@ -2577,17 +2619,11 @@ lappend diff_actions [list $ctxm entryconf $ui_diff_applyhunk -state]
 $ctxm add separator
 $ctxm add command \
 	-label [mc "Show Less Context"] \
-	-command {if {$repo_config(gui.diffcontext) >= 1} {
-		incr repo_config(gui.diffcontext) -1
-		reshow_diff
-	}}
+	-command show_less_context
 lappend diff_actions [list $ctxm entryconf [$ctxm index last] -state]
 $ctxm add command \
 	-label [mc "Show More Context"] \
-	-command {if {$repo_config(gui.diffcontext) < 99} {
-		incr repo_config(gui.diffcontext)
-		reshow_diff
-	}}
+	-command show_more_context
 lappend diff_actions [list $ctxm entryconf [$ctxm index last] -state]
 $ctxm add separator
 $ctxm add command \
@@ -2679,6 +2715,11 @@ bind $ui_comm <$M1B-Key-v> {tk_textPaste %W; %W see insert; break}
 bind $ui_comm <$M1B-Key-V> {tk_textPaste %W; %W see insert; break}
 bind $ui_comm <$M1B-Key-a> {%W tag add sel 0.0 end;break}
 bind $ui_comm <$M1B-Key-A> {%W tag add sel 0.0 end;break}
+bind $ui_comm <$M1B-Key-minus> {show_less_context;break}
+bind $ui_comm <$M1B-Key-KP_Subtract> {show_less_context;break}
+bind $ui_comm <$M1B-Key-equal> {show_more_context;break}
+bind $ui_comm <$M1B-Key-plus> {show_more_context;break}
+bind $ui_comm <$M1B-Key-KP_Add> {show_more_context;break}
 
 bind $ui_diff <$M1B-Key-x> {tk_textCopy %W;break}
 bind $ui_diff <$M1B-Key-X> {tk_textCopy %W;break}
@@ -2722,6 +2763,11 @@ bind .   <$M1B-Key-t> do_add_selection
 bind .   <$M1B-Key-T> do_add_selection
 bind .   <$M1B-Key-i> do_add_all
 bind .   <$M1B-Key-I> do_add_all
+bind .   <$M1B-Key-minus> {show_less_context;break}
+bind .   <$M1B-Key-KP_Subtract> {show_less_context;break}
+bind .   <$M1B-Key-equal> {show_more_context;break}
+bind .   <$M1B-Key-plus> {show_more_context;break}
+bind .   <$M1B-Key-KP_Add> {show_more_context;break}
 bind .   <$M1B-Key-Return> do_commit
 foreach i [list $ui_index $ui_workdir] {
 	bind $i <Button-1>       "toggle_or_diff         $i %x %y; break"
@@ -2857,6 +2903,30 @@ if {[winfo exists $ui_comm]} {
 	}
 
 	backup_commit_buffer
+
+	# -- If the user has aspell available we can drive it
+	#    in pipe mode to spellcheck the commit message.
+	#
+	set spell_cmd [list |]
+	set spell_dict [get_config gui.spellingdictionary]
+	lappend spell_cmd aspell
+	if {$spell_dict ne {}} {
+		lappend spell_cmd --master=$spell_dict
+	}
+	lappend spell_cmd --mode=none
+	lappend spell_cmd --encoding=utf-8
+	lappend spell_cmd pipe
+	if {$spell_dict eq {none}
+	 || [catch {set spell_fd [open $spell_cmd r+]} spell_err]} {
+		bind_button3 $ui_comm [list tk_popup $ui_comm_ctxm %X %Y]
+	} else {
+		set ui_comm_spell [spellcheck::init \
+			$spell_fd \
+			$ui_comm \
+			$ui_comm_ctxm \
+		]
+	}
+	unset -nocomplain spell_cmd spell_fd spell_err spell_dict
 }
 
 lock_index begin-read

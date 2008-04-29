@@ -42,6 +42,7 @@ export GIT_MERGE_VERBOSITY
 export GIT_AUTHOR_EMAIL GIT_AUTHOR_NAME
 export GIT_COMMITTER_EMAIL GIT_COMMITTER_NAME
 export EDITOR VISUAL
+GIT_TEST_CMP=${GIT_TEST_CMP:-diff -u}
 
 # Protect ourselves from common misconfiguration to export
 # CDPATH into the environment
@@ -86,7 +87,7 @@ do
 	-q|--q|--qu|--qui|--quie|--quiet)
 		quiet=t; shift ;;
 	--no-color)
-	    color=; shift ;;
+		color=; shift ;;
 	--no-python)
 		# noop now...
 		shift ;;
@@ -149,8 +150,15 @@ fi
 
 test_failure=0
 test_count=0
+test_fixed=0
+test_broken=0
 
-trap 'echo >&5 "FATAL: Unexpected exit with code $?"; exit 1' exit
+die () {
+	echo >&5 "FATAL: Unexpected exit with code $?"
+	exit 1
+}
+
+trap 'die' exit
 
 test_tick () {
 	if test -z "${test_tick+set}"
@@ -181,6 +189,17 @@ test_failure_ () {
 	test "$immediate" = "" || { trap - exit; exit 1; }
 }
 
+test_known_broken_ok_ () {
+	test_count=$(expr "$test_count" + 1)
+	test_fixed=$(($test_fixed+1))
+	say_color "" "  FIXED $test_count: $@"
+}
+
+test_known_broken_failure_ () {
+	test_count=$(expr "$test_count" + 1)
+	test_broken=$(($test_broken+1))
+	say_color skip "  still broken $test_count: $@"
+}
 
 test_debug () {
 	test "$debug" = "" || eval "$1"
@@ -221,13 +240,13 @@ test_expect_failure () {
 	error "bug in the test script: not 2 parameters to test-expect-failure"
 	if ! test_skip "$@"
 	then
-		say >&3 "expecting failure: $2"
+		say >&3 "checking known breakage: $2"
 		test_run_ "$2"
-		if [ "$?" = 0 -a "$eval_ret" != 0 -a "$eval_ret" -lt 129 ]
+		if [ "$?" = 0 -a "$eval_ret" = 0 ]
 		then
-			test_ok_ "$1"
+			test_known_broken_ok_ "$1"
 		else
-			test_failure_ "$@"
+		    test_known_broken_failure_ "$1"
 		fi
 	fi
 	echo >&3 ""
@@ -281,7 +300,24 @@ test_expect_code () {
 
 test_must_fail () {
 	"$@"
-	test $? -gt 0 -a $? -le 128
+	test $? -gt 0 -a $? -le 129
+}
+
+# test_cmp is a helper function to compare actual and expected output.
+# You can use it like:
+#
+#	test_expect_success 'foo works' '
+#		echo expected >expected &&
+#		foo >actual &&
+#		test_cmp expected actual
+#	'
+#
+# This could be written as either "cmp" or "diff -u", but:
+# - cmp's output is not nearly as easy to read as diff -u
+# - not all diff versions understand "-u"
+
+test_cmp() {
+	$GIT_TEST_CMP "$@"
 }
 
 # Most tests can use the created repository, but some may need to create more.
@@ -301,6 +337,18 @@ test_create_repo () {
 
 test_done () {
 	trap - exit
+
+	if test "$test_fixed" != 0
+	then
+		say_color pass "fixed $test_fixed known breakage(s)"
+	fi
+	if test "$test_broken" != 0
+	then
+		say_color error "still have $test_broken known breakage(s)"
+		msg="remaining $(($test_count-$test_broken)) test(s)"
+	else
+		msg="$test_count test(s)"
+	fi
 	case "$test_failure" in
 	0)
 		# We could:
@@ -311,11 +359,11 @@ test_done () {
 		# The Makefile provided will clean this test area so
 		# we will leave things as they are.
 
-		say_color pass "passed all $test_count test(s)"
+		say_color pass "passed all $msg"
 		exit 0 ;;
 
 	*)
-		say_color error "failed $test_failure among $test_count test(s)"
+		say_color error "failed $test_failure among $msg"
 		exit 1 ;;
 
 	esac
@@ -326,8 +374,11 @@ test_done () {
 PATH=$(pwd)/..:$PATH
 GIT_EXEC_PATH=$(pwd)/..
 GIT_TEMPLATE_DIR=$(pwd)/../templates/blt
-GIT_CONFIG=.git/config
-export PATH GIT_EXEC_PATH GIT_TEMPLATE_DIR GIT_CONFIG
+unset GIT_CONFIG
+unset GIT_CONFIG_LOCAL
+GIT_CONFIG_NOSYSTEM=1
+GIT_CONFIG_NOGLOBAL=1
+export PATH GIT_EXEC_PATH GIT_TEMPLATE_DIR GIT_CONFIG_NOSYSTEM GIT_CONFIG_NOGLOBAL
 
 GITPERLLIB=$(pwd)/../perl/blib/lib:$(pwd)/../perl/blib/arch/auto/Git
 export GITPERLLIB
@@ -341,9 +392,16 @@ if ! test -x ../test-chmtime; then
 	exit 1
 fi
 
+. ../GIT-BUILD-OPTIONS
+
 # Test repository
 test=trash
-rm -fr "$test"
+rm -fr "$test" || {
+	trap - exit
+	echo >&5 "FATAL: Cannot prepare test area"
+	exit 1
+}
+
 test_create_repo $test
 cd "$test"
 

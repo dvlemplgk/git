@@ -103,7 +103,7 @@ static int write_entry(struct cache_entry *ce, char *path, const struct checkout
 	int fd;
 	long wrote;
 
-	switch (ntohl(ce->ce_mode) & S_IFMT) {
+	switch (ce->ce_mode & S_IFMT) {
 		char *new;
 		struct strbuf buf;
 		unsigned long size;
@@ -129,7 +129,7 @@ static int write_entry(struct cache_entry *ce, char *path, const struct checkout
 			strcpy(path, ".merge_file_XXXXXX");
 			fd = mkstemp(path);
 		} else
-			fd = create_file(path, ntohl(ce->ce_mode));
+			fd = create_file(path, ce->ce_mode);
 		if (fd < 0) {
 			free(new);
 			return error("git-checkout-index: unable to create file %s (%s)",
@@ -218,15 +218,15 @@ int checkout_entry(struct cache_entry *ce, const struct checkout *state, char *t
 		 * to emulate by hand - much easier to let the system
 		 * just do the right thing)
 		 */
-		unlink(path);
 		if (S_ISDIR(st.st_mode)) {
 			/* If it is a gitlink, leave it alone! */
-			if (S_ISGITLINK(ntohl(ce->ce_mode)))
+			if (S_ISGITLINK(ce->ce_mode))
 				return 0;
 			if (!state->force)
 				return error("%s is a directory", path);
 			remove_subtree(path);
-		}
+		} else if (unlink(path))
+			return error("unable to unlink old '%s' (%s)", path, strerror(errno));
 	} else if (state->not_new)
 		return 0;
 	create_directories(path, state);
