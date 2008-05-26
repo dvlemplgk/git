@@ -177,6 +177,10 @@ or copyright violation) from all commits:
 git filter-branch --tree-filter 'rm filename' HEAD
 -------------------------------------------------------
 
+However, if the file is absent from the tree of some commit,
+a simple `rm filename` will fail for that tree and commit.
+Thus you may instead want to use `rm -f filename` as the script.
+
 A significantly faster version:
 
 --------------------------------------------------------------------------
@@ -243,12 +247,12 @@ committed a merge between P1 and P2, it will be propagated properly
 and all children of the merge will become merge commits with P1,P2
 as their parents instead of the merge commit.
 
-You can rewrite the commit log messages using `--message-filter`.  For
+You can rewrite the commit log messages using `--msg-filter`.  For
 example, `git-svn-id` strings in a repository created by `git-svn` can
 be removed this way:
 
 -------------------------------------------------------
-git filter-branch --message-filter '
+git filter-branch --msg-filter '
 	sed -e "/^git-svn-id:/d"
 '
 -------------------------------------------------------
