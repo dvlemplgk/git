@@ -369,10 +369,15 @@ sub filter_snapshot_fmts {
 }
 
 our $GITWEB_CONFIG = $ENV{'GITWEB_CONFIG'} || "++GITWEB_CONFIG++";
-do $GITWEB_CONFIG if -e $GITWEB_CONFIG;
+if (-e $GITWEB_CONFIG) {
+	do $GITWEB_CONFIG;
+} else {
+	our $GITWEB_CONFIG_SYSTEM = $ENV{'GITWEB_CONFIG_SYSTEM'} || "++GITWEB_CONFIG_SYSTEM++";
+	do $GITWEB_CONFIG_SYSTEM if -e $GITWEB_CONFIG_SYSTEM;
+}
 
 # version of the core git binary
-our $git_version = qx($GIT --version) =~ m/git version (.*)$/ ? $1 : "unknown";
+our $git_version = qx("$GIT" --version) =~ m/git version (.*)$/ ? $1 : "unknown";
 
 $projects_list ||= $projectroot;
 
@@ -587,7 +592,7 @@ exit;
 ## ======================================================================
 ## action links
 
-sub href(%) {
+sub href (%) {
 	my %params = @_;
 	# default is to use -absolute url() i.e. $my_uri
 	my $href = $params{-full} ? $my_url : $my_uri;
@@ -860,6 +865,10 @@ sub chop_str {
 	my $len = shift;
 	my $add_len = shift || 10;
 	my $where = shift || 'right'; # 'left' | 'center' | 'right'
+
+	# Make sure perl knows it is utf8 encoded so we don't
+	# cut in the middle of a utf8 multibyte char.
+	$str = to_utf8($str);
 
 	# allow only $len chars, but don't cut a word if it would fit in $add_len
 	# if it doesn't fit, cut it if it's still longer than the dots we would add
@@ -1443,6 +1452,46 @@ sub format_snapshot_links {
 	}
 }
 
+## ......................................................................
+## functions returning values to be passed, perhaps after some
+## transformation, to other functions; e.g. returning arguments to href()
+
+# returns hash to be passed to href to generate gitweb URL
+# in -title key it returns description of link
+sub get_feed_info {
+	my $format = shift || 'Atom';
+	my %res = (action => lc($format));
+
+	# feed links are possible only for project views
+	return unless (defined $project);
+	# some views should link to OPML, or to generic project feed,
+	# or don't have specific feed yet (so they should use generic)
+	return if ($action =~ /^(?:tags|heads|forks|tag|search)$/x);
+
+	my $branch;
+	# branches refs uses 'refs/heads/' prefix (fullname) to differentiate
+	# from tag links; this also makes possible to detect branch links
+	if ((defined $hash_base && $hash_base =~ m!^refs/heads/(.*)$!) ||
+	    (defined $hash      && $hash      =~ m!^refs/heads/(.*)$!)) {
+		$branch = $1;
+	}
+	# find log type for feed description (title)
+	my $type = 'log';
+	if (defined $file_name) {
+		$type  = "history of $file_name";
+		$type .= "/" if ($action eq 'tree');
+		$type .= " on '$branch'" if (defined $branch);
+	} else {
+		$type = "log of $branch" if (defined $branch);
+	}
+
+	$res{-title} = $type;
+	$res{'hash'} = (defined $branch ? "refs/heads/$branch" : undef);
+	$res{'file_name'} = $file_name;
+
+	return %res;
+}
+
 ## ----------------------------------------------------------------------
 ## git utility subroutines, invoking git commands
 
@@ -1451,9 +1500,13 @@ sub git_cmd {
 	return $GIT, '--git-dir='.$git_dir;
 }
 
-# returns path to the core git executable and the --git-dir parameter as string
-sub git_cmd_str {
-	return join(' ', git_cmd());
+# quote the given arguments for passing them to the shell
+# quote_command("command", "arg 1", "arg with ' and ! characters")
+# => "'command' 'arg 1' 'arg with '\'' and '\!' characters'"
+# Try to avoid using this function wherever possible.
+sub quote_command {
+	return join(' ',
+		    map( { my $a = $_; $a =~ s/(['!])/'\\$1'/g; "'$a'" } @_ ));
 }
 
 # get HEAD ref of given project as hash
@@ -2109,49 +2162,6 @@ sub parse_commits {
 	return wantarray ? @cos : \@cos;
 }
 
-# parse ref from ref_file, given by ref_id, with given type
-sub parse_ref {
-	my $ref_file = shift;
-	my $ref_id = shift;
-	my $type = shift || git_get_type($ref_id);
-	my %ref_item;
-
-	$ref_item{'type'} = $type;
-	$ref_item{'id'} = $ref_id;
-	$ref_item{'epoch'} = 0;
-	$ref_item{'age'} = "unknown";
-	if ($type eq "tag") {
-		my %tag = parse_tag($ref_id);
-		$ref_item{'comment'} = $tag{'comment'};
-		if ($tag{'type'} eq "commit") {
-			my %co = parse_commit($tag{'object'});
-			$ref_item{'epoch'} = $co{'committer_epoch'};
-			$ref_item{'age'} = $co{'age_string'};
-		} elsif (defined($tag{'epoch'})) {
-			my $age = time - $tag{'epoch'};
-			$ref_item{'epoch'} = $tag{'epoch'};
-			$ref_item{'age'} = age_string($age);
-		}
-		$ref_item{'reftype'} = $tag{'type'};
-		$ref_item{'name'} = $tag{'name'};
-		$ref_item{'refid'} = $tag{'object'};
-	} elsif ($type eq "commit"){
-		my %co = parse_commit($ref_id);
-		$ref_item{'reftype'} = "commit";
-		$ref_item{'name'} = $ref_file;
-		$ref_item{'title'} = $co{'title'};
-		$ref_item{'refid'} = $ref_id;
-		$ref_item{'epoch'} = $co{'committer_epoch'};
-		$ref_item{'age'} = $co{'age_string'};
-	} else {
-		$ref_item{'reftype'} = $type;
-		$ref_item{'name'} = $ref_file;
-		$ref_item{'refid'} = $ref_id;
-	}
-
-	return %ref_item;
-}
-
 # parse line of git-diff-tree "raw" output
 sub parse_difftree_raw_line {
 	my $line = shift;
@@ -2432,8 +2442,7 @@ sub blob_mimetype {
 	return $default_blob_plain_mimetype unless $fd;
 
 	if (-T $fd) {
-		return 'text/plain' .
-		       ($default_text_plain_charset ? '; charset='.$default_text_plain_charset : '');
+		return 'text/plain';
 	} elsif (! $filename) {
 		return 'application/octet-stream';
 	} elsif ($filename =~ m/\.png$/i) {
@@ -2445,6 +2454,17 @@ sub blob_mimetype {
 	} else {
 		return 'application/octet-stream';
 	}
+}
+
+sub blob_contenttype {
+	my ($fd, $file_name, $type) = @_;
+
+	$type ||= blob_mimetype($fd, $file_name);
+	if ($type eq 'text/plain' && defined $default_text_plain_charset) {
+		$type .= "; charset=$default_text_plain_charset";
+	}
+
+	return $type;
 }
 
 ## ======================================================================
@@ -2505,30 +2525,49 @@ EOF
 		}
 	}
 	if (defined $project) {
-		printf('<link rel="alternate" title="%s log RSS feed" '.
-		       'href="%s" type="application/rss+xml" />'."\n",
-		       esc_param($project), href(action=>"rss"));
-		printf('<link rel="alternate" title="%s log RSS feed (no merges)" '.
-		       'href="%s" type="application/rss+xml" />'."\n",
-		       esc_param($project), href(action=>"rss",
-		                                 extra_options=>"--no-merges"));
-		printf('<link rel="alternate" title="%s log Atom feed" '.
-		       'href="%s" type="application/atom+xml" />'."\n",
-		       esc_param($project), href(action=>"atom"));
-		printf('<link rel="alternate" title="%s log Atom feed (no merges)" '.
-		       'href="%s" type="application/atom+xml" />'."\n",
-		       esc_param($project), href(action=>"atom",
-		                                 extra_options=>"--no-merges"));
+		my %href_params = get_feed_info();
+		if (!exists $href_params{'-title'}) {
+			$href_params{'-title'} = 'log';
+		}
+
+		foreach my $format qw(RSS Atom) {
+			my $type = lc($format);
+			my %link_attr = (
+				'-rel' => 'alternate',
+				'-title' => "$project - $href_params{'-title'} - $format feed",
+				'-type' => "application/$type+xml"
+			);
+
+			$href_params{'action'} = $type;
+			$link_attr{'-href'} = href(%href_params);
+			print "<link ".
+			      "rel=\"$link_attr{'-rel'}\" ".
+			      "title=\"$link_attr{'-title'}\" ".
+			      "href=\"$link_attr{'-href'}\" ".
+			      "type=\"$link_attr{'-type'}\" ".
+			      "/>\n";
+
+			$href_params{'extra_options'} = '--no-merges';
+			$link_attr{'-href'} = href(%href_params);
+			$link_attr{'-title'} .= ' (no merges)';
+			print "<link ".
+			      "rel=\"$link_attr{'-rel'}\" ".
+			      "title=\"$link_attr{'-title'}\" ".
+			      "href=\"$link_attr{'-href'}\" ".
+			      "type=\"$link_attr{'-type'}\" ".
+			      "/>\n";
+		}
+
 	} else {
 		printf('<link rel="alternate" title="%s projects list" '.
-		       'href="%s" type="text/plain; charset=utf-8"/>'."\n",
+		       'href="%s" type="text/plain; charset=utf-8" />'."\n",
 		       $site_name, href(project=>undef, action=>"project_index"));
 		printf('<link rel="alternate" title="%s projects feeds" '.
-		       'href="%s" type="text/x-opml"/>'."\n",
+		       'href="%s" type="text/x-opml" />'."\n",
 		       $site_name, href(project=>undef, action=>"opml"));
 	}
 	if (defined $favicon) {
-		print qq(<link rel="shortcut icon" href="$favicon" type="image/png"/>\n);
+		print qq(<link rel="shortcut icon" href="$favicon" type="image/png" />\n);
 	}
 
 	print "</head>\n" .
@@ -2555,7 +2594,7 @@ EOF
 	print "</div>\n";
 
 	my ($have_search) = gitweb_check_feature('search');
-	if ((defined $project) && ($have_search)) {
+	if (defined $project && $have_search) {
 		if (!defined $searchtext) {
 			$searchtext = "";
 		}
@@ -2571,16 +2610,13 @@ EOF
 		my ($use_pathinfo) = gitweb_check_feature('pathinfo');
 		if ($use_pathinfo) {
 			$action .= "/".esc_url($project);
-		} else {
-			$cgi->param("p", $project);
 		}
-		$cgi->param("a", "search");
-		$cgi->param("h", $search_hash);
 		print $cgi->startform(-method => "get", -action => $action) .
 		      "<div class=\"search\">\n" .
-		      (!$use_pathinfo && $cgi->hidden(-name => "p") . "\n") .
-		      $cgi->hidden(-name => "a") . "\n" .
-		      $cgi->hidden(-name => "h") . "\n" .
+		      (!$use_pathinfo &&
+		      $cgi->input({-name=>"p", -value=>$project, -type=>"hidden"}) . "\n") .
+		      $cgi->input({-name=>"a", -value=>"search", -type=>"hidden"}) . "\n" .
+		      $cgi->input({-name=>"h", -value=>$search_hash, -type=>"hidden"}) . "\n" .
 		      $cgi->popup_menu(-name => 'st', -default => 'commit',
 		                       -values => ['commit', 'grep', 'author', 'committer', 'pickaxe']) .
 		      $cgi->sup($cgi->a({-href => href(action=>"search_help")}, "?")) .
@@ -2596,23 +2632,35 @@ EOF
 }
 
 sub git_footer_html {
+	my $feed_class = 'rss_logo';
+
 	print "<div class=\"page_footer\">\n";
 	if (defined $project) {
 		my $descr = git_get_project_description($project);
 		if (defined $descr) {
 			print "<div class=\"page_footer_text\">" . esc_html($descr) . "</div>\n";
 		}
-		print $cgi->a({-href => href(action=>"rss"),
-		              -class => "rss_logo"}, "RSS") . " ";
-		print $cgi->a({-href => href(action=>"atom"),
-		              -class => "rss_logo"}, "Atom") . "\n";
+
+		my %href_params = get_feed_info();
+		if (!%href_params) {
+			$feed_class .= ' generic';
+		}
+		$href_params{'-title'} ||= 'log';
+
+		foreach my $format qw(RSS Atom) {
+			$href_params{'action'} = lc($format);
+			print $cgi->a({-href => href(%href_params),
+			              -title => "$href_params{'-title'} $format feed",
+			              -class => $feed_class}, $format)."\n";
+		}
+
 	} else {
 		print $cgi->a({-href => href(project=>undef, action=>"opml"),
-		              -class => "rss_logo"}, "OPML") . " ";
+		              -class => $feed_class}, "OPML") . " ";
 		print $cgi->a({-href => href(project=>undef, action=>"project_index"),
-		              -class => "rss_logo"}, "TXT") . "\n";
+		              -class => $feed_class}, "TXT") . "\n";
 	}
-	print "</div>\n" ;
+	print "</div>\n"; # class="page_footer"
 
 	if (-f $site_footer) {
 		open (my $fd, $site_footer);
@@ -4297,6 +4345,7 @@ sub git_heads {
 }
 
 sub git_blob_plain {
+	my $type = shift;
 	my $expires;
 
 	if (!defined $hash) {
@@ -4312,13 +4361,13 @@ sub git_blob_plain {
 		$expires = "+1d";
 	}
 
-	my $type = shift;
 	open my $fd, "-|", git_cmd(), "cat-file", "blob", $hash
-		or die_error(undef, "Couldn't cat $file_name, $hash");
+		or die_error(undef, "Open git-cat-file blob '$hash' failed");
 
-	$type ||= blob_mimetype($fd, $file_name);
+	# content-type (can include charset)
+	$type = blob_contenttype($fd, $file_name, $type);
 
-	# save as filename, even when no $file_name is given
+	# "save as" filename, even when no $file_name is given
 	my $save_as = "$hash";
 	if (defined $file_name) {
 		$save_as = $file_name;
@@ -4327,9 +4376,9 @@ sub git_blob_plain {
 	}
 
 	print $cgi->header(
-		-type => "$type",
-		-expires=>$expires,
-		-content_disposition => 'inline; filename="' . "$save_as" . '"');
+		-type => $type,
+		-expires => $expires,
+		-content_disposition => 'inline; filename="' . $save_as . '"');
 	undef $/;
 	binmode STDOUT, ':raw';
 	print <$fd>;
@@ -4545,7 +4594,6 @@ sub git_snapshot {
 		$hash = git_get_head_hash($project);
 	}
 
-	my $git_command = git_cmd_str();
 	my $name = $project;
 	$name =~ s,([^/])/*\.git$,$1,;
 	$name = basename($name);
@@ -4553,11 +4601,12 @@ sub git_snapshot {
 	$name =~ s/\047/\047\\\047\047/g;
 	my $cmd;
 	$filename .= "-$hash$known_snapshot_formats{$format}{'suffix'}";
-	$cmd = "$git_command archive " .
-		"--format=$known_snapshot_formats{$format}{'format'} " .
-		"--prefix=\'$name\'/ $hash";
+	$cmd = quote_command(
+		git_cmd(), 'archive',
+		"--format=$known_snapshot_formats{$format}{'format'}",
+		"--prefix=$name/", $hash);
 	if (exists $known_snapshot_formats{$format}{'compressor'}) {
-		$cmd .= ' | ' . join ' ', @{$known_snapshot_formats{$format}{'compressor'}};
+		$cmd .= ' | ' . quote_command(@{$known_snapshot_formats{$format}{'compressor'}});
 	}
 
 	print $cgi->header(
@@ -4770,8 +4819,8 @@ sub git_object {
 	if ($hash || ($hash_base && !defined $file_name)) {
 		my $object_id = $hash || $hash_base;
 
-		my $git_command = git_cmd_str();
-		open my $fd, "-|", "$git_command cat-file -t $object_id 2>/dev/null"
+		open my $fd, "-|", quote_command(
+			git_cmd(), 'cat-file', '-t', $object_id) . ' 2> /dev/null'
 			or die_error('404 Not Found', "Object does not exist");
 		$type = <$fd>;
 		chomp $type;

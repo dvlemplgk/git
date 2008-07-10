@@ -30,10 +30,11 @@ static struct curl_slist *pragma_header;
 
 static struct active_request_slot *active_queue_head = NULL;
 
-size_t fread_buffer(void *ptr, size_t eltsize, size_t nmemb,
-			   struct buffer *buffer)
+size_t fread_buffer(void *ptr, size_t eltsize, size_t nmemb, void *buffer_)
 {
 	size_t size = eltsize * nmemb;
+	struct buffer *buffer = buffer_;
+
 	if (size > buffer->buf.len - buffer->posn)
 		size = buffer->buf.len - buffer->posn;
 	memcpy(ptr, buffer->buf.buf + buffer->posn, size);
@@ -42,17 +43,17 @@ size_t fread_buffer(void *ptr, size_t eltsize, size_t nmemb,
 	return size;
 }
 
-size_t fwrite_buffer(const void *ptr, size_t eltsize,
-			    size_t nmemb, struct strbuf *buffer)
+size_t fwrite_buffer(const void *ptr, size_t eltsize, size_t nmemb, void *buffer_)
 {
 	size_t size = eltsize * nmemb;
+	struct strbuf *buffer = buffer_;
+
 	strbuf_add(buffer, ptr, size);
 	data_received++;
 	return size;
 }
 
-size_t fwrite_null(const void *ptr, size_t eltsize,
-			  size_t nmemb, struct strbuf *buffer)
+size_t fwrite_null(const void *ptr, size_t eltsize, size_t nmemb, void *strbuf)
 {
 	data_received++;
 	return eltsize * nmemb;
@@ -90,7 +91,7 @@ static void process_curl_messages(void)
 }
 #endif
 
-static int http_options(const char *var, const char *value)
+static int http_options(const char *var, const char *value, void *cb)
 {
 	if (!strcmp("http.sslverify", var)) {
 		if (curl_ssl_verify == -1) {
@@ -169,7 +170,7 @@ static int http_options(const char *var, const char *value)
 	}
 
 	/* Fall back on the default ones */
-	return git_default_config(var, value);
+	return git_default_config(var, value, cb);
 }
 
 static CURL* get_curl_handle(void)
@@ -263,7 +264,7 @@ void http_init(struct remote *remote)
 	if (low_speed_time != NULL)
 		curl_low_speed_time = strtol(low_speed_time, NULL, 10);
 
-	git_config(http_options);
+	git_config(http_options, NULL);
 
 	if (curl_ssl_verify == -1)
 		curl_ssl_verify = 1;
@@ -583,14 +584,15 @@ static char *quote_ref_url(const char *base, const char *ref)
 	int len, baselen, ch;
 
 	baselen = strlen(base);
-	len = baselen + 7; /* "/refs/" + NUL */
+	len = baselen + 2; /* '/' after base and terminating NUL */
 	for (cp = ref; (ch = *cp) != 0; cp++, len++)
 		if (needs_quote(ch))
 			len += 2; /* extra two hex plus replacement % */
 	qref = xmalloc(len);
 	memcpy(qref, base, baselen);
-	memcpy(qref + baselen, "/refs/", 6);
-	for (cp = ref, dp = qref + baselen + 6; (ch = *cp) != 0; cp++) {
+	dp = qref + baselen;
+	*(dp++) = '/';
+	for (cp = ref; (ch = *cp) != 0; cp++) {
 		if (needs_quote(ch)) {
 			*dp++ = '%';
 			*dp++ = hex((ch >> 4) & 0xF);
@@ -604,7 +606,7 @@ static char *quote_ref_url(const char *base, const char *ref)
 	return qref;
 }
 
-int http_fetch_ref(const char *base, const char *ref, unsigned char *sha1)
+int http_fetch_ref(const char *base, struct ref *ref)
 {
 	char *url;
 	struct strbuf buffer = STRBUF_INIT;
@@ -612,7 +614,7 @@ int http_fetch_ref(const char *base, const char *ref, unsigned char *sha1)
 	struct slot_results results;
 	int ret;
 
-	url = quote_ref_url(base, ref);
+	url = quote_ref_url(base, ref->name);
 	slot = get_active_slot();
 	slot->results = &results;
 	curl_easy_setopt(slot->curl, CURLOPT_FILE, &buffer);
@@ -624,12 +626,15 @@ int http_fetch_ref(const char *base, const char *ref, unsigned char *sha1)
 		if (results.curl_result == CURLE_OK) {
 			strbuf_rtrim(&buffer);
 			if (buffer.len == 40)
-				ret = get_sha1_hex(buffer.buf, sha1);
-			else
+				ret = get_sha1_hex(buffer.buf, ref->old_sha1);
+			else if (!prefixcmp(buffer.buf, "ref: ")) {
+				ref->symref = xstrdup(buffer.buf + 5);
+				ret = 0;
+			} else
 				ret = 1;
 		} else {
 			ret = error("Couldn't get %s for %s\n%s",
-				    url, ref, curl_errorstr);
+				    url, ref->name, curl_errorstr);
 		}
 	} else {
 		ret = error("Unable to start request");

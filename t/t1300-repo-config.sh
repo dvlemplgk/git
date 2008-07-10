@@ -427,13 +427,13 @@ cat > expect << EOF
 weird
 EOF
 
-test_expect_success "rename succeeded" "git diff expect .git/config"
+test_expect_success "rename succeeded" "test_cmp expect .git/config"
 
 test_expect_success "rename non-existing section" '
 	! git config --rename-section branch."world domination" branch.drei
 '
 
-test_expect_success "rename succeeded" "git diff expect .git/config"
+test_expect_success "rename succeeded" "test_cmp expect .git/config"
 
 test_expect_success "rename another section" \
 	'git config --rename-section branch."1 234 blabl/a" branch.drei'
@@ -449,7 +449,7 @@ cat > expect << EOF
 weird
 EOF
 
-test_expect_success "rename succeeded" "git diff expect .git/config"
+test_expect_success "rename succeeded" "test_cmp expect .git/config"
 
 cat >> .git/config << EOF
   [branch "zwei"] a = 1 [branch "vier"]
@@ -465,7 +465,7 @@ weird
 EOF
 
 test_expect_success "section was removed properly" \
-	"git diff -u expect .git/config"
+	"test_cmp expect .git/config"
 
 rm .git/config
 
@@ -592,6 +592,64 @@ test_expect_success 'set --int' '
 	git config --int int.val2 -1 &&
 	git config --int int.val3 5m &&
 	cmp expect .git/config'
+
+rm .git/config
+
+cat >expect <<\EOF
+[bool]
+	true1 = true
+	true2 = true
+	false1 = false
+	false2 = false
+[int]
+	int1 = 0
+	int2 = 1
+	int3 = -1
+EOF
+
+test_expect_success 'get --bool-or-int' '
+	(
+		echo "[bool]"
+		echo true1
+		echo true2 = true
+		echo false = false
+		echo "[int]"
+		echo int1 = 0
+		echo int2 = 1
+		echo int3 = -1
+	) >>.git/config &&
+	test $(git config --bool-or-int bool.true1) = true &&
+	test $(git config --bool-or-int bool.true2) = true &&
+	test $(git config --bool-or-int bool.false) = false &&
+	test $(git config --bool-or-int int.int1) = 0 &&
+	test $(git config --bool-or-int int.int2) = 1 &&
+	test $(git config --bool-or-int int.int3) = -1
+
+'
+
+rm .git/config
+cat >expect <<\EOF
+[bool]
+	true1 = true
+	false1 = false
+	true2 = true
+	false2 = false
+[int]
+	int1 = 0
+	int2 = 1
+	int3 = -1
+EOF
+
+test_expect_success 'set --bool-or-int' '
+	git config --bool-or-int bool.true1 true &&
+	git config --bool-or-int bool.false1 false &&
+	git config --bool-or-int bool.true2 yes &&
+	git config --bool-or-int bool.false2 no &&
+	git config --bool-or-int int.int1 0 &&
+	git config --bool-or-int int.int2 1 &&
+	git config --bool-or-int int.int3 -1 &&
+	test_cmp expect .git/config
+'
 
 rm .git/config
 

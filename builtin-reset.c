@@ -49,13 +49,14 @@ static inline int is_merge(void)
 	return !access(git_path("MERGE_HEAD"), F_OK);
 }
 
-static int reset_index_file(const unsigned char *sha1, int is_hard_reset)
+static int reset_index_file(const unsigned char *sha1, int is_hard_reset, int quiet)
 {
 	int i = 0;
 	const char *args[6];
 
 	args[i++] = "read-tree";
-	args[i++] = "-v";
+	if (!quiet)
+		args[i++] = "-v";
 	args[i++] = "--reset";
 	if (is_hard_reset)
 		args[i++] = "-u";
@@ -182,19 +183,51 @@ int cmd_reset(int argc, const char **argv, const char *prefix)
 		OPT_SET_INT(0, "hard", &reset_type,
 				"reset HEAD, index and working tree", HARD),
 		OPT_BOOLEAN('q', NULL, &quiet,
-				"disable showing new HEAD in hard reset"),
+				"disable showing new HEAD in hard reset and progress message"),
 		OPT_END()
 	};
 
-	git_config(git_default_config);
+	git_config(git_default_config, NULL);
 
 	argc = parse_options(argc, argv, options, git_reset_usage,
 						PARSE_OPT_KEEP_DASHDASH);
 	reflog_action = args_to_str(argv);
 	setenv("GIT_REFLOG_ACTION", reflog_action, 0);
 
-	if (i < argc && strcmp(argv[i], "--"))
-		rev = argv[i++];
+	/*
+	 * Possible arguments are:
+	 *
+	 * git reset [-opts] <rev> <paths>...
+	 * git reset [-opts] <rev> -- <paths>...
+	 * git reset [-opts] -- <paths>...
+	 * git reset [-opts] <paths>...
+	 *
+	 * At this point, argv[i] points immediately after [-opts].
+	 */
+
+	if (i < argc) {
+		if (!strcmp(argv[i], "--")) {
+			i++; /* reset to HEAD, possibly with paths */
+		} else if (i + 1 < argc && !strcmp(argv[i+1], "--")) {
+			rev = argv[i];
+			i += 2;
+		}
+		/*
+		 * Otherwise, argv[i] could be either <rev> or <paths> and
+		 * has to be unambigous.
+		 */
+		else if (!get_sha1(argv[i], sha1)) {
+			/*
+			 * Ok, argv[i] looks like a rev; it should not
+			 * be a filename.
+			 */
+			verify_non_filename(prefix, argv[i]);
+			rev = argv[i++];
+		} else {
+			/* Otherwise we treat this as a filename */
+			verify_filename(prefix, argv[i]);
+		}
+	}
 
 	if (get_sha1(rev, sha1))
 		die("Failed to resolve '%s' as a valid ref.", rev);
@@ -203,9 +236,6 @@ int cmd_reset(int argc, const char **argv, const char *prefix)
 	if (!commit)
 		die("Could not parse object '%s'.", rev);
 	hashcpy(sha1, commit->object.sha1);
-
-	if (i < argc && !strcmp(argv[i], "--"))
-		i++;
 
 	/* git reset tree [--] paths... can be used to
 	 * load chosen paths from the tree into the index without
@@ -231,7 +261,7 @@ int cmd_reset(int argc, const char **argv, const char *prefix)
 		if (is_merge() || read_cache() < 0 || unmerged_cache())
 			die("Cannot do a soft reset in the middle of a merge.");
 	}
-	else if (reset_index_file(sha1, (reset_type == HARD)))
+	else if (reset_index_file(sha1, (reset_type == HARD), quiet))
 		die("Could not reset index file to revision '%s'.", rev);
 
 	/* Any resets update HEAD to the head being switched to,

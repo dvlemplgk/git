@@ -91,7 +91,8 @@ int validate_headref(const char *path)
 	struct stat st;
 	char *buf, buffer[256];
 	unsigned char sha1[20];
-	int len, fd;
+	int fd;
+	ssize_t len;
 
 	if (lstat(path, &st) < 0)
 		return -1;
@@ -266,31 +267,85 @@ int adjust_shared_perm(const char *path)
 	if (lstat(path, &st) < 0)
 		return -1;
 	mode = st.st_mode;
-	if (mode & S_IRUSR)
-		mode |= (shared_repository == PERM_GROUP
-			 ? S_IRGRP
-			 : (shared_repository == PERM_EVERYBODY
-			    ? (S_IRGRP|S_IROTH)
-			    : 0));
 
-	if (mode & S_IWUSR)
-		mode |= S_IWGRP;
+	if (shared_repository) {
+		int tweak = shared_repository;
+		if (!(mode & S_IWUSR))
+			tweak &= ~0222;
+		mode = (mode & ~0777) | tweak;
+	} else {
+		/* Preserve old PERM_UMASK behaviour */
+		if (mode & S_IWUSR)
+			mode |= S_IWGRP;
+	}
 
-	if (mode & S_IXUSR)
-		mode |= (shared_repository == PERM_GROUP
-			 ? S_IXGRP
-			 : (shared_repository == PERM_EVERYBODY
-			    ? (S_IXGRP|S_IXOTH)
-			    : 0));
-	if (S_ISDIR(mode))
+	if (S_ISDIR(mode)) {
 		mode |= FORCE_DIR_SET_GID;
+
+		/* Copy read bits to execute bits */
+		mode |= (shared_repository & 0444) >> 2;
+	}
+
 	if ((mode & st.st_mode) != mode && chmod(path, mode) < 0)
 		return -2;
 	return 0;
 }
 
+static const char *get_pwd_cwd(void)
+{
+	static char cwd[PATH_MAX + 1];
+	char *pwd;
+	struct stat cwd_stat, pwd_stat;
+	if (getcwd(cwd, PATH_MAX) == NULL)
+		return NULL;
+	pwd = getenv("PWD");
+	if (pwd && strcmp(pwd, cwd)) {
+		stat(cwd, &cwd_stat);
+		if (!stat(pwd, &pwd_stat) &&
+		    pwd_stat.st_dev == cwd_stat.st_dev &&
+		    pwd_stat.st_ino == cwd_stat.st_ino) {
+			strlcpy(cwd, pwd, PATH_MAX);
+		}
+	}
+	return cwd;
+}
+
+const char *make_nonrelative_path(const char *path)
+{
+	static char buf[PATH_MAX + 1];
+
+	if (is_absolute_path(path)) {
+		if (strlcpy(buf, path, PATH_MAX) >= PATH_MAX)
+			die ("Too long path: %.*s", 60, path);
+	} else {
+		const char *cwd = get_pwd_cwd();
+		if (!cwd)
+			die("Cannot determine the current working directory");
+		if (snprintf(buf, PATH_MAX, "%s/%s", cwd, path) >= PATH_MAX)
+			die ("Too long path: %.*s", 60, path);
+	}
+	return buf;
+}
+
 /* We allow "recursive" symbolic links. Only within reason, though. */
 #define MAXDEPTH 5
+
+const char *make_relative_path(const char *abs, const char *base)
+{
+	static char buf[PATH_MAX + 1];
+	int baselen;
+	if (!base)
+		return abs;
+	baselen = strlen(base);
+	if (prefixcmp(abs, base))
+		return abs;
+	if (abs[baselen] == '/')
+		baselen++;
+	else if (base[baselen - 1] != '/')
+		return abs;
+	strcpy(buf, abs + baselen);
+	return buf;
+}
 
 const char *make_absolute_path(const char *path)
 {

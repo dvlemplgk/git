@@ -64,12 +64,9 @@ struct buffer
 };
 
 /* Curl request read/write callbacks */
-extern size_t fread_buffer(void *ptr, size_t eltsize, size_t nmemb,
-			   struct buffer *buffer);
-extern size_t fwrite_buffer(const void *ptr, size_t eltsize,
-			    size_t nmemb, struct strbuf *buffer);
-extern size_t fwrite_null(const void *ptr, size_t eltsize,
-			  size_t nmemb, struct strbuf *buffer);
+extern size_t fread_buffer(void *ptr, size_t eltsize, size_t nmemb, void *strbuf);
+extern size_t fwrite_buffer(const void *ptr, size_t eltsize, size_t nmemb, void *strbuf);
+extern size_t fwrite_null(const void *ptr, size_t eltsize, size_t nmemb, void *strbuf);
 
 /* Slot lifecycle functions */
 extern struct active_request_slot *get_active_slot(void);
@@ -105,6 +102,6 @@ static inline int missing__target(int code, int result)
 
 #define missing_target(a) missing__target((a)->http_code, (a)->curl_result)
 
-extern int http_fetch_ref(const char *base, const char *ref, unsigned char *sha1);
+extern int http_fetch_ref(const char *base, struct ref *ref);
 
 #endif /* HTTP_H */

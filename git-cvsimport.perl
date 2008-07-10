@@ -227,6 +227,7 @@ sub conn {
 				$proxyport = $1;
 			}
 		}
+		$repo ||= '/';
 
 		# if username is not explicit in CVSROOT, then use current user, as cvs would
 		$user=(getlogin() || $ENV{'LOGNAME'} || $ENV{'USER'} || "anonymous") unless $user;
@@ -780,6 +781,7 @@ sub commit {
 		$xtag =~ s/\s+\*\*.*$//; # Remove stuff like ** INVALID ** and ** FUNKY **
 		$xtag =~ tr/_/\./ if ( $opt_u );
 		$xtag =~ s/[\/]/$opt_s/g;
+		$xtag =~ s/\[//g;
 
 		system('git-tag', '-f', $xtag, $cid) == 0
 			or die "Cannot create tag $xtag: $!\n";

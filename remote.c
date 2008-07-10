@@ -2,6 +2,16 @@
 #include "remote.h"
 #include "refs.h"
 
+static struct refspec s_tag_refspec = {
+	0,
+	1,
+	0,
+	"refs/tags/",
+	"refs/tags/"
+};
+
+const struct refspec *tag_refspec = &s_tag_refspec;
+
 struct counted_string {
 	size_t len;
 	const char *s;
@@ -288,7 +298,7 @@ static void read_branches_file(struct remote *remote)
 	remote->fetch_tags = 1; /* always auto-follow */
 }
 
-static int handle_config(const char *key, const char *value)
+static int handle_config(const char *key, const char *value, void *cb)
 {
 	const char *name;
 	const char *subkey;
@@ -337,44 +347,49 @@ static int handle_config(const char *key, const char *value)
 		return 0;
 	}
 	remote = make_remote(name, subkey - name);
-	if (!value) {
-		/* if we ever have a boolean variable, e.g. "remote.*.disabled"
-		 * [remote "frotz"]
-		 *      disabled
-		 * is a valid way to set it to true; we get NULL in value so
-		 * we need to handle it here.
-		 *
-		 * if (!strcmp(subkey, ".disabled")) {
-		 *      val = git_config_bool(key, value);
-		 *      return 0;
-		 * } else
-		 *
-		 */
-		return 0; /* ignore unknown booleans */
-	}
-	if (!strcmp(subkey, ".url")) {
-		add_url(remote, xstrdup(value));
+	if (!strcmp(subkey, ".mirror"))
+		remote->mirror = git_config_bool(key, value);
+	else if (!strcmp(subkey, ".skipdefaultupdate"))
+		remote->skip_default_update = git_config_bool(key, value);
+
+	else if (!strcmp(subkey, ".url")) {
+		const char *v;
+		if (git_config_string(&v, key, value))
+			return -1;
+		add_url(remote, v);
 	} else if (!strcmp(subkey, ".push")) {
-		add_push_refspec(remote, xstrdup(value));
+		const char *v;
+		if (git_config_string(&v, key, value))
+			return -1;
+		add_push_refspec(remote, v);
 	} else if (!strcmp(subkey, ".fetch")) {
-		add_fetch_refspec(remote, xstrdup(value));
+		const char *v;
+		if (git_config_string(&v, key, value))
+			return -1;
+		add_fetch_refspec(remote, v);
 	} else if (!strcmp(subkey, ".receivepack")) {
+		const char *v;
+		if (git_config_string(&v, key, value))
+			return -1;
 		if (!remote->receivepack)
-			remote->receivepack = xstrdup(value);
+			remote->receivepack = v;
 		else
 			error("more than one receivepack given, using the first");
 	} else if (!strcmp(subkey, ".uploadpack")) {
+		const char *v;
+		if (git_config_string(&v, key, value))
+			return -1;
 		if (!remote->uploadpack)
-			remote->uploadpack = xstrdup(value);
+			remote->uploadpack = v;
 		else
 			error("more than one uploadpack given, using the first");
 	} else if (!strcmp(subkey, ".tagopt")) {
 		if (!strcmp(value, "--no-tags"))
 			remote->fetch_tags = -1;
 	} else if (!strcmp(subkey, ".proxy")) {
-		remote->http_proxy = xstrdup(value);
-	} else if (!strcmp(subkey, ".skipdefaultupdate"))
-		remote->skip_default_update = 1;
+		return git_config_string((const char **)&remote->http_proxy,
+					 key, value);
+	}
 	return 0;
 }
 
@@ -405,7 +420,7 @@ static void read_config(void)
 		current_branch =
 			make_branch(head_ref + strlen("refs/heads/"), 0);
 	}
-	git_config(handle_config);
+	git_config(handle_config, NULL);
 	alias_all_urls();
 }
 
@@ -429,6 +444,16 @@ static struct refspec *parse_refspec_internal(int nr_refspec, const char **refsp
 		}
 
 		rhs = strrchr(lhs, ':');
+
+		/*
+		 * Before going on, special case ":" (or "+:") as a refspec
+		 * for matching refs.
+		 */
+		if (!fetch && rhs == lhs && rhs[1] == '\0') {
+			rs[i].matching = 1;
+			continue;
+		}
+
 		if (rhs) {
 			rhs++;
 			rlen = strlen(rhs);
@@ -686,6 +711,13 @@ struct ref *alloc_ref(unsigned namelen)
 	return ret;
 }
 
+struct ref *alloc_ref_from_str(const char* str)
+{
+	struct ref *ret = alloc_ref(strlen(str) + 1);
+	strcpy(ret->name, str);
+	return ret;
+}
+
 static struct ref *copy_ref(const struct ref *ref)
 {
 	struct ref *ret = xmalloc(sizeof(struct ref) + strlen(ref->name) + 1);
@@ -706,13 +738,22 @@ struct ref *copy_ref_list(const struct ref *ref)
 	return ret;
 }
 
+void free_ref(struct ref *ref)
+{
+	if (!ref)
+		return;
+	free(ref->remote_status);
+	free(ref->symref);
+	free(ref);
+}
+
 void free_refs(struct ref *ref)
 {
 	struct ref *next;
 	while (ref) {
 		next = ref->next;
 		free(ref->peer_ref);
-		free(ref);
+		free_ref(ref);
 		ref = next;
 	}
 }
@@ -783,7 +824,6 @@ static struct ref *try_explicit_object_name(const char *name)
 {
 	unsigned char sha1[20];
 	struct ref *ref;
-	int len;
 
 	if (!*name) {
 		ref = alloc_ref(20);
@@ -793,21 +833,14 @@ static struct ref *try_explicit_object_name(const char *name)
 	}
 	if (get_sha1(name, sha1))
 		return NULL;
-	len = strlen(name) + 1;
-	ref = alloc_ref(len);
-	memcpy(ref->name, name, len);
+	ref = alloc_ref_from_str(name);
 	hashcpy(ref->new_sha1, sha1);
 	return ref;
 }
 
 static struct ref *make_linked_ref(const char *name, struct ref ***tail)
 {
-	struct ref *ret;
-	size_t len;
-
-	len = strlen(name) + 1;
-	ret = alloc_ref(len);
-	memcpy(ret->name, name, len);
+	struct ref *ret = alloc_ref_from_str(name);
 	tail_link_ref(ret, tail);
 	return ret;
 }
@@ -834,16 +867,15 @@ static char *guess_ref(const char *name, struct ref *peer)
 
 static int match_explicit(struct ref *src, struct ref *dst,
 			  struct ref ***dst_tail,
-			  struct refspec *rs,
-			  int errs)
+			  struct refspec *rs)
 {
 	struct ref *matched_src, *matched_dst;
 
 	const char *dst_value = rs->dst;
 	char *dst_guess;
 
-	if (rs->pattern)
-		return errs;
+	if (rs->pattern || rs->matching)
+		return 0;
 
 	matched_src = matched_dst = NULL;
 	switch (count_refspec_match(rs->src, src, &matched_src)) {
@@ -856,23 +888,16 @@ static int match_explicit(struct ref *src, struct ref *dst,
 		 */
 		matched_src = try_explicit_object_name(rs->src);
 		if (!matched_src)
-			error("src refspec %s does not match any.", rs->src);
+			return error("src refspec %s does not match any.", rs->src);
 		break;
 	default:
-		matched_src = NULL;
-		error("src refspec %s matches more than one.", rs->src);
-		break;
+		return error("src refspec %s matches more than one.", rs->src);
 	}
-
-	if (!matched_src)
-		errs = 1;
 
 	if (!dst_value) {
 		unsigned char sha1[20];
 		int flag;
 
-		if (!matched_src)
-			return errs;
 		dst_value = resolve_ref(matched_src->name, sha1, 1, &flag);
 		if (!dst_value ||
 		    ((flag & REF_ISSYMREF) &&
@@ -903,18 +928,16 @@ static int match_explicit(struct ref *src, struct ref *dst,
 		      dst_value);
 		break;
 	}
-	if (errs || !matched_dst)
-		return 1;
-	if (matched_dst->peer_ref) {
-		errs = 1;
-		error("dst ref %s receives from more than one src.",
+	if (!matched_dst)
+		return -1;
+	if (matched_dst->peer_ref)
+		return error("dst ref %s receives from more than one src.",
 		      matched_dst->name);
-	}
 	else {
 		matched_dst->peer_ref = matched_src;
 		matched_dst->force = rs->force;
 	}
-	return errs;
+	return 0;
 }
 
 static int match_explicit_refs(struct ref *src, struct ref *dst,
@@ -923,8 +946,8 @@ static int match_explicit_refs(struct ref *src, struct ref *dst,
 {
 	int i, errs;
 	for (i = errs = 0; i < rs_nr; i++)
-		errs |= match_explicit(src, dst, dst_tail, &rs[i], errs);
-	return -errs;
+		errs += match_explicit(src, dst, dst_tail, &rs[i]);
+	return errs;
 }
 
 static const struct refspec *check_pattern_match(const struct refspec *rs,
@@ -932,13 +955,23 @@ static const struct refspec *check_pattern_match(const struct refspec *rs,
 						 const struct ref *src)
 {
 	int i;
+	int matching_refs = -1;
 	for (i = 0; i < rs_nr; i++) {
+		if (rs[i].matching &&
+		    (matching_refs == -1 || rs[i].force)) {
+			matching_refs = i;
+			continue;
+		}
+
 		if (rs[i].pattern &&
 		    !prefixcmp(src->name, rs[i].src) &&
 		    src->name[strlen(rs[i].src)] == '/')
 			return rs + i;
 	}
-	return NULL;
+	if (matching_refs != -1)
+		return rs + matching_refs;
+	else
+		return NULL;
 }
 
 /*
@@ -949,11 +982,16 @@ static const struct refspec *check_pattern_match(const struct refspec *rs,
 int match_refs(struct ref *src, struct ref *dst, struct ref ***dst_tail,
 	       int nr_refspec, const char **refspec, int flags)
 {
-	struct refspec *rs =
-		parse_push_refspec(nr_refspec, (const char **) refspec);
+	struct refspec *rs;
 	int send_all = flags & MATCH_REFS_ALL;
 	int send_mirror = flags & MATCH_REFS_MIRROR;
+	static const char *default_refspec[] = { ":", 0 };
 
+	if (!nr_refspec) {
+		nr_refspec = 1;
+		refspec = default_refspec;
+	}
+	rs = parse_push_refspec(nr_refspec, (const char **) refspec);
 	if (match_explicit_refs(src, dst, dst_tail, rs, nr_refspec))
 		return -1;
 
@@ -964,48 +1002,50 @@ int match_refs(struct ref *src, struct ref *dst, struct ref ***dst_tail,
 		char *dst_name;
 		if (src->peer_ref)
 			continue;
-		if (nr_refspec) {
-			pat = check_pattern_match(rs, nr_refspec, src);
-			if (!pat)
-				continue;
-		}
-		else if (!send_mirror && prefixcmp(src->name, "refs/heads/"))
+
+		pat = check_pattern_match(rs, nr_refspec, src);
+		if (!pat)
+			continue;
+
+		if (pat->matching) {
 			/*
 			 * "matching refs"; traditionally we pushed everything
 			 * including refs outside refs/heads/ hierarchy, but
 			 * that does not make much sense these days.
 			 */
-			continue;
+			if (!send_mirror && prefixcmp(src->name, "refs/heads/"))
+				continue;
+			dst_name = xstrdup(src->name);
 
-		if (pat) {
+		} else {
 			const char *dst_side = pat->dst ? pat->dst : pat->src;
 			dst_name = xmalloc(strlen(dst_side) +
 					   strlen(src->name) -
 					   strlen(pat->src) + 2);
 			strcpy(dst_name, dst_side);
 			strcat(dst_name, src->name + strlen(pat->src));
-		} else
-			dst_name = xstrdup(src->name);
+		}
 		dst_peer = find_ref_by_name(dst, dst_name);
-		if (dst_peer && dst_peer->peer_ref)
-			/* We're already sending something to this ref. */
-			goto free_name;
+		if (dst_peer) {
+			if (dst_peer->peer_ref)
+				/* We're already sending something to this ref. */
+				goto free_name;
 
-		if (!dst_peer && !nr_refspec && !(send_all || send_mirror))
-			/*
-			 * Remote doesn't have it, and we have no
-			 * explicit pattern, and we don't have
-			 * --all nor --mirror.
-			 */
-			goto free_name;
-		if (!dst_peer) {
+		} else {
+			if (pat->matching && !(send_all || send_mirror))
+				/*
+				 * Remote doesn't have it, and we have no
+				 * explicit pattern, and we don't have
+				 * --all nor --mirror.
+				 */
+				goto free_name;
+
 			/* Create a new one and link it */
 			dst_peer = make_linked_ref(dst_name, dst_tail);
 			hashcpy(dst_peer->new_sha1, src->new_sha1);
 		}
 		dst_peer->peer_ref = src;
-		if (pat)
-			dst_peer->force = pat->force;
+		dst_peer->force = pat->force;
 	free_name:
 		free(dst_name);
 	}
@@ -1111,9 +1151,7 @@ static struct ref *get_local_ref(const char *name)
 		return NULL;
 
 	if (!prefixcmp(name, "refs/")) {
-		ret = alloc_ref(strlen(name) + 1);
-		strcpy(ret->name, name);
-		return ret;
+		return alloc_ref_from_str(name);
 	}
 
 	if (!prefixcmp(name, "heads/") ||
@@ -1171,4 +1209,16 @@ int get_fetch_map(const struct ref *remote_refs,
 		tail_link_ref(ref_map, tail);
 
 	return 0;
+}
+
+int resolve_remote_symref(struct ref *ref, struct ref *list)
+{
+	if (!ref->symref)
+		return 0;
+	for (; list; list = list->next)
+		if (!strcmp(ref->symref, list->name)) {
+			hashcpy(ref->old_sha1, list->old_sha1);
+			return 0;
+		}
+	return 1;
 }

@@ -19,6 +19,8 @@ static const char * const builtin_remote_usage[] = {
 
 static int verbose;
 
+static int show_all(void);
+
 static inline int postfixcmp(const char *string, const char *postfix)
 {
 	int len1 = strlen(string), len2 = strlen(postfix);
@@ -116,6 +118,13 @@ static int add(int argc, const char **argv)
 			return 1;
 	}
 
+	if (mirror) {
+		strbuf_reset(&buf);
+		strbuf_addf(&buf, "remote.%s.mirror", name);
+		if (git_config_set(buf.buf, "yes"))
+			return 1;
+	}
+
 	if (fetch && fetch_remote(name))
 		return 1;
 
@@ -144,7 +153,7 @@ struct branch_info {
 
 static struct path_list branch_list;
 
-static int config_read_branches(const char *key, const char *value)
+static int config_read_branches(const char *key, const char *value, void *cb)
 {
 	if (!prefixcmp(key, "branch.")) {
 		char *name;
@@ -191,13 +200,12 @@ static void read_branches(void)
 {
 	if (branch_list.nr)
 		return;
-	git_config(config_read_branches);
+	git_config(config_read_branches, NULL);
 	sort_path_list(&branch_list);
 }
 
 struct ref_states {
 	struct remote *remote;
-	struct strbuf remote_prefix;
 	struct path_list new, stale, tracked;
 };
 
@@ -253,35 +261,71 @@ static int get_ref_states(const struct ref *ref, struct ref_states *states)
 	}
 	free_refs(fetch_map);
 
-	strbuf_addf(&states->remote_prefix,
-		"refs/remotes/%s/", states->remote->name);
 	for_each_ref(handle_one_branch, states);
 	sort_path_list(&states->stale);
 
 	return 0;
 }
 
+struct known_remote {
+	struct known_remote *next;
+	struct remote *remote;
+};
+
+struct known_remotes {
+	struct remote *to_delete;
+	struct known_remote *list;
+};
+
+static int add_known_remote(struct remote *remote, void *cb_data)
+{
+	struct known_remotes *all = cb_data;
+	struct known_remote *r;
+
+	if (!strcmp(all->to_delete->name, remote->name))
+		return 0;
+
+	r = xmalloc(sizeof(*r));
+	r->remote = remote;
+	r->next = all->list;
+	all->list = r;
+	return 0;
+}
+
 struct branches_for_remote {
-	const char *prefix;
+	struct remote *remote;
 	struct path_list *branches;
+	struct known_remotes *keep;
 };
 
 static int add_branch_for_removal(const char *refname,
 	const unsigned char *sha1, int flags, void *cb_data)
 {
 	struct branches_for_remote *branches = cb_data;
+	struct refspec refspec;
+	struct path_list_item *item;
+	struct known_remote *kr;
 
-	if (!prefixcmp(refname, branches->prefix)) {
-		struct path_list_item *item;
+	memset(&refspec, 0, sizeof(refspec));
+	refspec.dst = (char *)refname;
+	if (remote_find_tracking(branches->remote, &refspec))
+		return 0;
 
-		/* make sure that symrefs are deleted */
-		if (flags & REF_ISSYMREF)
-			return unlink(git_path(refname));
-
-		item = path_list_append(refname, branches->branches);
-		item->util = xmalloc(20);
-		hashcpy(item->util, sha1);
+	/* don't delete a branch if another remote also uses it */
+	for (kr = branches->keep->list; kr; kr = kr->next) {
+		memset(&refspec, 0, sizeof(refspec));
+		refspec.dst = (char *)refname;
+		if (!remote_find_tracking(kr->remote, &refspec))
+			return 0;
 	}
+
+	/* make sure that symrefs are deleted */
+	if (flags & REF_ISSYMREF)
+		return unlink(git_path(refname));
+
+	item = path_list_append(refname, branches->branches);
+	item->util = xmalloc(20);
+	hashcpy(item->util, sha1);
 
 	return 0;
 }
@@ -307,8 +351,9 @@ static int rm(int argc, const char **argv)
 	};
 	struct remote *remote;
 	struct strbuf buf;
+	struct known_remotes known_remotes = { NULL, NULL };
 	struct path_list branches = { NULL, 0, 0, 1 };
-	struct branches_for_remote cb_data = { NULL, &branches };
+	struct branches_for_remote cb_data = { NULL, &branches, &known_remotes };
 	int i;
 
 	if (argc != 2)
@@ -317,6 +362,9 @@ static int rm(int argc, const char **argv)
 	remote = remote_get(argv[1]);
 	if (!remote)
 		die("No such remote: %s", argv[1]);
+
+	known_remotes.to_delete = remote;
+	for_each_remote(add_known_remote, &known_remotes);
 
 	strbuf_init(&buf, 0);
 	strbuf_addf(&buf, "remote.%s", remote->name);
@@ -346,9 +394,7 @@ static int rm(int argc, const char **argv)
 	 * the branches one by one, since for_each_ref() relies on cached
 	 * refs, which are invalidated when deleting a branch.
 	 */
-	strbuf_reset(&buf);
-	strbuf_addf(&buf, "refs/remotes/%s/", remote->name);
-	cb_data.prefix = buf.buf;
+	cb_data.remote = remote;
 	i = for_each_ref(add_branch_for_removal, &cb_data);
 	strbuf_release(&buf);
 
@@ -373,12 +419,53 @@ static void show_list(const char *title, struct path_list *list)
 	printf("\n");
 }
 
-static int show_or_prune(int argc, const char **argv, int prune)
+static int get_remote_ref_states(const char *name,
+				 struct ref_states *states,
+				 int query)
 {
-	int dry_run = 0, result = 0;
+	struct transport *transport;
+	const struct ref *ref;
+
+	states->remote = remote_get(name);
+	if (!states->remote)
+		return error("No such remote: %s", name);
+
+	read_branches();
+
+	if (query) {
+		transport = transport_get(NULL, states->remote->url_nr > 0 ?
+			states->remote->url[0] : NULL);
+		ref = transport_get_remote_refs(transport);
+		transport_disconnect(transport);
+
+		get_ref_states(ref, states);
+	}
+
+	return 0;
+}
+
+static int append_ref_to_tracked_list(const char *refname,
+	const unsigned char *sha1, int flags, void *cb_data)
+{
+	struct ref_states *states = cb_data;
+	struct refspec refspec;
+
+	memset(&refspec, 0, sizeof(refspec));
+	refspec.dst = (char *)refname;
+	if (!remote_find_tracking(states->remote, &refspec)) {
+		path_list_append(skip_prefix(refspec.src, "refs/heads/"),
+			&states->tracked);
+	}
+
+	return 0;
+}
+
+static int show(int argc, const char **argv)
+{
+	int no_query = 0, result = 0;
 	struct option options[] = {
 		OPT_GROUP("show specific options"),
-		OPT__DRY_RUN(&dry_run),
+		OPT_BOOLEAN('n', NULL, &no_query, "do not query remotes"),
 		OPT_END()
 	};
 	struct ref_states states;
@@ -386,53 +473,14 @@ static int show_or_prune(int argc, const char **argv, int prune)
 	argc = parse_options(argc, argv, options, builtin_remote_usage, 0);
 
 	if (argc < 1)
-		usage_with_options(builtin_remote_usage, options);
+		return show_all();
 
 	memset(&states, 0, sizeof(states));
 	for (; argc; argc--, argv++) {
-		struct transport *transport;
-		const struct ref *ref;
 		struct strbuf buf;
-		int i, got_states;
+		int i;
 
-		states.remote = remote_get(*argv);
-		if (!states.remote)
-			return error("No such remote: %s", *argv);
-		transport = transport_get(NULL, states.remote->url_nr > 0 ?
-			states.remote->url[0] : NULL);
-		ref = transport_get_remote_refs(transport);
-		transport_disconnect(transport);
-
-		read_branches();
-		got_states = get_ref_states(ref, &states);
-		if (got_states)
-			result = error("Error getting local info for '%s'",
-					states.remote->name);
-
-		if (prune) {
-			struct strbuf buf;
-			int prefix_len;
-
-			strbuf_init(&buf, 0);
-			if (states.remote->fetch_refspec_nr == 1 &&
-					states.remote->fetch->pattern &&
-					!strcmp(states.remote->fetch->src,
-						states.remote->fetch->dst))
-				/* handle --mirror remote */
-				strbuf_addstr(&buf, "refs/heads/");
-			else
-				strbuf_addf(&buf, "refs/remotes/%s/", *argv);
-			prefix_len = buf.len;
-
-			for (i = 0; i < states.stale.nr; i++) {
-				strbuf_setlen(&buf, prefix_len);
-				strbuf_addstr(&buf, states.stale.items[i].path);
-				result |= delete_ref(buf.buf, NULL);
-			}
-
-			strbuf_release(&buf);
-			goto cleanup_states;
-		}
+		get_remote_ref_states(*argv, &states, !no_query);
 
 		printf("* remote %s\n  URL: %s\n", *argv,
 			states.remote->url_nr > 0 ?
@@ -454,17 +502,19 @@ static int show_or_prune(int argc, const char **argv, int prune)
 			printf("\n");
 		}
 
-		if (got_states)
-			continue;
-		strbuf_init(&buf, 0);
-		strbuf_addf(&buf, "  New remote branch%%s (next fetch will "
-			"store in remotes/%s)", states.remote->name);
-		show_list(buf.buf, &states.new);
-		strbuf_release(&buf);
-		show_list("  Stale tracking branch%s (use 'git remote prune')",
-				&states.stale);
-		show_list("  Tracked remote branch%s",
-				&states.tracked);
+		if (!no_query) {
+			strbuf_init(&buf, 0);
+			strbuf_addf(&buf, "  New remote branch%%s (next fetch "
+				"will store in remotes/%s)", states.remote->name);
+			show_list(buf.buf, &states.new);
+			strbuf_release(&buf);
+			show_list("  Stale tracking branch%s (use 'git remote "
+				"prune')", &states.stale);
+		}
+
+		if (no_query)
+			for_each_ref(append_ref_to_tracked_list, &states);
+		show_list("  Tracked remote branch%s", &states.tracked);
 
 		if (states.remote->push_refspec_nr) {
 			printf("  Local branch%s pushed with 'git push'\n   ",
@@ -479,7 +529,55 @@ static int show_or_prune(int argc, const char **argv, int prune)
 			}
 			printf("\n");
 		}
-cleanup_states:
+
+		/* NEEDSWORK: free remote */
+		path_list_clear(&states.new, 0);
+		path_list_clear(&states.stale, 0);
+		path_list_clear(&states.tracked, 0);
+	}
+
+	return result;
+}
+
+static int prune(int argc, const char **argv)
+{
+	int dry_run = 0, result = 0;
+	struct option options[] = {
+		OPT_GROUP("prune specific options"),
+		OPT__DRY_RUN(&dry_run),
+		OPT_END()
+	};
+	struct ref_states states;
+
+	argc = parse_options(argc, argv, options, builtin_remote_usage, 0);
+
+	if (argc < 1)
+		usage_with_options(builtin_remote_usage, options);
+
+	memset(&states, 0, sizeof(states));
+	for (; argc; argc--, argv++) {
+		int i;
+
+		get_remote_ref_states(*argv, &states, 1);
+
+		if (states.stale.nr) {
+			printf("Pruning %s\n", *argv);
+			printf("URL: %s\n",
+			       states.remote->url_nr
+			       ? states.remote->url[0]
+			       : "(no URL)");
+		}
+
+		for (i = 0; i < states.stale.nr; i++) {
+			const char *refname = states.stale.items[i].util;
+
+			if (!dry_run)
+				result |= delete_ref(refname, NULL);
+
+			printf(" * [%s] %s\n", dry_run ? "would prune" : "pruned",
+			       skip_prefix(refname, "refs/remotes/"));
+		}
+
 		/* NEEDSWORK: free remote */
 		path_list_clear(&states.new, 0);
 		path_list_clear(&states.stale, 0);
@@ -502,7 +600,7 @@ struct remote_group {
 	struct path_list *list;
 } remote_group;
 
-static int get_remote_group(const char *key, const char *value)
+static int get_remote_group(const char *key, const char *value, void *cb)
 {
 	if (!prefixcmp(key, "remotes.") &&
 			!strcmp(key + 8, remote_group.name)) {
@@ -534,7 +632,7 @@ static int update(int argc, const char **argv)
 	remote_group.list = &list;
 	for (i = 1; i < argc; i++) {
 		remote_group.name = argv[i];
-		result = git_config(get_remote_group);
+		result = git_config(get_remote_group, NULL);
 	}
 
 	if (!result && !list.nr  && argc == 2 && !strcmp(argv[1], "default"))
@@ -600,9 +698,9 @@ int cmd_remote(int argc, const char **argv, const char *prefix)
 	else if (!strcmp(argv[0], "rm"))
 		result = rm(argc, argv);
 	else if (!strcmp(argv[0], "show"))
-		result = show_or_prune(argc, argv, 0);
+		result = show(argc, argv);
 	else if (!strcmp(argv[0], "prune"))
-		result = show_or_prune(argc, argv, 1);
+		result = prune(argc, argv);
 	else if (!strcmp(argv[0], "update"))
 		result = update(argc, argv);
 	else {

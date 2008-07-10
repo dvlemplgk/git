@@ -292,15 +292,16 @@ void setup_work_tree(void)
 	work_tree = get_git_work_tree();
 	git_dir = get_git_dir();
 	if (!is_absolute_path(git_dir))
-		set_git_dir(make_absolute_path(git_dir));
+		git_dir = make_absolute_path(git_dir);
 	if (!work_tree || chdir(work_tree))
 		die("This operation must be run in a work tree");
+	set_git_dir(make_relative_path(git_dir, work_tree));
 	initialized = 1;
 }
 
 static int check_repository_format_gently(int *nongit_ok)
 {
-	git_config(check_repository_format_version);
+	git_config(check_repository_format_version, NULL);
 	if (GIT_REPO_VERSION < repository_format_version) {
 		if (!nongit_ok)
 			die ("Expected git repo version <= %d, found %d",
@@ -315,6 +316,44 @@ static int check_repository_format_gently(int *nongit_ok)
 }
 
 /*
+ * Try to read the location of the git directory from the .git file,
+ * return path to git directory if found.
+ */
+const char *read_gitfile_gently(const char *path)
+{
+	char *buf;
+	struct stat st;
+	int fd;
+	size_t len;
+
+	if (stat(path, &st))
+		return NULL;
+	if (!S_ISREG(st.st_mode))
+		return NULL;
+	fd = open(path, O_RDONLY);
+	if (fd < 0)
+		die("Error opening %s: %s", path, strerror(errno));
+	buf = xmalloc(st.st_size + 1);
+	len = read_in_full(fd, buf, st.st_size);
+	close(fd);
+	if (len != st.st_size)
+		die("Error reading %s", path);
+	buf[len] = '\0';
+	if (prefixcmp(buf, "gitdir: "))
+		die("Invalid gitfile format: %s", path);
+	while (buf[len - 1] == '\n' || buf[len - 1] == '\r')
+		len--;
+	if (len < 9)
+		die("No path in gitfile: %s", path);
+	buf[len] = '\0';
+	if (!is_git_directory(buf + 8))
+		die("Not a git repository: %s", buf + 8);
+	path = make_absolute_path(buf + 8);
+	free(buf);
+	return path;
+}
+
+/*
  * We cannot decide in this function whether we are in the work tree or
  * not, since the config can only be read _after_ this function was called.
  */
@@ -323,6 +362,7 @@ const char *setup_git_directory_gently(int *nongit_ok)
 	const char *work_tree_env = getenv(GIT_WORK_TREE_ENVIRONMENT);
 	static char cwd[PATH_MAX+1];
 	const char *gitdirenv;
+	const char *gitfile_dir;
 	int len, offset;
 
 	/*
@@ -377,8 +417,10 @@ const char *setup_git_directory_gently(int *nongit_ok)
 
 	/*
 	 * Test in the following order (relative to the cwd):
+	 * - .git (file containing "gitdir: <path>")
 	 * - .git/
 	 * - ./ (bare)
+	 * - ../.git
 	 * - ../.git/
 	 * - ../ (bare)
 	 * - ../../.git/
@@ -386,6 +428,12 @@ const char *setup_git_directory_gently(int *nongit_ok)
 	 */
 	offset = len = strlen(cwd);
 	for (;;) {
+		gitfile_dir = read_gitfile_gently(DEFAULT_GIT_DIR_ENVIRONMENT);
+		if (gitfile_dir) {
+			if (set_git_dir(gitfile_dir))
+				die("Repository setup failed");
+			break;
+		}
 		if (is_git_directory(DEFAULT_GIT_DIR_ENVIRONMENT))
 			break;
 		if (is_git_directory(".")) {
@@ -428,24 +476,56 @@ const char *setup_git_directory_gently(int *nongit_ok)
 
 int git_config_perm(const char *var, const char *value)
 {
-	if (value) {
-		int i;
-		if (!strcmp(value, "umask"))
-			return PERM_UMASK;
-		if (!strcmp(value, "group"))
-			return PERM_GROUP;
-		if (!strcmp(value, "all") ||
-		    !strcmp(value, "world") ||
-		    !strcmp(value, "everybody"))
-			return PERM_EVERYBODY;
-		i = atoi(value);
-		if (i > 1)
-			return i;
+	int i;
+	char *endptr;
+
+	if (value == NULL)
+		return PERM_GROUP;
+
+	if (!strcmp(value, "umask"))
+		return PERM_UMASK;
+	if (!strcmp(value, "group"))
+		return PERM_GROUP;
+	if (!strcmp(value, "all") ||
+	    !strcmp(value, "world") ||
+	    !strcmp(value, "everybody"))
+		return PERM_EVERYBODY;
+
+	/* Parse octal numbers */
+	i = strtol(value, &endptr, 8);
+
+	/* If not an octal number, maybe true/false? */
+	if (*endptr != 0)
+		return git_config_bool(var, value) ? PERM_GROUP : PERM_UMASK;
+
+	/*
+	 * Treat values 0, 1 and 2 as compatibility cases, otherwise it is
+	 * a chmod value.
+	 */
+	switch (i) {
+	case PERM_UMASK:               /* 0 */
+		return PERM_UMASK;
+	case OLD_PERM_GROUP:           /* 1 */
+		return PERM_GROUP;
+	case OLD_PERM_EVERYBODY:       /* 2 */
+		return PERM_EVERYBODY;
 	}
-	return git_config_bool(var, value);
+
+	/* A filemode value was given: 0xxx */
+
+	if ((i & 0600) != 0600)
+		die("Problem with core.sharedRepository filemode value "
+		    "(0%.3o).\nThe owner of files must always have "
+		    "read and write permissions.", i);
+
+	/*
+	 * Mask filemode value. Others can not get write permission.
+	 * x flags for directories are handled separately.
+	 */
+	return i & 0666;
 }
 
-int check_repository_format_version(const char *var, const char *value)
+int check_repository_format_version(const char *var, const char *value, void *cb)
 {
 	if (strcmp(var, "core.repositoryformatversion") == 0)
 		repository_format_version = git_config_int(var, value);

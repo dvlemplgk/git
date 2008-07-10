@@ -8,21 +8,30 @@ struct unpack_trees_options;
 typedef int (*merge_fn_t)(struct cache_entry **src,
 		struct unpack_trees_options *options);
 
+struct unpack_trees_error_msgs {
+	const char *would_overwrite;
+	const char *not_uptodate_file;
+	const char *not_uptodate_dir;
+	const char *would_lose_untracked;
+	const char *bind_overlap;
+};
+
 struct unpack_trees_options {
-	int reset;
-	int merge;
-	int update;
-	int index_only;
-	int nontrivial_merge;
-	int trivial_merges_only;
-	int verbose_update;
-	int aggressive;
-	int skip_unmerged;
-	int gently;
+	unsigned int reset:1,
+		     merge:1,
+		     update:1,
+		     index_only:1,
+		     nontrivial_merge:1,
+		     trivial_merges_only:1,
+		     verbose_update:1,
+		     aggressive:1,
+		     skip_unmerged:1,
+		     gently:1;
 	const char *prefix;
 	int pos;
 	struct dir_struct *dir;
 	merge_fn_t fn;
+	struct unpack_trees_error_msgs msgs;
 
 	int head_idx;
 	int merge_size;
@@ -31,7 +40,7 @@ struct unpack_trees_options {
 	void *unpack_data;
 
 	struct index_state *dst_index;
-	const struct index_state *src_index;
+	struct index_state *src_index;
 	struct index_state result;
 };
 

@@ -92,7 +92,8 @@ static struct path_list current_directory_set = {NULL, 0, 0, 1};
 
 static int call_depth = 0;
 static int verbosity = 2;
-static int rename_limit = -1;
+static int diff_rename_limit = -1;
+static int merge_rename_limit = -1;
 static int buffer_output = 1;
 static struct strbuf obuf = STRBUF_INIT;
 
@@ -361,7 +362,10 @@ static struct path_list *get_renames(struct tree *tree,
 	diff_setup(&opts);
 	DIFF_OPT_SET(&opts, RECURSIVE);
 	opts.detect_rename = DIFF_DETECT_RENAME;
-	opts.rename_limit = rename_limit;
+	opts.rename_limit = merge_rename_limit >= 0 ? merge_rename_limit :
+			    diff_rename_limit >= 0 ? diff_rename_limit :
+			    500;
+	opts.warn_on_too_large_rename = 1;
 	opts.output_format = DIFF_FORMAT_NO_OUTPUT;
 	if (diff_setup_done(&opts) < 0)
 		die("diff setup failed");
@@ -477,15 +481,6 @@ static char *unique_path(const char *path, const char *branch)
 	return newpath;
 }
 
-static int mkdir_p(const char *path, unsigned long mode)
-{
-	/* path points to cache entries, so xstrdup before messing with it */
-	char *buf = xstrdup(path);
-	int result = safe_create_leading_directories(buf);
-	free(buf);
-	return result;
-}
-
 static void flush_buffer(int fd, const char *buf, unsigned long size)
 {
 	while (size > 0) {
@@ -508,7 +503,7 @@ static int make_room_for_path(const char *path)
 	int status;
 	const char *msg = "failed to create path '%s'%s";
 
-	status = mkdir_p(path, 0777);
+	status = safe_create_leading_directories_const(path);
 	if (status) {
 		if (status == -3) {
 			/* something else exists */
@@ -551,9 +546,19 @@ static void update_file_flags(const unsigned char *sha,
 			die("cannot read object %s '%s'", sha1_to_hex(sha), path);
 		if (type != OBJ_BLOB)
 			die("blob expected for %s '%s'", sha1_to_hex(sha), path);
+		if (S_ISREG(mode)) {
+			struct strbuf strbuf;
+			strbuf_init(&strbuf, 0);
+			if (convert_to_working_tree(path, buf, size, &strbuf)) {
+				free(buf);
+				size = strbuf.len;
+				buf = strbuf_detach(&strbuf, NULL);
+			}
+		}
 
 		if (make_room_for_path(path) < 0) {
 			update_wd = 0;
+			free(buf);
 			goto update_index;
 		}
 		if (S_ISREG(mode) || (!has_symlinks && S_ISLNK(mode))) {
@@ -569,13 +574,14 @@ static void update_file_flags(const unsigned char *sha,
 			close(fd);
 		} else if (S_ISLNK(mode)) {
 			char *lnk = xmemdupz(buf, size);
-			mkdir_p(path, 0777);
+			safe_create_leading_directories_const(path);
 			unlink(path);
 			symlink(lnk, path);
 			free(lnk);
 		} else
 			die("do not know what to do with %06o %s '%s'",
 			    mode, sha1_to_hex(sha), path);
+		free(buf);
 	}
  update_index:
 	if (update_cache)
@@ -1336,17 +1342,21 @@ static struct commit *get_ref(const char *ref)
 	return (struct commit *)object;
 }
 
-static int merge_config(const char *var, const char *value)
+static int merge_config(const char *var, const char *value, void *cb)
 {
 	if (!strcasecmp(var, "merge.verbosity")) {
 		verbosity = git_config_int(var, value);
 		return 0;
 	}
 	if (!strcasecmp(var, "diff.renamelimit")) {
-		rename_limit = git_config_int(var, value);
+		diff_rename_limit = git_config_int(var, value);
 		return 0;
 	}
-	return git_default_config(var, value);
+	if (!strcasecmp(var, "merge.renamelimit")) {
+		merge_rename_limit = git_config_int(var, value);
+		return 0;
+	}
+	return git_default_config(var, value, cb);
 }
 
 int cmd_merge_recursive(int argc, const char **argv, const char *prefix)
@@ -1367,7 +1377,7 @@ int cmd_merge_recursive(int argc, const char **argv, const char *prefix)
 			subtree_merge = 1;
 	}
 
-	git_config(merge_config);
+	git_config(merge_config, NULL);
 	if (getenv("GIT_MERGE_VERBOSITY"))
 		verbosity = strtol(getenv("GIT_MERGE_VERBOSITY"), NULL, 10);
 

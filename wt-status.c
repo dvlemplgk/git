@@ -8,14 +8,17 @@
 #include "revision.h"
 #include "diffcore.h"
 #include "quote.h"
+#include "run-command.h"
 
 int wt_status_relative_paths = 1;
 int wt_status_use_color = -1;
+int wt_status_submodule_summary;
 static char wt_status_colors[][COLOR_MAXLEN] = {
 	"",         /* WT_STATUS_HEADER: normal */
 	"\033[32m", /* WT_STATUS_UPDATED: green */
 	"\033[31m", /* WT_STATUS_CHANGED: red */
 	"\033[31m", /* WT_STATUS_UNTRACKED: red */
+	"\033[31m", /* WT_STATUS_NOBRANCH: red */
 };
 
 static const char use_add_msg[] =
@@ -36,6 +39,8 @@ static int parse_status_slot(const char *var, int offset)
 		return WT_STATUS_CHANGED;
 	if (!strcasecmp(var+offset, "untracked"))
 		return WT_STATUS_UNTRACKED;
+	if (!strcasecmp(var+offset, "nobranch"))
+		return WT_STATUS_NOBRANCH;
 	die("bad config variable '%s'", var);
 }
 
@@ -204,7 +209,7 @@ static void wt_status_print_updated(struct wt_status *s)
 	rev.diffopt.format_callback = wt_status_print_updated_cb;
 	rev.diffopt.format_callback_data = s;
 	rev.diffopt.detect_rename = 1;
-	rev.diffopt.rename_limit = 100;
+	rev.diffopt.rename_limit = 200;
 	rev.diffopt.break_opt = 0;
 	run_diff_index(&rev, 1);
 }
@@ -218,6 +223,36 @@ static void wt_status_print_changed(struct wt_status *s)
 	rev.diffopt.format_callback = wt_status_print_changed_cb;
 	rev.diffopt.format_callback_data = s;
 	run_diff_files(&rev, 0);
+}
+
+static void wt_status_print_submodule_summary(struct wt_status *s)
+{
+	struct child_process sm_summary;
+	char summary_limit[64];
+	char index[PATH_MAX];
+	const char *env[] = { index, NULL };
+	const char *argv[] = {
+		"submodule",
+		"summary",
+		"--cached",
+		"--for-status",
+		"--summary-limit",
+		summary_limit,
+		s->amend ? "HEAD^" : "HEAD",
+		NULL
+	};
+
+	sprintf(summary_limit, "%d", wt_status_submodule_summary);
+	snprintf(index, sizeof(index), "GIT_INDEX_FILE=%s", s->index_file);
+
+	memset(&sm_summary, 0, sizeof(sm_summary));
+	sm_summary.argv = argv;
+	sm_summary.env = env;
+	sm_summary.git_cmd = 1;
+	sm_summary.no_stdin = 1;
+	fflush(s->fp);
+	sm_summary.out = dup(fileno(s->fp));    /* run_command closes it */
+	run_command(&sm_summary);
 }
 
 static void wt_status_print_untracked(struct wt_status *s)
@@ -282,8 +317,9 @@ static void wt_status_print_verbose(struct wt_status *s)
 void wt_status_print(struct wt_status *s)
 {
 	unsigned char sha1[20];
-	s->is_initial = get_sha1(s->reference, sha1) ? 1 : 0;
+	const char *branch_color = color(WT_STATUS_HEADER);
 
+	s->is_initial = get_sha1(s->reference, sha1) ? 1 : 0;
 	if (s->branch) {
 		const char *on_what = "On branch ";
 		const char *branch_name = s->branch;
@@ -291,10 +327,11 @@ void wt_status_print(struct wt_status *s)
 			branch_name += 11;
 		else if (!strcmp(branch_name, "HEAD")) {
 			branch_name = "";
+			branch_color = color(WT_STATUS_NOBRANCH);
 			on_what = "Not currently on any branch.";
 		}
-		color_fprintf_ln(s->fp, color(WT_STATUS_HEADER),
-			"# %s%s", on_what, branch_name);
+		color_fprintf(s->fp, color(WT_STATUS_HEADER), "# ");
+		color_fprintf_ln(s->fp, branch_color, "%s%s", on_what, branch_name);
 	}
 
 	if (s->is_initial) {
@@ -308,6 +345,8 @@ void wt_status_print(struct wt_status *s)
 	}
 
 	wt_status_print_changed(s);
+	if (wt_status_submodule_summary)
+		wt_status_print_submodule_summary(s);
 	wt_status_print_untracked(s);
 
 	if (s->verbose && !s->is_initial)
@@ -328,8 +367,15 @@ void wt_status_print(struct wt_status *s)
 	}
 }
 
-int git_status_config(const char *k, const char *v)
+int git_status_config(const char *k, const char *v, void *cb)
 {
+	if (!strcmp(k, "status.submodulesummary")) {
+		int is_bool;
+		wt_status_submodule_summary = git_config_bool_or_int(k, v, &is_bool);
+		if (is_bool && wt_status_submodule_summary)
+			wt_status_submodule_summary = -1;
+		return 0;
+	}
 	if (!strcmp(k, "status.color") || !strcmp(k, "color.status")) {
 		wt_status_use_color = git_config_colorbool(k, v, -1);
 		return 0;
@@ -345,5 +391,5 @@ int git_status_config(const char *k, const char *v)
 		wt_status_relative_paths = git_config_bool(k, v);
 		return 0;
 	}
-	return git_color_default_config(k, v);
+	return git_color_default_config(k, v, cb);
 }

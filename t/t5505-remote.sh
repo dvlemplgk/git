@@ -135,7 +135,26 @@ test_expect_success 'show' '
 	 git config --add remote.origin.push \
 		+refs/tags/lastbackup &&
 	 git remote show origin > output &&
-	 git diff expect output)
+	 test_cmp expect output)
+'
+
+cat > test/expect << EOF
+* remote origin
+  URL: $(pwd)/one/.git
+  Remote branch merged with 'git pull' while on branch master
+    master
+  Tracked remote branches
+    master side
+  Local branches pushed with 'git push'
+    master:upstream +refs/tags/lastbackup
+EOF
+
+test_expect_success 'show -n' '
+	(mv one one.unreachable &&
+	 cd test &&
+	 git remote show -n origin > output &&
+	 mv ../one.unreachable ../one &&
+	 test_cmp expect output)
 '
 
 test_expect_success 'prune' '
@@ -146,6 +165,24 @@ test_expect_success 'prune' '
 	 git remote prune origin &&
 	 git rev-parse refs/remotes/origin/side2 &&
 	 ! git rev-parse refs/remotes/origin/side)
+'
+
+cat > test/expect << EOF
+Pruning origin
+URL: $(pwd)/one/.git
+ * [would prune] origin/side2
+EOF
+
+test_expect_success 'prune --dry-run' '
+	(cd one &&
+	 git branch -m side2 side) &&
+	(cd test &&
+	 git remote prune --dry-run origin > output &&
+	 git rev-parse refs/remotes/origin/side2 &&
+	 ! git rev-parse refs/remotes/origin/side &&
+	(cd ../one &&
+	 git branch -m side side2) &&
+	 test_cmp expect output)
 '
 
 test_expect_success 'add --mirror && prune' '
@@ -164,6 +201,24 @@ test_expect_success 'add --mirror && prune' '
 	 git rev-parse --verify refs/heads/side)
 '
 
+test_expect_success 'add alt && prune' '
+	(mkdir alttst &&
+	 cd alttst &&
+	 git init &&
+	 git remote add -f origin ../one &&
+	 git config remote.alt.url ../one &&
+	 git config remote.alt.fetch "+refs/heads/*:refs/remotes/origin/*") &&
+	(cd one &&
+	 git branch -m side side2) &&
+	(cd alttst &&
+	 git rev-parse --verify refs/remotes/origin/side &&
+	 ! git rev-parse --verify refs/remotes/origin/side2 &&
+	 git fetch alt &&
+	 git remote prune alt &&
+	 ! git rev-parse --verify refs/remotes/origin/side &&
+	 git rev-parse --verify refs/remotes/origin/side2)
+'
+
 cat > one/expect << EOF
   apis/master
   apis/side
@@ -179,7 +234,7 @@ test_expect_success 'update' '
 	 git remote add apis ../mirror &&
 	 git remote update &&
 	 git branch -r > output &&
-	 git diff expect output)
+	 test_cmp expect output)
 
 '
 
@@ -206,7 +261,7 @@ test_expect_success 'update with arguments' '
 	 git config remotes.titanus manduca &&
 	 git remote update phobaeticus titanus &&
 	 git branch -r > output &&
-	 git diff expect output)
+	 test_cmp expect output)
 
 '
 
@@ -229,7 +284,7 @@ test_expect_success 'update default' '
 	 git config remote.drosophila.skipDefaultUpdate true &&
 	 git remote update default &&
 	 git branch -r > output &&
-	 git diff expect output)
+	 test_cmp expect output)
 
 '
 
@@ -249,7 +304,7 @@ test_expect_success 'update default (overridden, with funny whitespace)' '
 	 git config remotes.default "$(printf "\t drosophila  \n")" &&
 	 git remote update default &&
 	 git branch -r > output &&
-	 git diff expect output)
+	 test_cmp expect output)
 
 '
 

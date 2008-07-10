@@ -105,7 +105,7 @@ test_expect_success 'fetch with insteadOf' '
 	(
 		TRASH=$(pwd)/ &&
 		cd testrepo &&
-		git config url.$TRASH.insteadOf trash/
+		git config "url.$TRASH.insteadOf" trash/ &&
 		git config remote.up.url trash/. &&
 		git config remote.up.fetch "refs/heads/*:refs/remotes/origin/*" &&
 		git fetch up &&
@@ -145,8 +145,8 @@ test_expect_success 'push with wildcard' '
 
 test_expect_success 'push with insteadOf' '
 	mk_empty &&
-	TRASH=$(pwd)/ &&
-	git config url.$TRASH.insteadOf trash/ &&
+	TRASH="$(pwd)/" &&
+	git config "url.$TRASH.insteadOf" trash/ &&
 	git push trash/testrepo refs/heads/master:refs/remotes/origin/master &&
 	(
 		cd testrepo &&
@@ -162,6 +162,47 @@ test_expect_success 'push with matching heads' '
 	mk_test heads/master &&
 	git push testrepo &&
 	check_push_result $the_commit heads/master
+
+'
+
+test_expect_success 'push with matching heads on the command line' '
+
+	mk_test heads/master &&
+	git push testrepo : &&
+	check_push_result $the_commit heads/master
+
+'
+
+test_expect_success 'failed (non-fast-forward) push with matching heads' '
+
+	mk_test heads/master &&
+	git push testrepo : &&
+	git commit --amend -massaged &&
+	! git push testrepo &&
+	check_push_result $the_commit heads/master &&
+	git reset --hard $the_commit
+
+'
+
+test_expect_success 'push --force with matching heads' '
+
+	mk_test heads/master &&
+	git push testrepo : &&
+	git commit --amend -massaged &&
+	git push --force testrepo &&
+	! check_push_result $the_commit heads/master &&
+	git reset --hard $the_commit
+
+'
+
+test_expect_success 'push with matching heads and forced update' '
+
+	mk_test heads/master &&
+	git push testrepo : &&
+	git commit --amend -massaged &&
+	git push testrepo +: &&
+	! check_push_result $the_commit heads/master &&
+	git reset --hard $the_commit
 
 '
 

@@ -152,7 +152,7 @@ __git_heads ()
 		done
 		return
 	fi
-	for i in $(git-ls-remote "$1" 2>/dev/null); do
+	for i in $(git ls-remote "$1" 2>/dev/null); do
 		case "$is_hash,$i" in
 		y,*) is_hash=n ;;
 		n,*^{}) is_hash=y ;;
@@ -173,7 +173,7 @@ __git_tags ()
 		done
 		return
 	fi
-	for i in $(git-ls-remote "$1" 2>/dev/null); do
+	for i in $(git ls-remote "$1" 2>/dev/null); do
 		case "$is_hash,$i" in
 		y,*) is_hash=n ;;
 		n,*^{}) is_hash=y ;;
@@ -200,7 +200,7 @@ __git_refs ()
 		done
 		return
 	fi
-	for i in $(git-ls-remote "$dir" 2>/dev/null); do
+	for i in $(git ls-remote "$dir" 2>/dev/null); do
 		case "$is_hash,$i" in
 		y,*) is_hash=n ;;
 		n,*^{}) is_hash=y ;;
@@ -223,7 +223,7 @@ __git_refs2 ()
 __git_refs_remotes ()
 {
 	local cmd i is_hash=y
-	for i in $(git-ls-remote "$1" 2>/dev/null); do
+	for i in $(git ls-remote "$1" 2>/dev/null); do
 		case "$is_hash,$i" in
 		n,refs/heads/*)
 			is_hash=y
@@ -500,7 +500,10 @@ _git_add ()
 	local cur="${COMP_WORDS[COMP_CWORD]}"
 	case "$cur" in
 	--*)
-		__gitcomp "--interactive --refresh"
+		__gitcomp "
+			--interactive --refresh --patch --update --dry-run
+			--ignore-errors
+			"
 		return
 	esac
 	COMPREPLY=()
@@ -758,6 +761,7 @@ _git_log ()
 			--pretty= --name-status --name-only --raw
 			--not --all
 			--left-right --cherry-pick
+			--graph
 			"
 		return
 		;;
@@ -780,7 +784,7 @@ _git_merge ()
 		;;
 	--*)
 		__gitcomp "
-			--no-commit --no-summary --squash --strategy
+			--no-commit --no-stat --log --no-log --squash --strategy
 			"
 		return
 	esac
@@ -1053,6 +1057,7 @@ _git_remote ()
 	local subcommands="add rm show prune update"
 	local subcommand="$(__git_find_subcommand "$subcommands")"
 	if [ -z "$subcommand" ]; then
+		__gitcomp "$subcommands"
 		return
 	fi
 
@@ -1345,9 +1350,14 @@ _git ()
 _gitk ()
 {
 	local cur="${COMP_WORDS[COMP_CWORD]}"
+	local g="$(git rev-parse --git-dir 2>/dev/null)"
+	local merge=""
+	if [ -f $g/MERGE_HEAD ]; then
+		merge="--merge"
+	fi
 	case "$cur" in
 	--*)
-		__gitcomp "--not --all"
+		__gitcomp "--not --all $merge"
 		return
 		;;
 	esac

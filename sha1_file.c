@@ -15,6 +15,7 @@
 #include "tree.h"
 #include "refs.h"
 #include "pack-revindex.h"
+#include "sha1-lookup.h"
 
 #ifndef O_NOATIME
 #if defined(__linux__) && (defined(__i386__) || defined(__PPC__))
@@ -33,8 +34,6 @@ static size_t sz_fmt(size_t s) { return s; }
 #endif
 
 const unsigned char null_sha1[20];
-
-static unsigned int sha1_file_open_flag = O_NOATIME;
 
 const signed char hexval_table[256] = {
 	 -1, -1, -1, -1, -1, -1, -1, -1,		/* 00-07 */
@@ -117,7 +116,16 @@ int safe_create_leading_directories(char *path)
 	return 0;
 }
 
-char * sha1_to_hex(const unsigned char *sha1)
+int safe_create_leading_directories_const(const char *path)
+{
+	/* path points to cache entries, so xstrdup before messing with it */
+	char *buf = xstrdup(path);
+	int result = safe_create_leading_directories(buf);
+	free(buf);
+	return result;
+}
+
+char *sha1_to_hex(const unsigned char *sha1)
 {
 	static int bufno;
 	static char hexbuffer[4][50];
@@ -175,21 +183,23 @@ char *sha1_file_name(const unsigned char *sha1)
 	return base;
 }
 
-char *sha1_pack_name(const unsigned char *sha1)
+static char *sha1_get_pack_name(const unsigned char *sha1,
+				char **name, char **base, const char *which)
 {
 	static const char hex[] = "0123456789abcdef";
-	static char *name, *base, *buf;
+	char *buf;
 	int i;
 
-	if (!base) {
+	if (!*base) {
 		const char *sha1_file_directory = get_object_directory();
 		int len = strlen(sha1_file_directory);
-		base = xmalloc(len + 60);
-		sprintf(base, "%s/pack/pack-1234567890123456789012345678901234567890.pack", sha1_file_directory);
-		name = base + len + 11;
+		*base = xmalloc(len + 60);
+		sprintf(*base, "%s/pack/pack-1234567890123456789012345678901234567890.%s",
+			sha1_file_directory, which);
+		*name = *base + len + 11;
 	}
 
-	buf = name;
+	buf = *name;
 
 	for (i = 0; i < 20; i++) {
 		unsigned int val = *sha1++;
@@ -197,32 +207,21 @@ char *sha1_pack_name(const unsigned char *sha1)
 		*buf++ = hex[val & 0xf];
 	}
 
-	return base;
+	return *base;
+}
+
+char *sha1_pack_name(const unsigned char *sha1)
+{
+	static char *name, *base;
+
+	return sha1_get_pack_name(sha1, &name, &base, "pack");
 }
 
 char *sha1_pack_index_name(const unsigned char *sha1)
 {
-	static const char hex[] = "0123456789abcdef";
-	static char *name, *base, *buf;
-	int i;
+	static char *name, *base;
 
-	if (!base) {
-		const char *sha1_file_directory = get_object_directory();
-		int len = strlen(sha1_file_directory);
-		base = xmalloc(len + 60);
-		sprintf(base, "%s/pack/pack-1234567890123456789012345678901234567890.idx", sha1_file_directory);
-		name = base + len + 11;
-	}
-
-	buf = name;
-
-	for (i = 0; i < 20; i++) {
-		unsigned int val = *sha1++;
-		*buf++ = hex[val >> 4];
-		*buf++ = hex[val & 0xf];
-	}
-
-	return base;
+	return sha1_get_pack_name(sha1, &name, &base, "idx");
 }
 
 struct alternate_object_database *alt_odb_list;
@@ -379,6 +378,18 @@ static void read_info_alternates(const char * relative_base, int depth)
 	munmap(map, mapsz);
 }
 
+void add_to_alternates_file(const char *reference)
+{
+	struct lock_file *lock = xcalloc(1, sizeof(struct lock_file));
+	int fd = hold_lock_file_for_append(lock, git_path("objects/info/alternates"), 1);
+	char *alt = mkpath("%s/objects\n", reference);
+	write_or_die(fd, alt, strlen(alt));
+	if (commit_lock_file(lock))
+		die("could not close alternates file");
+	if (alt_odb_tail)
+		link_alt_odb_entries(alt, alt + strlen(alt), '\n', NULL, 0);
+}
+
 void prepare_alt_odb(void)
 {
 	const char *alt;
@@ -395,21 +406,21 @@ void prepare_alt_odb(void)
 	read_info_alternates(get_object_directory(), 0);
 }
 
-static char *find_sha1_file(const unsigned char *sha1, struct stat *st)
+static int has_loose_object(const unsigned char *sha1)
 {
 	char *name = sha1_file_name(sha1);
 	struct alternate_object_database *alt;
 
-	if (!stat(name, st))
-		return name;
+	if (!access(name, F_OK))
+		return 1;
 	prepare_alt_odb();
 	for (alt = alt_odb_list; alt; alt = alt->next) {
 		name = alt->name;
 		fill_sha1_path(name, sha1);
-		if (!stat(alt->base, st))
-			return alt->base;
+		if (!access(alt->base, F_OK))
+			return 1;
 	}
-	return NULL;
+	return 0;
 }
 
 static unsigned int pack_used_ctr;
@@ -829,13 +840,7 @@ struct packed_git *add_packed_git(const char *path, int path_len, int local)
 
 struct packed_git *parse_pack_index(unsigned char *sha1)
 {
-	char *path = sha1_pack_index_name(sha1);
-	return parse_pack_index_file(sha1, path);
-}
-
-struct packed_git *parse_pack_index_file(const unsigned char *sha1,
-					 const char *idx_path)
-{
+	const char *idx_path = sha1_pack_index_name(sha1);
 	const char *path = sha1_pack_name(sha1);
 	struct packed_git *p = xmalloc(sizeof(*p) + strlen(path) + 2);
 
@@ -993,38 +998,58 @@ int check_sha1_signature(const unsigned char *sha1, void *map, unsigned long siz
 	return hashcmp(sha1, real_sha1) ? -1 : 0;
 }
 
+static int git_open_noatime(const char *name)
+{
+	static int sha1_file_open_flag = O_NOATIME;
+	int fd = open(name, O_RDONLY | sha1_file_open_flag);
+
+	/* Might the failure be due to O_NOATIME? */
+	if (fd < 0 && errno != ENOENT && sha1_file_open_flag) {
+		fd = open(name, O_RDONLY);
+		if (fd >= 0)
+			sha1_file_open_flag = 0;
+	}
+	return fd;
+}
+
+static int open_sha1_file(const unsigned char *sha1)
+{
+	int fd;
+	char *name = sha1_file_name(sha1);
+	struct alternate_object_database *alt;
+
+	fd = git_open_noatime(name);
+	if (fd >= 0)
+		return fd;
+
+	prepare_alt_odb();
+	errno = ENOENT;
+	for (alt = alt_odb_list; alt; alt = alt->next) {
+		name = alt->name;
+		fill_sha1_path(name, sha1);
+		fd = git_open_noatime(alt->base);
+		if (fd >= 0)
+			return fd;
+	}
+	return -1;
+}
+
 static void *map_sha1_file(const unsigned char *sha1, unsigned long *size)
 {
-	struct stat st;
 	void *map;
 	int fd;
-	char *filename = find_sha1_file(sha1, &st);
 
-	if (!filename) {
-		return NULL;
-	}
+	fd = open_sha1_file(sha1);
+	map = NULL;
+	if (fd >= 0) {
+		struct stat st;
 
-	fd = open(filename, O_RDONLY | sha1_file_open_flag);
-	if (fd < 0) {
-		/* See if it works without O_NOATIME */
-		switch (sha1_file_open_flag) {
-		default:
-			fd = open(filename, O_RDONLY);
-			if (fd >= 0)
-				break;
-		/* Fallthrough */
-		case 0:
-			return NULL;
+		if (!fstat(fd, &st)) {
+			*size = xsize_t(st.st_size);
+			map = xmmap(NULL, *size, PROT_READ, MAP_PRIVATE, fd, 0);
 		}
-
-		/* If it failed once, it will probably fail again.
-		 * Stop using O_NOATIME
-		 */
-		sha1_file_open_flag = 0;
+		close(fd);
 	}
-	*size = xsize_t(st.st_size);
-	map = xmmap(NULL, *size, PROT_READ, MAP_PRIVATE, fd, 0);
-	close(fd);
 	return map;
 }
 
@@ -1675,7 +1700,12 @@ off_t find_pack_entry_one(const unsigned char *sha1,
 {
 	const uint32_t *level1_ofs = p->index_data;
 	const unsigned char *index = p->index_data;
-	unsigned hi, lo;
+	unsigned hi, lo, stride;
+	static int use_lookup = -1;
+	static int debug_lookup = -1;
+
+	if (debug_lookup < 0)
+		debug_lookup = !!getenv("GIT_DEBUG_LOOKUP");
 
 	if (!index) {
 		if (open_pack_index(p))
@@ -1690,11 +1720,34 @@ off_t find_pack_entry_one(const unsigned char *sha1,
 	index += 4 * 256;
 	hi = ntohl(level1_ofs[*sha1]);
 	lo = ((*sha1 == 0x0) ? 0 : ntohl(level1_ofs[*sha1 - 1]));
+	if (p->index_version > 1) {
+		stride = 20;
+	} else {
+		stride = 24;
+		index += 4;
+	}
+
+	if (debug_lookup)
+		printf("%02x%02x%02x... lo %u hi %u nr %u\n",
+		       sha1[0], sha1[1], sha1[2], lo, hi, p->num_objects);
+
+	if (use_lookup < 0)
+		use_lookup = !!getenv("GIT_USE_LOOKUP");
+	if (use_lookup) {
+		int pos = sha1_entry_pos(index, stride, 0,
+					 lo, hi, p->num_objects, sha1);
+		if (pos < 0)
+			return 0;
+		return nth_packed_object_offset(p, pos);
+	}
 
 	do {
 		unsigned mi = (lo + hi) / 2;
-		unsigned x = (p->index_version > 1) ? (mi * 20) : (mi * 24 + 4);
-		int cmp = hashcmp(index + x, sha1);
+		int cmp = hashcmp(index + mi * stride, sha1);
+
+		if (debug_lookup)
+			printf("lo %u hi %u rg %u mi %u\n",
+			       lo, hi, hi - lo, mi);
 		if (!cmp)
 			return nth_packed_object_offset(p, mi);
 		if (cmp > 0)
@@ -1987,48 +2040,11 @@ static void write_sha1_file_prepare(const void *buf, unsigned long len,
 }
 
 /*
- * Link the tempfile to the final place, possibly creating the
- * last directory level as you do so.
- *
- * Returns the errno on failure, 0 on success.
- */
-static int link_temp_to_file(const char *tmpfile, const char *filename)
-{
-	int ret;
-	char *dir;
-
-	if (!link(tmpfile, filename))
-		return 0;
-
-	/*
-	 * Try to mkdir the last path component if that failed.
-	 *
-	 * Re-try the "link()" regardless of whether the mkdir
-	 * succeeds, since a race might mean that somebody
-	 * else succeeded.
-	 */
-	ret = errno;
-	dir = strrchr(filename, '/');
-	if (dir) {
-		*dir = 0;
-		if (!mkdir(filename, 0777) && adjust_shared_perm(filename)) {
-			*dir = '/';
-			return -2;
-		}
-		*dir = '/';
-		if (!link(tmpfile, filename))
-			return 0;
-		ret = errno;
-	}
-	return ret;
-}
-
-/*
  * Move the just written object into its final resting place
  */
 int move_temp_to_file(const char *tmpfile, const char *filename)
 {
-	int ret = link_temp_to_file(tmpfile, filename);
+	int ret = link(tmpfile, filename);
 
 	/*
 	 * Coda hack - coda doesn't like cross-directory links,
@@ -2073,43 +2089,67 @@ int hash_sha1_file(const void *buf, unsigned long len, const char *type,
 	return 0;
 }
 
-int write_sha1_file(void *buf, unsigned long len, const char *type, unsigned char *returnsha1)
+/* Finalize a file on disk, and close it. */
+static void close_sha1_file(int fd)
 {
-	int size, ret;
+	/* For safe-mode, we could fsync_or_die(fd, "sha1 file") here */
+	fchmod(fd, 0444);
+	if (close(fd) != 0)
+		die("unable to write sha1 file");
+}
+
+/* Size of directory component, including the ending '/' */
+static inline int directory_size(const char *filename)
+{
+	const char *s = strrchr(filename, '/');
+	if (!s)
+		return 0;
+	return s - filename + 1;
+}
+
+/*
+ * This creates a temporary file in the same directory as the final
+ * 'filename'
+ *
+ * We want to avoid cross-directory filename renames, because those
+ * can have problems on various filesystems (FAT, NFS, Coda).
+ */
+static int create_tmpfile(char *buffer, size_t bufsiz, const char *filename)
+{
+	int fd, dirlen = directory_size(filename);
+
+	if (dirlen + 20 > bufsiz) {
+		errno = ENAMETOOLONG;
+		return -1;
+	}
+	memcpy(buffer, filename, dirlen);
+	strcpy(buffer + dirlen, "tmp_obj_XXXXXX");
+	fd = mkstemp(buffer);
+	if (fd < 0 && dirlen) {
+		/* Make sure the directory exists */
+		memcpy(buffer, filename, dirlen);
+		buffer[dirlen-1] = 0;
+		if (mkdir(buffer, 0777) || adjust_shared_perm(buffer))
+			return -1;
+
+		/* Try again */
+		strcpy(buffer + dirlen - 1, "/tmp_obj_XXXXXX");
+		fd = mkstemp(buffer);
+	}
+	return fd;
+}
+
+static int write_loose_object(const unsigned char *sha1, char *hdr, int hdrlen,
+			      void *buf, unsigned long len, time_t mtime)
+{
+	int fd, size, ret;
 	unsigned char *compressed;
 	z_stream stream;
-	unsigned char sha1[20];
 	char *filename;
 	static char tmpfile[PATH_MAX];
-	char hdr[32];
-	int fd, hdrlen;
 
-	/* Normally if we have it in the pack then we do not bother writing
-	 * it out into .git/objects/??/?{38} file.
-	 */
-	write_sha1_file_prepare(buf, len, type, sha1, hdr, &hdrlen);
 	filename = sha1_file_name(sha1);
-	if (returnsha1)
-		hashcpy(returnsha1, sha1);
-	if (has_sha1_file(sha1))
-		return 0;
-	fd = open(filename, O_RDONLY);
-	if (fd >= 0) {
-		/*
-		 * FIXME!!! We might do collision checking here, but we'd
-		 * need to uncompress the old file and check it. Later.
-		 */
-		close(fd);
-		return 0;
-	}
-
-	if (errno != ENOENT) {
-		return error("sha1 file %s: %s\n", filename, strerror(errno));
-	}
-
-	snprintf(tmpfile, sizeof(tmpfile), "%s/tmp_obj_XXXXXX", get_object_directory());
-
-	fd = mkstemp(tmpfile);
+	fd = create_tmpfile(tmpfile, sizeof(tmpfile), filename);
 	if (fd < 0) {
 		if (errno == EPERM)
 			return error("insufficient permission for adding an object to repository database %s\n", get_object_directory());
@@ -2148,156 +2188,53 @@ int write_sha1_file(void *buf, unsigned long len, const char *type, unsigned cha
 
 	if (write_buffer(fd, compressed, size) < 0)
 		die("unable to write sha1 file");
-	fchmod(fd, 0444);
-	if (close(fd))
-		die("unable to write sha1 file");
+	close_sha1_file(fd);
 	free(compressed);
+
+	if (mtime) {
+		struct utimbuf utb;
+		utb.actime = mtime;
+		utb.modtime = mtime;
+		if (utime(tmpfile, &utb) < 0)
+			warning("failed utime() on %s: %s",
+				tmpfile, strerror(errno));
+	}
 
 	return move_temp_to_file(tmpfile, filename);
 }
 
-/*
- * We need to unpack and recompress the object for writing
- * it out to a different file.
- */
-static void *repack_object(const unsigned char *sha1, unsigned long *objsize)
+int write_sha1_file(void *buf, unsigned long len, const char *type, unsigned char *returnsha1)
 {
-	size_t size;
-	z_stream stream;
-	unsigned char *unpacked;
+	unsigned char sha1[20];
+	char hdr[32];
+	int hdrlen;
+
+	/* Normally if we have it in the pack then we do not bother writing
+	 * it out into .git/objects/??/?{38} file.
+	 */
+	write_sha1_file_prepare(buf, len, type, sha1, hdr, &hdrlen);
+	if (returnsha1)
+		hashcpy(returnsha1, sha1);
+	if (has_sha1_file(sha1))
+		return 0;
+	return write_loose_object(sha1, hdr, hdrlen, buf, len, 0);
+}
+
+int force_object_loose(const unsigned char *sha1, time_t mtime)
+{
+	void *buf;
 	unsigned long len;
 	enum object_type type;
 	char hdr[32];
 	int hdrlen;
-	void *buf;
 
-	/* need to unpack and recompress it by itself */
-	unpacked = read_packed_sha1(sha1, &type, &len);
-	if (!unpacked)
-		error("cannot read sha1_file for %s", sha1_to_hex(sha1));
-
+	if (has_loose_object(sha1))
+		return 0;
+	buf = read_packed_sha1(sha1, &type, &len);
+	if (!buf)
+		return error("cannot read sha1_file for %s", sha1_to_hex(sha1));
 	hdrlen = sprintf(hdr, "%s %lu", typename(type), len) + 1;
-
-	/* Set it up */
-	memset(&stream, 0, sizeof(stream));
-	deflateInit(&stream, zlib_compression_level);
-	size = deflateBound(&stream, len + hdrlen);
-	buf = xmalloc(size);
-
-	/* Compress it */
-	stream.next_out = buf;
-	stream.avail_out = size;
-
-	/* First header.. */
-	stream.next_in = (void *)hdr;
-	stream.avail_in = hdrlen;
-	while (deflate(&stream, 0) == Z_OK)
-		/* nothing */;
-
-	/* Then the data itself.. */
-	stream.next_in = unpacked;
-	stream.avail_in = len;
-	while (deflate(&stream, Z_FINISH) == Z_OK)
-		/* nothing */;
-	deflateEnd(&stream);
-	free(unpacked);
-
-	*objsize = stream.total_out;
-	return buf;
-}
-
-int write_sha1_to_fd(int fd, const unsigned char *sha1)
-{
-	int retval;
-	unsigned long objsize;
-	void *buf = map_sha1_file(sha1, &objsize);
-
-	if (buf) {
-		retval = write_buffer(fd, buf, objsize);
-		munmap(buf, objsize);
-		return retval;
-	}
-
-	buf = repack_object(sha1, &objsize);
-	retval = write_buffer(fd, buf, objsize);
-	free(buf);
-	return retval;
-}
-
-int write_sha1_from_fd(const unsigned char *sha1, int fd, char *buffer,
-		       size_t bufsize, size_t *bufposn)
-{
-	char tmpfile[PATH_MAX];
-	int local;
-	z_stream stream;
-	unsigned char real_sha1[20];
-	unsigned char discard[4096];
-	int ret;
-	SHA_CTX c;
-
-	snprintf(tmpfile, sizeof(tmpfile), "%s/tmp_obj_XXXXXX", get_object_directory());
-
-	local = mkstemp(tmpfile);
-	if (local < 0) {
-		if (errno == EPERM)
-			return error("insufficient permission for adding an object to repository database %s\n", get_object_directory());
-		else
-			return error("unable to create temporary sha1 filename %s: %s\n", tmpfile, strerror(errno));
-	}
-
-	memset(&stream, 0, sizeof(stream));
-
-	inflateInit(&stream);
-
-	SHA1_Init(&c);
-
-	do {
-		ssize_t size;
-		if (*bufposn) {
-			stream.avail_in = *bufposn;
-			stream.next_in = (unsigned char *) buffer;
-			do {
-				stream.next_out = discard;
-				stream.avail_out = sizeof(discard);
-				ret = inflate(&stream, Z_SYNC_FLUSH);
-				SHA1_Update(&c, discard, sizeof(discard) -
-					    stream.avail_out);
-			} while (stream.avail_in && ret == Z_OK);
-			if (write_buffer(local, buffer, *bufposn - stream.avail_in) < 0)
-				die("unable to write sha1 file");
-			memmove(buffer, buffer + *bufposn - stream.avail_in,
-				stream.avail_in);
-			*bufposn = stream.avail_in;
-			if (ret != Z_OK)
-				break;
-		}
-		size = xread(fd, buffer + *bufposn, bufsize - *bufposn);
-		if (size <= 0) {
-			close(local);
-			unlink(tmpfile);
-			if (!size)
-				return error("Connection closed?");
-			perror("Reading from connection");
-			return -1;
-		}
-		*bufposn += size;
-	} while (1);
-	inflateEnd(&stream);
-
-	fchmod(local, 0444);
-	if (close(local) != 0)
-		die("unable to write sha1 file");
-	SHA1_Final(real_sha1, &c);
-	if (ret != Z_STREAM_END) {
-		unlink(tmpfile);
-		return error("File %s corrupted", sha1_to_hex(sha1));
-	}
-	if (hashcmp(sha1, real_sha1)) {
-		unlink(tmpfile);
-		return error("File %s has bad hash", sha1_to_hex(sha1));
-	}
-
-	return move_temp_to_file(tmpfile, sha1_file_name(sha1));
+	return write_loose_object(sha1, hdr, hdrlen, buf, len, mtime);
 }
 
 int has_pack_index(const unsigned char *sha1)
@@ -2324,12 +2261,11 @@ int has_sha1_pack(const unsigned char *sha1, const char **ignore_packed)
 
 int has_sha1_file(const unsigned char *sha1)
 {
-	struct stat st;
 	struct pack_entry e;
 
 	if (find_pack_entry(sha1, &e, NULL))
 		return 1;
-	return find_sha1_file(sha1, &st) ? 1 : 0;
+	return has_loose_object(sha1);
 }
 
 int index_pipe(unsigned char *sha1, int fd, const char *type, int write_object)
@@ -2437,16 +2373,10 @@ int index_path(unsigned char *sha1, const char *path, struct stat *st, int write
 
 int read_pack_header(int fd, struct pack_header *header)
 {
-	char *c = (char*)header;
-	ssize_t remaining = sizeof(struct pack_header);
-	do {
-		ssize_t r = xread(fd, c, remaining);
-		if (r <= 0)
-			/* "eof before pack header was fully read" */
-			return PH_ERROR_EOF;
-		remaining -= r;
-		c += r;
-	} while (remaining > 0);
+	if (read_in_full(fd, header, sizeof(*header)) < sizeof(*header))
+		/* "eof before pack header was fully read" */
+		return PH_ERROR_EOF;
+
 	if (header->hdr_signature != htonl(PACK_SIGNATURE))
 		/* "protocol error (pack signature mismatch detected)" */
 		return PH_ERROR_PACK_SIGNATURE;

@@ -9,6 +9,7 @@
 #include "revision.h"
 #include "exec_cmd.h"
 #include "remote.h"
+#include "list-objects.h"
 
 #include <expat.h>
 
@@ -1349,6 +1350,24 @@ static int unlock_remote(struct remote_lock *lock)
 	return rc;
 }
 
+static void remove_locks(void)
+{
+	struct remote_lock *lock = remote->locks;
+
+	fprintf(stderr, "Removing remote locks...\n");
+	while (lock) {
+		unlock_remote(lock);
+		lock = lock->next;
+	}
+}
+
+static void remove_locks_on_signal(int signo)
+{
+	remove_locks();
+	signal(signo, SIG_DFL);
+	raise(signo);
+}
+
 static void remote_ls(const char *path, int flags,
 		      void (*userFunc)(struct remote_ls_ctx *ls),
 		      void *userData);
@@ -1759,15 +1778,15 @@ static int one_local_ref(const char *refname, const unsigned char *sha1, int fla
 static void one_remote_ref(char *refname)
 {
 	struct ref *ref;
-	unsigned char remote_sha1[20];
 	struct object *obj;
-	int len = strlen(refname) + 1;
 
-	if (http_fetch_ref(remote->url, refname + 5 /* "refs/" */,
-			   remote_sha1) != 0) {
+	ref = alloc_ref_from_str(refname);
+
+	if (http_fetch_ref(remote->url, ref) != 0) {
 		fprintf(stderr,
 			"Unable to fetch ref %s from %s\n",
 			refname, remote->url);
+		free(ref);
 		return;
 	}
 
@@ -1775,18 +1794,15 @@ static void one_remote_ref(char *refname)
 	 * Fetch a copy of the object if it doesn't exist locally - it
 	 * may be required for updating server info later.
 	 */
-	if (remote->can_update_info_refs && !has_sha1_file(remote_sha1)) {
-		obj = lookup_unknown_object(remote_sha1);
+	if (remote->can_update_info_refs && !has_sha1_file(ref->old_sha1)) {
+		obj = lookup_unknown_object(ref->old_sha1);
 		if (obj) {
 			fprintf(stderr,	"  fetch %s for %s\n",
-				sha1_to_hex(remote_sha1), refname);
+				sha1_to_hex(ref->old_sha1), refname);
 			add_fetch_request(obj);
 		}
 	}
 
-	ref = xcalloc(1, sizeof(*ref) + len);
-	hashcpy(ref->old_sha1, remote_sha1);
-	memcpy(ref->name, refname, len);
 	*remote_tail = ref;
 	remote_tail = &ref->next;
 }
@@ -1863,61 +1879,39 @@ static int ref_newer(const unsigned char *new_sha1,
 	return found;
 }
 
-static void mark_edge_parents_uninteresting(struct commit *commit)
-{
-	struct commit_list *parents;
-
-	for (parents = commit->parents; parents; parents = parents->next) {
-		struct commit *parent = parents->item;
-		if (!(parent->object.flags & UNINTERESTING))
-			continue;
-		mark_tree_uninteresting(parent->tree);
-	}
-}
-
-static void mark_edges_uninteresting(struct commit_list *list)
-{
-	for ( ; list; list = list->next) {
-		struct commit *commit = list->item;
-
-		if (commit->object.flags & UNINTERESTING) {
-			mark_tree_uninteresting(commit->tree);
-			continue;
-		}
-		mark_edge_parents_uninteresting(commit);
-	}
-}
-
 static void add_remote_info_ref(struct remote_ls_ctx *ls)
 {
 	struct strbuf *buf = (struct strbuf *)ls->userData;
-	unsigned char remote_sha1[20];
 	struct object *o;
 	int len;
 	char *ref_info;
+	struct ref *ref;
 
-	if (http_fetch_ref(remote->url, ls->dentry_name + 5 /* "refs/" */,
-			   remote_sha1) != 0) {
+	ref = alloc_ref_from_str(ls->dentry_name);
+
+	if (http_fetch_ref(remote->url, ref) != 0) {
 		fprintf(stderr,
 			"Unable to fetch ref %s from %s\n",
 			ls->dentry_name, remote->url);
 		aborted = 1;
+		free(ref);
 		return;
 	}
 
-	o = parse_object(remote_sha1);
+	o = parse_object(ref->old_sha1);
 	if (!o) {
 		fprintf(stderr,
 			"Unable to parse object %s for remote ref %s\n",
-			sha1_to_hex(remote_sha1), ls->dentry_name);
+			sha1_to_hex(ref->old_sha1), ls->dentry_name);
 		aborted = 1;
+		free(ref);
 		return;
 	}
 
 	len = strlen(ls->dentry_name) + 42;
 	ref_info = xcalloc(len + 1, 1);
 	sprintf(ref_info, "%s	%s\n",
-		sha1_to_hex(remote_sha1), ls->dentry_name);
+		sha1_to_hex(ref->old_sha1), ls->dentry_name);
 	fwrite_buffer(ref_info, 1, len, buf);
 	free(ref_info);
 
@@ -1932,6 +1926,7 @@ static void add_remote_info_ref(struct remote_ls_ctx *ls)
 			free(ref_info);
 		}
 	}
+	free(ref);
 }
 
 static void update_remote_info_refs(struct remote_lock *lock)
@@ -2255,6 +2250,11 @@ int main(int argc, char **argv)
 		goto cleanup;
 	}
 
+	signal(SIGINT, remove_locks_on_signal);
+	signal(SIGHUP, remove_locks_on_signal);
+	signal(SIGQUIT, remove_locks_on_signal);
+	signal(SIGTERM, remove_locks_on_signal);
+
 	/* Check whether the remote has server info files */
 	remote->can_update_info_refs = 0;
 	remote->has_info_refs = remote_exists("info/refs");
@@ -2384,6 +2384,7 @@ int main(int argc, char **argv)
 		}
 		init_revisions(&revs, setup_git_directory());
 		setup_revisions(commit_argc, commit_argv, &revs, NULL);
+		revs.edge_hint = 0; /* just in case */
 		free(new_sha1_hex);
 		if (old_sha1_hex) {
 			free(old_sha1_hex);
@@ -2394,7 +2395,7 @@ int main(int argc, char **argv)
 		pushing = 0;
 		if (prepare_revision_walk(&revs))
 			die("revision walk setup failed");
-		mark_edges_uninteresting(revs.commits);
+		mark_edges_uninteresting(revs.commits, &revs, NULL);
 		objects_to_send = get_delta(&revs, ref_lock);
 		finish_all_active_slots();
 

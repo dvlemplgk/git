@@ -47,6 +47,7 @@ static enum {
 
 static char *logfile, *force_author, *template_file;
 static char *edit_message, *use_message;
+static char *author_name, *author_email, *author_date;
 static int all, edit_flag, also, interactive, only, amend, signoff;
 static int quiet, verbose, untracked_files, no_verify, allow_empty;
 /*
@@ -175,10 +176,13 @@ static void add_remove_files(struct path_list *list)
 {
 	int i;
 	for (i = 0; i < list->nr; i++) {
+		struct stat st;
 		struct path_list_item *p = &(list->items[i]);
-		if (file_exists(p->path))
-			add_file_to_cache(p->path, 0);
-		else
+
+		if (!lstat(p->path, &st)) {
+			if (add_to_cache(p->path, &st, 0))
+				die("updating files failed");
+		} else
 			remove_file_from_cache(p->path);
 	}
 }
@@ -245,7 +249,7 @@ static char *prepare_index(int argc, const char **argv, const char *prefix)
 	 */
 	if (all || (also && pathspec && *pathspec)) {
 		int fd = hold_locked_index(&index_lock, 1);
-		add_files_to_cache(0, also ? prefix : NULL, pathspec);
+		add_files_to_cache(also ? prefix : NULL, pathspec, 0);
 		refresh_cache(REFRESH_QUIET);
 		if (write_cache(fd, active_cache, active_nr) ||
 		    close_lock_file(&index_lock))
@@ -397,6 +401,47 @@ static int is_a_merge(const unsigned char *sha1)
 
 static const char sign_off_header[] = "Signed-off-by: ";
 
+static void determine_author_info(void)
+{
+	char *name, *email, *date;
+
+	name = getenv("GIT_AUTHOR_NAME");
+	email = getenv("GIT_AUTHOR_EMAIL");
+	date = getenv("GIT_AUTHOR_DATE");
+
+	if (use_message) {
+		const char *a, *lb, *rb, *eol;
+
+		a = strstr(use_message_buffer, "\nauthor ");
+		if (!a)
+			die("invalid commit: %s", use_message);
+
+		lb = strstr(a + 8, " <");
+		rb = strstr(a + 8, "> ");
+		eol = strchr(a + 8, '\n');
+		if (!lb || !rb || !eol)
+			die("invalid commit: %s", use_message);
+
+		name = xstrndup(a + 8, lb - (a + 8));
+		email = xstrndup(lb + 2, rb - (lb + 2));
+		date = xstrndup(rb + 2, eol - (rb + 2));
+	}
+
+	if (force_author) {
+		const char *lb = strstr(force_author, " <");
+		const char *rb = strchr(force_author, '>');
+
+		if (!lb || !rb)
+			die("malformed --author parameter");
+		name = xstrndup(force_author, lb - force_author);
+		email = xstrndup(lb + 2, rb - (lb + 2));
+	}
+
+	author_name = name;
+	author_email = email;
+	author_date = date;
+}
+
 static int prepare_to_commit(const char *index_file, const char *prefix)
 {
 	struct stat statbuf;
@@ -406,6 +451,7 @@ static int prepare_to_commit(const char *index_file, const char *prefix)
 	FILE *fp;
 	const char *hook_arg1 = NULL;
 	const char *hook_arg2 = NULL;
+	int ident_shown = 0;
 
 	if (!no_verify && run_hook(index_file, "pre-commit", NULL))
 		return 0;
@@ -485,7 +531,14 @@ static int prepare_to_commit(const char *index_file, const char *prefix)
 
 	strbuf_release(&sb);
 
+	determine_author_info();
+
+	/* This checks if committer ident is explicitly given */
+	git_committer_info(0);
 	if (use_editor) {
+		char *author_ident;
+		const char *committer_ident;
+
 		if (in_merge)
 			fprintf(fp,
 				"#\n"
@@ -507,6 +560,27 @@ static int prepare_to_commit(const char *index_file, const char *prefix)
 				"# You can remove them yourself if you want to)\n");
 		if (only_include_assumed)
 			fprintf(fp, "# %s\n", only_include_assumed);
+
+		author_ident = xstrdup(fmt_name(author_name, author_email));
+		committer_ident = fmt_name(getenv("GIT_COMMITTER_NAME"),
+					   getenv("GIT_COMMITTER_EMAIL"));
+		if (strcmp(author_ident, committer_ident))
+			fprintf(fp,
+				"%s"
+				"# Author:    %s\n",
+				ident_shown++ ? "" : "#\n",
+				author_ident);
+		free(author_ident);
+
+		if (!user_ident_explicitly_given)
+			fprintf(fp,
+				"%s"
+				"# Committer: %s\n",
+				ident_shown++ ? "" : "#\n",
+				committer_ident);
+
+		if (ident_shown)
+			fprintf(fp, "#\n");
 
 		saved_color_setting = wt_status_use_color;
 		wt_status_use_color = 0;
@@ -624,45 +698,6 @@ static int message_is_empty(struct strbuf *sb, int start)
 	return 1;
 }
 
-static void determine_author_info(struct strbuf *sb)
-{
-	char *name, *email, *date;
-
-	name = getenv("GIT_AUTHOR_NAME");
-	email = getenv("GIT_AUTHOR_EMAIL");
-	date = getenv("GIT_AUTHOR_DATE");
-
-	if (use_message) {
-		const char *a, *lb, *rb, *eol;
-
-		a = strstr(use_message_buffer, "\nauthor ");
-		if (!a)
-			die("invalid commit: %s", use_message);
-
-		lb = strstr(a + 8, " <");
-		rb = strstr(a + 8, "> ");
-		eol = strchr(a + 8, '\n');
-		if (!lb || !rb || !eol)
-			die("invalid commit: %s", use_message);
-
-		name = xstrndup(a + 8, lb - (a + 8));
-		email = xstrndup(lb + 2, rb - (lb + 2));
-		date = xstrndup(rb + 2, eol - (rb + 2));
-	}
-
-	if (force_author) {
-		const char *lb = strstr(force_author, " <");
-		const char *rb = strchr(force_author, '>');
-
-		if (!lb || !rb)
-			die("malformed --author parameter");
-		name = xstrndup(force_author, lb - force_author);
-		email = xstrndup(lb + 2, rb - (lb + 2));
-	}
-
-	strbuf_addf(sb, "author %s\n", fmt_ident(name, email, date, IDENT_ERROR_ON_NO_NAME));
-}
-
 static int parse_and_validate_options(int argc, const char *argv[],
 				      const char * const usage[])
 {
@@ -747,10 +782,8 @@ static int parse_and_validate_options(int argc, const char *argv[],
 		die("No paths with --include/--only does not make sense.");
 	if (argc == 0 && only && amend)
 		only_include_assumed = "Clever... amending the last one with dirty index.";
-	if (argc > 0 && !also && !only) {
+	if (argc > 0 && !also && !only)
 		only_include_assumed = "Explicit paths specified without -i nor -o; assuming --only paths...";
-		also = 0;
-	}
 	if (!cleanup_arg || !strcmp(cleanup_arg, "default"))
 		cleanup_mode = use_editor ? CLEANUP_ALL : CLEANUP_SPACE;
 	else if (!strcmp(cleanup_arg, "verbatim"))
@@ -775,7 +808,7 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 	const char *index_file;
 	int commitable;
 
-	git_config(git_status_config);
+	git_config(git_status_config, NULL);
 
 	if (wt_status_use_color == -1)
 		wt_status_use_color = git_use_color_default;
@@ -812,7 +845,7 @@ static void print_summary(const char *prefix, const unsigned char *sha1)
 
 	rev.verbose_header = 1;
 	rev.show_root_diff = 1;
-	rev.commit_format = get_commit_format("format:%h: %s");
+	get_commit_format("format:%h: %s", &rev);
 	rev.always_show_header = 0;
 	rev.diffopt.detect_rename = 1;
 	rev.diffopt.rename_limit = 100;
@@ -829,7 +862,7 @@ static void print_summary(const char *prefix, const unsigned char *sha1)
 	}
 }
 
-int git_commit_config(const char *k, const char *v)
+int git_commit_config(const char *k, const char *v, void *cb)
 {
 	if (!strcmp(k, "commit.template")) {
 		if (!v)
@@ -838,7 +871,7 @@ int git_commit_config(const char *k, const char *v)
 		return 0;
 	}
 
-	return git_status_config(k, v);
+	return git_status_config(k, v, cb);
 }
 
 static const char commit_utf8_warn[] =
@@ -850,10 +883,19 @@ static void add_parent(struct strbuf *sb, const unsigned char *sha1)
 {
 	struct object *obj = parse_object(sha1);
 	const char *parent = sha1_to_hex(sha1);
+	const char *cp;
+
 	if (!obj)
 		die("Unable to find commit parent %s", parent);
 	if (obj->type != OBJ_COMMIT)
 		die("Parent %s isn't a proper commit", parent);
+
+	for (cp = sb->buf; cp && (cp = strstr(cp, "\nparent ")); cp += 8) {
+		if (!memcmp(cp + 8, parent, 40) && cp[48] == '\n') {
+			error("duplicate parent %s ignored", parent);
+			return;
+		}
+	}
 	strbuf_addf(sb, "parent %s\n", parent);
 }
 
@@ -866,7 +908,7 @@ int cmd_commit(int argc, const char **argv, const char *prefix)
 	unsigned char commit_sha1[20];
 	struct ref_lock *ref_lock;
 
-	git_config(git_commit_config);
+	git_config(git_commit_config, NULL);
 
 	argc = parse_and_validate_options(argc, argv, builtin_commit_usage);
 
@@ -924,7 +966,8 @@ int cmd_commit(int argc, const char **argv, const char *prefix)
 		strbuf_addf(&sb, "parent %s\n", sha1_to_hex(head_sha1));
 	}
 
-	determine_author_info(&sb);
+	strbuf_addf(&sb, "author %s\n",
+		    fmt_ident(author_name, author_email, author_date, IDENT_ERROR_ON_NO_NAME));
 	strbuf_addf(&sb, "committer %s\n", git_committer_info(IDENT_ERROR_ON_NO_NAME));
 	if (!is_encoding_utf8(git_commit_encoding))
 		strbuf_addf(&sb, "encoding %s\n", git_commit_encoding);

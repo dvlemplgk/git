@@ -205,10 +205,13 @@ Can be overridden by the 'GIT_PROXY_COMMAND' environment variable
 handling).
 
 core.ignoreStat::
-	The working copy files are assumed to stay unchanged until you
-	mark them otherwise manually - Git will not detect the file changes
-	by lstat() calls. This is useful on systems where those are very
-	slow, such as Microsoft Windows.  See linkgit:git-update-index[1].
+	If true, commands which modify both the working tree and the index
+	will mark the updated paths with the "assume unchanged" bit in the
+	index. These marked files are then assumed to stay unchanged in the
+	working copy, until you	mark them otherwise manually - Git will not
+	detect the file changes	by lstat() calls. This is useful on systems
+	where those are very slow, such as Microsoft Windows.
+	See linkgit:git-update-index[1].
 	False by default.
 
 core.preferSymlinkRefs::
@@ -234,7 +237,13 @@ core.worktree::
 	used in combination with repositories found automatically in
 	a .git directory (i.e. $GIT_DIR is not set).
 	This can be overridden by the GIT_WORK_TREE environment
-	variable and the '--work-tree' command line option.
+	variable and the '--work-tree' command line option. It can be
+	a absolute path or relative path to the directory specified by
+	--git-dir or GIT_DIR.
+	Note: If --git-dir or GIT_DIR are specified but none of
+	--work-tree, GIT_WORK_TREE and core.worktree is specified,
+	the current working directory is regarded as the top directory
+	of your working tree.
 
 core.logAllRefUpdates::
 	Enable the reflog. Updates to a ref <ref> is logged to the file
@@ -261,7 +270,12 @@ core.sharedRepository::
 	group-writable). When 'all' (or 'world' or 'everybody'), the
 	repository will be readable by all users, additionally to being
 	group-shareable. When 'umask' (or 'false'), git will use permissions
-	reported by umask(2). See linkgit:git-init[1]. False by default.
+	reported by umask(2). When '0xxx', where '0xxx' is an octal number,
+	files in the repository will have this mode value. '0xxx' will override
+	user's umask value, and thus, users with a safe umask (0077) can use
+	this option. Examples: '0660' is equivalent to 'group'. '0640' is a
+	repository that is group-readable but not group-writable.
+	See linkgit:git-init[1]. False by default.
 
 core.warnAmbiguousRefs::
 	If true, git will warn you if the ref name you passed it is ambiguous
@@ -388,6 +402,21 @@ branch.autosetupmerge::
 	done when the starting point is either a local branch or remote
 	branch. This option defaults to true.
 
+branch.autosetuprebase::
+	When a new branch is created with `git-branch` or `git-checkout`
+	that tracks another branch, this variable tells git to set
+	up pull to rebase instead of merge (see "branch.<name>.rebase").
+	When `never`, rebase is never automatically set to true.
+	When `local`, rebase is set to true for tracked branches of
+	other local branches.
+	When `remote`, rebase is set to true for tracked branches of
+	remote branches.
+	When `always`, rebase will be set to true for all tracking
+	branches.
+	See "branch.autosetupmerge" for details on how to set up a
+	branch to track another branch.
+	This option defaults to never.
+
 branch.<name>.remote::
 	When in branch <name>, it tells `git fetch` which remote to fetch.
 	If this option is not given, `git fetch` defaults to remote "origin".
@@ -497,8 +526,10 @@ color.status.<slot>::
 	one of `header` (the header text of the status message),
 	`added` or `updated` (files which are added but not committed),
 	`changed` (files which are changed but not added in the index),
-	or `untracked` (files which are not tracked by git). The values of
-	these variables may be specified as in color.branch.<slot>.
+	`untracked` (files which are not tracked by git), or
+	`nobranch` (the color the 'no branch' warning is shown in, defaulting
+	to red). The values of these variables may be specified as in
+	color.branch.<slot>.
 
 commit.template::
 	Specify a file to use as the template for new commit messages.
@@ -634,11 +665,24 @@ gitcvs.logfile::
 	Path to a log file where the CVS server interface well... logs
 	various stuff. See linkgit:git-cvsserver[1].
 
+gitcvs.usecrlfattr
+	If true, the server will look up the `crlf` attribute for
+	files to determine the '-k' modes to use. If `crlf` is set,
+	the '-k' mode will be left blank, so cvs clients will
+	treat it as text. If `crlf` is explicitly unset, the file
+	will be set with '-kb' mode, which supresses any newline munging
+	the client might otherwise do. If `crlf` is not specified,
+	then 'gitcvs.allbinary' is used. See linkgit:gitattribute[5].
+
 gitcvs.allbinary::
-	If true, all files are sent to the client in mode '-kb'. This
-	causes the client to treat all files as binary files which suppresses
-	any newline munging it otherwise might do. A work-around for the
-	fact that there is no way yet to set single files to mode '-kb'.
+	This is used if 'gitcvs.usecrlfattr' does not resolve
+	the correct '-kb' mode to use. If true, all
+	unresolved files are sent to the client in
+	mode '-kb'. This causes the client to treat them
+	as binary files, which suppresses any newline munging it
+	otherwise might do. Alternatively, if it is set to "guess",
+	then the contents of the file are examined to decide if
+	it is binary, similar to 'core.autocrlf'.
 
 gitcvs.dbname::
 	Database used by git-cvsserver to cache revision information
@@ -669,10 +713,41 @@ gitcvs.dbTableNamePrefix::
 	linkgit:git-cvsserver[1] for details).  Any non-alphabetic
 	characters will be replaced with underscores.
 
-All gitcvs variables except for 'gitcvs.allbinary' can also be
-specified as 'gitcvs.<access_method>.<varname>' (where 'access_method'
+All gitcvs variables except for 'gitcvs.usecrlfattr' and
+'gitcvs.allbinary' can also be specified as
+'gitcvs.<access_method>.<varname>' (where 'access_method'
 is one of "ext" and "pserver") to make them apply only for the given
 access method.
+
+gui.commitmsgwidth::
+	Defines how wide the commit message window is in the
+	linkgit:git-gui[1]. "75" is the default.
+
+gui.diffcontext::
+	Specifies how many context lines should be used in calls to diff
+	made by the linkgit:git-gui[1]. The default is "5".
+
+gui.matchtrackingbranch::
+	Determines if new branches created with linkgit:git-gui[1] should
+	default to tracking remote branches with matching names or
+	not. Default: "false".
+
+gui.newbranchtemplate::
+	Is used as suggested name when creating new branches using the
+	linkgit:git-gui[1].
+
+gui.pruneduringfetch::
+	"true" if linkgit:git-gui[1] should prune tracking branches when
+	performing a fetch. The default value is "false".
+
+gui.trustmtime::
+	Determines if linkgit:git-gui[1] should trust the file modification
+	timestamp or not. By default the timestamps are not trusted.
+
+gui.spellingdictionary::
+	Specifies the dictionary used for spell checking commit messages in
+	the linkgit:git-gui[1]. When set to "none" spell checking is turned
+	off.
 
 help.browser::
 	Specify the browser that will be used to display help in the
@@ -759,6 +834,12 @@ instaweb.port::
 	The port number to bind the gitweb httpd to. See
 	linkgit:git-instaweb[1].
 
+log.date::
+	Set default date-time mode for the log command. Setting log.date
+	value is similar to using git log's --date option. The value is one of
+	following alternatives: {relative,local,default,iso,rfc,short}.
+	See linkgit:git-log[1].
+
 log.showroot::
 	If true, the initial commit will be shown as a big creation event.
 	This is equivalent to a diff against an empty tree.
@@ -769,37 +850,16 @@ man.viewer::
 	Specify the programs that may be used to display help in the
 	'man' format. See linkgit:git-help[1].
 
-merge.summary::
-	Whether to include summaries of merged commits in newly created
-	merge commit messages. False by default.
+include::merge-config.txt[]
 
-merge.tool::
-	Controls which merge resolution program is used by
-	linkgit:git-mergetool[1].  Valid built-in values are: "kdiff3",
-	"tkdiff", "meld", "xxdiff", "emerge", "vimdiff", "gvimdiff", and
-	"opendiff".  Any other value is treated is custom merge tool
-	and there must be a corresponing mergetool.<tool>.cmd option.
+man.<tool>.cmd::
+	Specify the command to invoke the specified man viewer. The
+	specified command is evaluated in shell with the man page
+	passed as argument. (See linkgit:git-help[1].)
 
-merge.verbosity::
-	Controls the amount of output shown by the recursive merge
-	strategy.  Level 0 outputs nothing except a final error
-	message if conflicts were detected. Level 1 outputs only
-	conflicts, 2 outputs conflicts and file changes.  Level 5 and
-	above outputs debugging information.  The default is level 2.
-	Can be overridden by 'GIT_MERGE_VERBOSITY' environment variable.
-
-merge.<driver>.name::
-	Defines a human readable name for a custom low-level
-	merge driver.  See linkgit:gitattributes[5] for details.
-
-merge.<driver>.driver::
-	Defines the command that implements a custom low-level
-	merge driver.  See linkgit:gitattributes[5] for details.
-
-merge.<driver>.recursive::
-	Names a low-level merge driver to be used when
-	performing an internal merge between common ancestors.
-	See linkgit:gitattributes[5] for details.
+man.<tool>.path::
+	Override the path for the given tool that may be used to
+	display help in the 'man' format. See linkgit:git-help[1].
 
 mergetool.<tool>.path::
 	Override the path for the given tool.  This is useful in case
@@ -911,6 +971,10 @@ remote.<name>.push::
 	The default set of "refspec" for linkgit:git-push[1]. See
 	linkgit:git-push[1].
 
+remote.<name>.mirror::
+	If true, pushing to this remote will automatically behave
+	as if the `\--mirror` option was given on the command line.
+
 remote.<name>.skipDefaultUpdate::
 	If true, this remote will be skipped by default when updating
 	using the update subcommand of linkgit:git-remote[1].
@@ -991,6 +1055,12 @@ whatchanged.difftree::
 imap::
 	The configuration variables in the 'imap' section are described
 	in linkgit:git-imap-send[1].
+
+receive.fsckObjects::
+	If it is set to true, git-receive-pack will check all received
+	objects. It will abort in the case of a malformed object or a
+	broken link. The result of an abort are only dangling objects.
+	Defaults to false.
 
 receive.unpackLimit::
 	If the number of objects received in a push is below this

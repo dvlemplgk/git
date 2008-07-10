@@ -5,7 +5,7 @@
 # Copyright (c) 2007 Lars Hjemli
 
 USAGE="[--quiet] [--cached] \
-[add <repo> [-b branch]|status|init|update|summary [-n|--summary-limit <n>] [<commit>]] \
+[add <repo> [-b branch]|status|init|update [-i|--init]|summary [-n|--summary-limit <n>] [<commit>]] \
 [--] [<path>...]"
 OPTIONS_SPEC=
 . git-sh-setup
@@ -45,8 +45,8 @@ resolve_relative_url ()
 	branch="$(git symbolic-ref HEAD 2>/dev/null)"
 	remote="$(git config branch.${branch#refs/heads/}.remote)"
 	remote="${remote:-origin}"
-	remoteurl="$(git config remote.$remote.url)" ||
-		die "remote ($remote) does not have a url in .git/config"
+	remoteurl=$(git config "remote.$remote.url") ||
+		die "remote ($remote) does not have a url defined in .git/config"
 	url="$1"
 	while test -n "$url"
 	do
@@ -73,9 +73,8 @@ resolve_relative_url ()
 module_name()
 {
 	# Do we have "submodule.<something>.path = $1" defined in .gitmodules file?
-	re=$(printf '%s' "$1" | sed -e 's/[].[^$\\*]/\\&/g')
-	name=$( GIT_CONFIG=.gitmodules \
-		git config --get-regexp '^submodule\..*\.path$' |
+	re=$(printf '%s\n' "$1" | sed -e 's/[].[^$\\*]/\\&/g')
+	name=$( git config -f .gitmodules --get-regexp '^submodule\..*\.path$' |
 		sed -n -e 's|^submodule\.\(.*\)\.path '"$re"'$|\1|p' )
        test -z "$name" &&
        die "No submodule mapping found in .gitmodules for path '$path'"
@@ -179,7 +178,8 @@ cmd_add()
 		case "$repo" in
 		./*|../*)
 			# dereference source url relative to parent's url
-			realrepo="$(resolve_relative_url $repo)" ;;
+			realrepo=$(resolve_relative_url "$repo") || exit
+			;;
 		*)
 			# Turn the source into an absolute path if
 			# it is local
@@ -198,8 +198,8 @@ cmd_add()
 	git add "$path" ||
 	die "Failed to add submodule '$path'"
 
-	GIT_CONFIG=.gitmodules git config submodule."$path".path "$path" &&
-	GIT_CONFIG=.gitmodules git config submodule."$path".url "$repo" &&
+	git config -f .gitmodules submodule."$path".path "$path" &&
+	git config -f .gitmodules submodule."$path".url "$repo" &&
 	git add .gitmodules ||
 	die "Failed to register submodule '$path'"
 }
@@ -240,14 +240,14 @@ cmd_init()
 		url=$(git config submodule."$name".url)
 		test -z "$url" || continue
 
-		url=$(GIT_CONFIG=.gitmodules git config submodule."$name".url)
+		url=$(git config -f .gitmodules submodule."$name".url)
 		test -z "$url" &&
 		die "No url found for submodule path '$path' in .gitmodules"
 
 		# Possibly a url relative to parent
 		case "$url" in
 		./*|../*)
-			url="$(resolve_relative_url "$url")"
+			url=$(resolve_relative_url "$url") || exit
 			;;
 		esac
 
@@ -271,6 +271,10 @@ cmd_update()
 		case "$1" in
 		-q|--quiet)
 			quiet=1
+			;;
+		-i|--init)
+			shift
+			cmd_init "$@" || return
 			;;
 		--)
 			shift
@@ -297,10 +301,11 @@ cmd_update()
 			# path have been specified
 			test "$#" != "0" &&
 			say "Submodule path '$path' not initialized"
+			say "Maybe you want to use 'update --init'?"
 			continue
 		fi
 
-		if ! test -d "$path"/.git
+		if ! test -d "$path"/.git -o -f "$path"/.git
 		then
 			module_clone "$path" "$url" || exit
 			subsha1=
@@ -343,6 +348,7 @@ set_name_rev () {
 #
 cmd_summary() {
 	summary_limit=-1
+	for_status=
 
 	# parse $args after "submodule ... summary".
 	while test $# -ne 0
@@ -350,6 +356,9 @@ cmd_summary() {
 		case "$1" in
 		--cached)
 			cached="$1"
+			;;
+		--for-status)
+			for_status="$1"
 			;;
 		-n|--summary-limit)
 			if summary_limit=$(($2 + 0)) 2>/dev/null && test "$summary_limit" = "$2"
@@ -398,7 +407,8 @@ cmd_summary() {
 		done
 	)
 
-	test -n "$modules" &&
+	test -z "$modules" && return
+
 	git diff-index $cached --raw $head -- $modules |
 	grep -e '^:160000' -e '^:[0-7]* 160000' |
 	cut -c2- |
@@ -500,7 +510,14 @@ cmd_summary() {
 			echo
 		fi
 		echo
-	done
+	done |
+	if test -n "$for_status"; then
+		echo "# Modified submodules:"
+		echo "#"
+		sed -e 's|^|# |' -e 's|^# $|#|'
+	else
+		cat
+	fi
 }
 #
 # List all submodules, prefixed with:
@@ -543,7 +560,7 @@ cmd_status()
 	do
 		name=$(module_name "$path") || exit
 		url=$(git config submodule."$name".url)
-		if test -z "$url" || ! test -d "$path"/.git
+		if test -z "$url" || ! test -d "$path"/.git -o -f "$path"/.git
 		then
 			say "-$sha1 $path"
 			continue;

@@ -15,6 +15,7 @@ SYNOPSIS
 	     [--cacheinfo <mode> <object> <file>]\*
 	     [--chmod=(+|-)x]
 	     [--assume-unchanged | --no-assume-unchanged]
+	     [--ignore-submodules]
 	     [--really-refresh] [--unresolve] [--again | -g]
 	     [--info-only] [--index-info]
 	     [-z] [--stdin]
@@ -54,6 +55,10 @@ OPTIONS
         default behavior is to error out.  This option makes
         git-update-index continue anyway.
 
+--ignore-submodules:
+	Do not try to update submodules.  This option is only respected
+	when passed before --refresh.
+
 --unmerged::
         If --refresh finds unmerged changes in the index, the default
         behavior is to error out.  This option makes git-update-index
@@ -71,7 +76,8 @@ OPTIONS
 --chmod=(+|-)x::
         Set the execute permissions on the updated files.
 
---assume-unchanged, --no-assume-unchanged::
+--assume-unchanged::
+--no-assume-unchanged::
 	When these flags are specified, the object name recorded
 	for the paths are not updated.  Instead, these options
 	sets and unsets the "assume unchanged" bit for the
@@ -83,7 +89,8 @@ OPTIONS
 	filesystem that has very slow lstat(2) system call
 	(e.g. cifs).
 
---again, -g::
+-g::
+--again::
 	Runs `git-update-index` itself on the paths whose index
 	entries are different from those from the `HEAD` commit.
 
@@ -307,7 +314,7 @@ The command looks at `core.ignorestat` configuration variable.  See
 'Using "assume unchanged" bit' section above.
 
 
-See Also
+SEE ALSO
 --------
 linkgit:git-config[1],
 linkgit:git-add[1]
@@ -323,4 +330,4 @@ Documentation by David Greaves, Junio C Hamano and the git-list <git@vger.kernel
 
 GIT
 ---
-Part of the linkgit:git[7] suite
+Part of the linkgit:git[1] suite

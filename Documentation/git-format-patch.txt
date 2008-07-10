@@ -74,14 +74,17 @@ include::diff-options.txt[]
 -<n>::
 	Limits the number of patches to prepare.
 
--o|--output-directory <dir>::
+-o <dir>::
+--output-directory <dir>::
 	Use <dir> to store the resulting files, instead of the
 	current working directory.
 
--n|--numbered::
+-n::
+--numbered::
 	Name output in '[PATCH n/m]' format.
 
--N|--no-numbered::
+-N::
+--no-numbered::
 	Name output in '[PATCH]' format.
 
 --start-number <n>::
@@ -92,11 +95,13 @@ include::diff-options.txt[]
 	without the default first line of the commit appended.
 	Mutually exclusive with the --stdout option.
 
--k|--keep-subject::
+-k::
+--keep-subject::
 	Do not strip/add '[PATCH]' from the first line of the
 	commit log message.
 
--s|--signoff::
+-s::
+--signoff::
 	Add `Signed-off-by:` line to the commit message, using
 	the committer identity of yourself.
 
@@ -156,6 +161,12 @@ want a filename like `0001-description-of-my-change.patch`, and
 the first letter does not have to be a dot.  Leaving it empty would
 not add any suffix.
 
+--no-binary::
+	Don't output contents of changes in binary files, just take note
+	that they differ.  Note that this disable the patch to be properly
+	applied.  By default the contents of changes in those files are
+	encoded in the patch.
+
 CONFIGURATION
 -------------
 You can specify extra mail header lines to be added to each message
@@ -168,40 +179,56 @@ and file suffix, and number patches when outputting more than one.
         subjectprefix = CHANGE
         suffix = .txt
         numbered = auto
+	cc = <email>
 ------------
 
 
 EXAMPLES
 --------
 
-git-format-patch -k --stdout R1..R2 | git-am -3 -k::
-	Extract commits between revisions R1 and R2, and apply
-	them on top of the current branch using `git-am` to
-	cherry-pick them.
+* Extract commits between revisions R1 and R2, and apply them on top of
+the current branch using `git-am` to cherry-pick them:
++
+------------
+$ git format-patch -k --stdout R1..R2 | git-am -3 -k
+------------
 
-git-format-patch origin::
-	Extract all commits which are in the current branch but
-	not in the origin branch.  For each commit a separate file
-	is created in the current directory.
+* Extract all commits which are in the current branch but not in the
+origin branch:
++
+------------
+$ git format-patch origin
+------------
++
+For each commit a separate file is created in the current directory.
 
-git-format-patch \--root origin::
-	Extract all commits that lead to 'origin' since the
-	inception of the project.
+* Extract all commits that lead to 'origin' since the inception of the
+project:
++
+------------
+$ git format-patch \--root origin
+------------
 
-git-format-patch -M -B origin::
-	The same as the previous one.  Additionally, it detects
-	and handles renames and complete rewrites intelligently to
-	produce a renaming patch.  A renaming patch reduces the
-	amount of text output, and generally makes it easier to
-	review it.  Note that the "patch" program does not
-	understand renaming patches, so use it only when you know
-	the recipient uses git to apply your patch.
+* The same as the previous one:
++
+------------
+$ git format-patch -M -B origin
+------------
++
+Additionally, it detects and handles renames and complete rewrites
+intelligently to produce a renaming patch.  A renaming patch reduces
+the amount of text output, and generally makes it easier to review it.
+Note that the "patch" program does not understand renaming patches, so
+use it only when you know the recipient uses git to apply your patch.
 
-git-format-patch -3::
-	Extract three topmost commits from the current branch
-	and format them as e-mailable patches.
+* Extract three topmost commits from the current branch and format them
+as e-mailable patches:
++
+------------
+$ git format-patch -3
+------------
 
-See Also
+SEE ALSO
 --------
 linkgit:git-am[1], linkgit:git-send-email[1]
 
@@ -216,4 +243,4 @@ Documentation by Junio C Hamano and the git-list <git@vger.kernel.org>.
 
 GIT
 ---
-Part of the linkgit:git[7] suite
+Part of the linkgit:git[1] suite

@@ -39,7 +39,7 @@
 /* Approximation of the length of the decimal representation of this type. */
 #define decimal_length(x)	((int)(sizeof(x) * 2.56 + 0.5) + 1)
 
-#if !defined(__APPLE__) && !defined(__FreeBSD__)
+#if !defined(__APPLE__) && !defined(__FreeBSD__)  && !defined(__USLC__) && !defined(_M_UNIX)
 #define _XOPEN_SOURCE 600 /* glibc2 and AIX 5.3L need 500, OpenBSD needs 600 for S_ISLNK() */
 #define _XOPEN_SOURCE_EXTENDED 1 /* AIX 5.3L needs this */
 #endif
@@ -206,6 +206,9 @@ void *gitmemmem(const void *haystack, size_t haystacklen,
 #endif
 
 #ifdef FREAD_READS_DIRECTORIES
+#ifdef fopen
+#undef fopen
+#endif
 #define fopen(a,b) git_fopen(a,b)
 extern FILE *git_fopen(const char*, const char*);
 #endif
@@ -268,6 +271,12 @@ static inline void *xmalloc(size_t size)
 	return ret;
 }
 
+/*
+ * xmemdupz() allocates (len + 1) bytes of memory, duplicates "len" bytes of
+ * "data" to the allocated memory, zero terminates the allocated memory,
+ * and returns a pointer to the allocated memory. If the allocation fails,
+ * the program dies.
+ */
 static inline void *xmemdupz(const void *data, size_t len)
 {
 	char *p = xmalloc(len + 1);
@@ -329,6 +338,11 @@ static inline void *xmmap(void *start, size_t length,
 	return ret;
 }
 
+/*
+ * xread() is the same a read(), but it automatically restarts read()
+ * operations with a recoverable error (EAGAIN and EINTR). xread()
+ * DOES NOT GUARANTEE that "len" bytes is read even if the data is available.
+ */
 static inline ssize_t xread(int fd, void *buf, size_t len)
 {
 	ssize_t nr;
@@ -340,6 +354,11 @@ static inline ssize_t xread(int fd, void *buf, size_t len)
 	}
 }
 
+/*
+ * xwrite() is the same a write(), but it automatically restarts write()
+ * operations with a recoverable error (EAGAIN and EINTR). xwrite() DOES NOT
+ * GUARANTEE that "len" bytes is written even if the operation is successful.
+ */
 static inline ssize_t xwrite(int fd, const void *buf, size_t len)
 {
 	ssize_t nr;

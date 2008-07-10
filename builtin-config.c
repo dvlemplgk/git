@@ -3,7 +3,7 @@
 #include "color.h"
 
 static const char git_config_set_usage[] =
-"git-config [ --global | --system | [ -f | --file ] config-file ] [ --bool | --int ] [ -z | --null ] [--get | --get-all | --get-regexp | --replace-all | --add | --unset | --unset-all] name [value [value_regex]] | --rename-section old_name new_name | --remove-section name | --list | --get-color var [default] | --get-colorbool name [stdout-is-tty]";
+"git-config [ --global | --system | [ -f | --file ] config-file ] [ --bool | --int | --bool-or-int ] [ -z | --null ] [--get | --get-all | --get-regexp | --replace-all | --add | --unset | --unset-all] name [value [value_regex]] | --rename-section old_name new_name | --remove-section name | --list | --get-color var [default] | --get-colorbool name [stdout-is-tty]";
 
 static char *key;
 static regex_t *key_regexp;
@@ -16,9 +16,9 @@ static int seen;
 static char delim = '=';
 static char key_delim = ' ';
 static char term = '\n';
-static enum { T_RAW, T_INT, T_BOOL } type = T_RAW;
+static enum { T_RAW, T_INT, T_BOOL, T_BOOL_OR_INT } type = T_RAW;
 
-static int show_all_config(const char *key_, const char *value_)
+static int show_all_config(const char *key_, const char *value_, void *cb)
 {
 	if (value_)
 		printf("%s%c%s%c", key_, delim, value_, term);
@@ -27,7 +27,7 @@ static int show_all_config(const char *key_, const char *value_)
 	return 0;
 }
 
-static int show_config(const char* key_, const char* value_)
+static int show_config(const char* key_, const char* value_, void *cb)
 {
 	char value[256];
 	const char *vptr = value;
@@ -53,6 +53,14 @@ static int show_config(const char* key_, const char* value_)
 		sprintf(value, "%d", git_config_int(key_, value_?value_:""));
 	else if (type == T_BOOL)
 		vptr = git_config_bool(key_, value_) ? "true" : "false";
+	else if (type == T_BOOL_OR_INT) {
+		int is_bool, v;
+		v = git_config_bool_or_int(key_, value_, &is_bool);
+		if (is_bool)
+			vptr = v ? "true" : "false";
+		else
+			sprintf(value, "%d", v);
+	}
 	else
 		vptr = value_?value_:"";
 	seen++;
@@ -113,14 +121,14 @@ static int get_value(const char* key_, const char* regex_)
 	}
 
 	if (do_all && system_wide)
-		git_config_from_file(show_config, system_wide);
+		git_config_from_file(show_config, system_wide, NULL);
 	if (do_all && global)
-		git_config_from_file(show_config, global);
-	git_config_from_file(show_config, local);
+		git_config_from_file(show_config, global, NULL);
+	git_config_from_file(show_config, local, NULL);
 	if (!do_all && !seen && global)
-		git_config_from_file(show_config, global);
+		git_config_from_file(show_config, global, NULL);
 	if (!do_all && !seen && system_wide)
-		git_config_from_file(show_config, system_wide);
+		git_config_from_file(show_config, system_wide, NULL);
 
 	free(key);
 	if (regexp) {
@@ -157,6 +165,14 @@ char *normalize_value(const char *key, const char *value)
 		else if (type == T_BOOL)
 			sprintf(normalized, "%s",
 				git_config_bool(key, value) ? "true" : "false");
+		else if (type == T_BOOL_OR_INT) {
+			int is_bool, v;
+			v = git_config_bool_or_int(key, value, &is_bool);
+			if (!is_bool)
+				sprintf(normalized, "%d", v);
+			else
+				sprintf(normalized, "%s", v ? "true" : "false");
+		}
 	}
 
 	return normalized;
@@ -166,7 +182,7 @@ static int get_color_found;
 static const char *get_color_slot;
 static char parsed_color[COLOR_MAXLEN];
 
-static int git_get_color_config(const char *var, const char *value)
+static int git_get_color_config(const char *var, const char *value, void *cb)
 {
 	if (!strcmp(var, get_color_slot)) {
 		if (!value)
@@ -202,7 +218,7 @@ static int get_color(int argc, const char **argv)
 
 	get_color_found = 0;
 	parsed_color[0] = '\0';
-	git_config(git_get_color_config);
+	git_config(git_get_color_config, NULL);
 
 	if (!get_color_found && def_color)
 		color_parse(def_color, "command line", parsed_color);
@@ -214,7 +230,8 @@ static int get_color(int argc, const char **argv)
 static int stdout_is_tty;
 static int get_colorbool_found;
 static int get_diff_color_found;
-static int git_get_colorbool_config(const char *var, const char *value)
+static int git_get_colorbool_config(const char *var, const char *value,
+		void *cb)
 {
 	if (!strcmp(var, get_color_slot)) {
 		get_colorbool_found =
@@ -223,6 +240,10 @@ static int git_get_colorbool_config(const char *var, const char *value)
 	if (!strcmp(var, "diff.color")) {
 		get_diff_color_found =
 			git_config_colorbool(var, value, stdout_is_tty);
+	}
+	if (!strcmp(var, "color.ui")) {
+		git_use_color_default = git_config_colorbool(var, value, stdout_is_tty);
+		return 0;
 	}
 	return 0;
 }
@@ -245,13 +266,13 @@ static int get_colorbool(int argc, const char **argv)
 	get_colorbool_found = -1;
 	get_diff_color_found = -1;
 	get_color_slot = argv[0];
-	git_config(git_get_colorbool_config);
+	git_config(git_get_colorbool_config, NULL);
 
 	if (get_colorbool_found < 0) {
 		if (!strcmp(get_color_slot, "color.diff"))
 			get_colorbool_found = get_diff_color_found;
 		if (get_colorbool_found < 0)
-			get_colorbool_found = 0;
+			get_colorbool_found = git_use_color_default;
 	}
 
 	if (argc == 1) {
@@ -273,10 +294,13 @@ int cmd_config(int argc, const char **argv, const char *prefix)
 			type = T_INT;
 		else if (!strcmp(argv[1], "--bool"))
 			type = T_BOOL;
+		else if (!strcmp(argv[1], "--bool-or-int"))
+			type = T_BOOL_OR_INT;
 		else if (!strcmp(argv[1], "--list") || !strcmp(argv[1], "-l")) {
 			if (argc != 2)
 				usage(git_config_set_usage);
-			if (git_config(show_all_config) < 0 && file && errno)
+			if (git_config(show_all_config, NULL) < 0 &&
+					file && errno)
 				die("unable to read config file %s: %s", file,
 				    strerror(errno));
 			return 0;

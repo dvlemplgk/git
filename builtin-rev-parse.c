@@ -28,8 +28,6 @@ static int symbolic;
 static int abbrev;
 static int output_sq;
 
-static int revs_count;
-
 /*
  * Some arguments are relevant "revision" arguments,
  * others are about output format or other details.
@@ -110,7 +108,6 @@ static void show_rev(int type, const unsigned char *sha1, const char *name)
 	if (!(filter & DO_REVS))
 		return;
 	def = NULL;
-	revs_count++;
 
 	if (symbolic && name) {
 		if (symbolic == SHOW_SYMBOLIC_FULL) {
@@ -156,7 +153,7 @@ static int show_flag(const char *arg)
 	return 0;
 }
 
-static void show_default(void)
+static int show_default(void)
 {
 	const char *s = def;
 
@@ -166,9 +163,10 @@ static void show_default(void)
 		def = NULL;
 		if (!get_sha1(s, sha1)) {
 			show_rev(NORMAL, sha1, s);
-			return;
+			return 1;
 		}
 	}
+	return 0;
 }
 
 static int show_reference(const char *refname, const unsigned char *sha1, int flag, void *cb_data)
@@ -371,16 +369,25 @@ static int cmd_parseopt(int argc, const char **argv, const char *prefix)
 	return 0;
 }
 
+static void die_no_single_rev(int quiet)
+{
+	if (quiet)
+		exit(1);
+	else
+		die("Needed a single revision");
+}
+
 int cmd_rev_parse(int argc, const char **argv, const char *prefix)
 {
-	int i, as_is = 0, verify = 0;
+	int i, as_is = 0, verify = 0, quiet = 0, revs_count = 0, type = 0;
 	unsigned char sha1[20];
+	const char *name = NULL;
 
 	if (argc > 1 && !strcmp("--parseopt", argv[1]))
 		return cmd_parseopt(argc - 1, argv + 1, prefix);
 
 	prefix = setup_git_directory();
-	git_config(git_default_config);
+	git_config(git_default_config, NULL);
 	for (i = 1; i < argc; i++) {
 		const char *arg = argv[i];
 
@@ -436,6 +443,10 @@ int cmd_rev_parse(int argc, const char **argv, const char *prefix)
 			if (!strcmp(arg, "--verify")) {
 				filter &= ~(DO_FLAGS|DO_NOREV);
 				verify = 1;
+				continue;
+			}
+			if (!strcmp(arg, "--quiet") || !strcmp(arg, "-q")) {
+				quiet = 1;
 				continue;
 			}
 			if (!strcmp(arg, "--short") ||
@@ -555,30 +566,41 @@ int cmd_rev_parse(int argc, const char **argv, const char *prefix)
 				continue;
 			}
 			if (show_flag(arg) && verify)
-				die("Needed a single revision");
+				die_no_single_rev(quiet);
 			continue;
 		}
 
 		/* Not a flag argument */
 		if (try_difference(arg))
 			continue;
-		if (!get_sha1(arg, sha1)) {
-			show_rev(NORMAL, sha1, arg);
+		name = arg;
+		type = NORMAL;
+		if (*arg == '^') {
+			name++;
+			type = REVERSED;
+		}
+		if (!get_sha1(name, sha1)) {
+			if (verify)
+				revs_count++;
+			else
+				show_rev(type, sha1, name);
 			continue;
 		}
-		if (*arg == '^' && !get_sha1(arg+1, sha1)) {
-			show_rev(REVERSED, sha1, arg+1);
-			continue;
-		}
+		if (verify)
+			die_no_single_rev(quiet);
 		as_is = 1;
 		if (!show_file(arg))
 			continue;
-		if (verify)
-			die("Needed a single revision");
 		verify_filename(prefix, arg);
 	}
-	show_default();
-	if (verify && revs_count != 1)
-		die("Needed a single revision");
+	if (verify) {
+		if (revs_count == 1) {
+			show_rev(type, sha1, name);
+			return 0;
+		} else if (revs_count == 0 && show_default())
+			return 0;
+		die_no_single_rev(quiet);
+	} else
+		show_default();
 	return 0;
 }

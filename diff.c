@@ -19,7 +19,7 @@
 #endif
 
 static int diff_detect_rename_default;
-static int diff_rename_limit_default = 100;
+static int diff_rename_limit_default = 200;
 int diff_use_color_default = -1;
 static const char *external_diff_cmd_cfg;
 int diff_auto_refresh_index = 1;
@@ -129,7 +129,7 @@ static int parse_funcname_pattern(const char *var, const char *ep, const char *v
  * never be affected by the setting of diff.renames
  * the user happens to have in the configuration file.
  */
-int git_diff_ui_config(const char *var, const char *value)
+int git_diff_ui_config(const char *var, const char *value, void *cb)
 {
 	if (!strcmp(var, "diff.renamelimit")) {
 		diff_rename_limit_default = git_config_int(var, value);
@@ -166,10 +166,10 @@ int git_diff_ui_config(const char *var, const char *value)
 			return parse_lldiff_command(var, ep, value);
 	}
 
-	return git_diff_basic_config(var, value);
+	return git_diff_basic_config(var, value, cb);
 }
 
-int git_diff_basic_config(const char *var, const char *value)
+int git_diff_basic_config(const char *var, const char *value, void *cb)
 {
 	if (!prefixcmp(var, "diff.color.") || !prefixcmp(var, "color.diff.")) {
 		int slot = parse_diff_color_slot(var, 11);
@@ -190,7 +190,7 @@ int git_diff_basic_config(const char *var, const char *value)
 		}
 	}
 
-	return git_color_default_config(var, value);
+	return git_color_default_config(var, value, cb);
 }
 
 static char *quote_two(const char *one, const char *two)
@@ -997,18 +997,23 @@ static void show_numstat(struct diffstat_t* data, struct diff_options *options)
 	}
 }
 
-struct diffstat_dir {
-	struct diffstat_file **files;
-	int nr, percent, cumulative;
+struct dirstat_file {
+	const char *name;
+	unsigned long changed;
 };
 
-static long gather_dirstat(FILE *file, struct diffstat_dir *dir, unsigned long changed, const char *base, int baselen)
+struct dirstat_dir {
+	struct dirstat_file *files;
+	int alloc, nr, percent, cumulative;
+};
+
+static long gather_dirstat(FILE *file, struct dirstat_dir *dir, unsigned long changed, const char *base, int baselen)
 {
 	unsigned long this_dir = 0;
 	unsigned int sources = 0;
 
 	while (dir->nr) {
-		struct diffstat_file *f = *dir->files;
+		struct dirstat_file *f = dir->files;
 		int namelen = strlen(f->name);
 		unsigned long this;
 		char *slash;
@@ -1023,10 +1028,7 @@ static long gather_dirstat(FILE *file, struct diffstat_dir *dir, unsigned long c
 			this = gather_dirstat(file, dir, changed, f->name, newbaselen);
 			sources++;
 		} else {
-			if (f->is_unmerged || f->is_binary)
-				this = 0;
-			else
-				this = f->added + f->deleted;
+			this = f->changed;
 			dir->files++;
 			dir->nr--;
 			sources += 2;
@@ -1054,19 +1056,58 @@ static long gather_dirstat(FILE *file, struct diffstat_dir *dir, unsigned long c
 	return this_dir;
 }
 
-static void show_dirstat(struct diffstat_t *data, struct diff_options *options)
+static void show_dirstat(struct diff_options *options)
 {
 	int i;
 	unsigned long changed;
-	struct diffstat_dir dir;
+	struct dirstat_dir dir;
+	struct diff_queue_struct *q = &diff_queued_diff;
 
-	/* Calculate total changes */
+	dir.files = NULL;
+	dir.alloc = 0;
+	dir.nr = 0;
+	dir.percent = options->dirstat_percent;
+	dir.cumulative = options->output_format & DIFF_FORMAT_CUMULATIVE;
+
 	changed = 0;
-	for (i = 0; i < data->nr; i++) {
-		if (data->files[i]->is_binary || data->files[i]->is_unmerged)
+	for (i = 0; i < q->nr; i++) {
+		struct diff_filepair *p = q->queue[i];
+		const char *name;
+		unsigned long copied, added, damage;
+
+		name = p->one->path ? p->one->path : p->two->path;
+
+		if (DIFF_FILE_VALID(p->one) && DIFF_FILE_VALID(p->two)) {
+			diff_populate_filespec(p->one, 0);
+			diff_populate_filespec(p->two, 0);
+			diffcore_count_changes(p->one, p->two, NULL, NULL, 0,
+					       &copied, &added);
+			diff_free_filespec_data(p->one);
+			diff_free_filespec_data(p->two);
+		} else if (DIFF_FILE_VALID(p->one)) {
+			diff_populate_filespec(p->one, 1);
+			copied = added = 0;
+			diff_free_filespec_data(p->one);
+		} else if (DIFF_FILE_VALID(p->two)) {
+			diff_populate_filespec(p->two, 1);
+			copied = 0;
+			added = p->two->size;
+			diff_free_filespec_data(p->two);
+		} else
 			continue;
-		changed += data->files[i]->added;
-		changed += data->files[i]->deleted;
+
+		/*
+		 * Original minus copied is the removed material,
+		 * added is the new material.  They are both damages
+		 * made to the preimage.
+		 */
+		damage = (p->one->size - copied) + added;
+
+		ALLOC_GROW(dir.files, dir.nr + 1, dir.alloc);
+		dir.files[dir.nr].name = name;
+		dir.files[dir.nr].changed = damage;
+		changed += damage;
+		dir.nr++;
 	}
 
 	/* This can happen even with many files, if everything was renames */
@@ -1074,10 +1115,6 @@ static void show_dirstat(struct diffstat_t *data, struct diff_options *options)
 		return;
 
 	/* Show all directories with more than x% of the changes */
-	dir.files = data->files;
-	dir.nr = data->nr;
-	dir.percent = options->dirstat_percent;
-	dir.cumulative = options->output_format & DIFF_FORMAT_CUMULATIVE;
 	gather_dirstat(options->file, &dir, changed, "", 0);
 }
 
@@ -1113,12 +1150,14 @@ static void checkdiff_consume(void *priv, char *line, unsigned long len)
 	char *err;
 
 	if (line[0] == '+') {
+		unsigned bad;
 		data->lineno++;
-		data->status = check_and_emit_line(line + 1, len - 1,
+		bad = check_and_emit_line(line + 1, len - 1,
 		    data->ws_rule, NULL, NULL, NULL, NULL);
-		if (!data->status)
+		if (!bad)
 			return;
-		err = whitespace_error_string(data->status);
+		data->status |= bad;
+		err = whitespace_error_string(bad);
 		fprintf(data->file, "%s:%d: %s.\n", data->filename, data->lineno, err);
 		free(err);
 		emit_line(data->file, set, reset, line, 1);
@@ -2189,7 +2228,6 @@ void diff_setup(struct diff_options *options)
 	options->rename_limit = -1;
 	options->dirstat_percent = 3;
 	options->context = 3;
-	options->msg_sep = "";
 
 	options->change = diff_change;
 	options->add_remove = diff_addremove;
@@ -2466,6 +2504,8 @@ int diff_opt_parse(struct diff_options *options, const char **av, int ac)
 		DIFF_OPT_SET(options, ALLOW_EXTERNAL);
 	else if (!strcmp(arg, "--no-ext-diff"))
 		DIFF_OPT_CLR(options, ALLOW_EXTERNAL);
+	else if (!strcmp(arg, "--ignore-submodules"))
+		DIFF_OPT_SET(options, IGNORE_SUBMODULES);
 
 	/* misc options */
 	else if (!strcmp(arg, "-z"))
@@ -3101,7 +3141,7 @@ void diff_flush(struct diff_options *options)
 		separator++;
 	}
 
-	if (output_format & (DIFF_FORMAT_DIFFSTAT|DIFF_FORMAT_SHORTSTAT|DIFF_FORMAT_NUMSTAT|DIFF_FORMAT_DIRSTAT)) {
+	if (output_format & (DIFF_FORMAT_DIFFSTAT|DIFF_FORMAT_SHORTSTAT|DIFF_FORMAT_NUMSTAT)) {
 		struct diffstat_t diffstat;
 
 		memset(&diffstat, 0, sizeof(struct diffstat_t));
@@ -3111,8 +3151,6 @@ void diff_flush(struct diff_options *options)
 			if (check_pair_status(p))
 				diff_flush_stat(p, options, &diffstat);
 		}
-		if (output_format & DIFF_FORMAT_DIRSTAT)
-			show_dirstat(&diffstat, options);
 		if (output_format & DIFF_FORMAT_NUMSTAT)
 			show_numstat(&diffstat, options);
 		if (output_format & DIFF_FORMAT_DIFFSTAT)
@@ -3122,6 +3160,8 @@ void diff_flush(struct diff_options *options)
 		free_diffstat_info(&diffstat);
 		separator++;
 	}
+	if (output_format & DIFF_FORMAT_DIRSTAT)
+		show_dirstat(options);
 
 	if (output_format & DIFF_FORMAT_SUMMARY && !is_summary_empty(q)) {
 		for (i = 0; i < q->nr; i++)
@@ -3325,6 +3365,9 @@ void diff_addremove(struct diff_options *options,
 	char concatpath[PATH_MAX];
 	struct diff_filespec *one, *two;
 
+	if (DIFF_OPT_TST(options, IGNORE_SUBMODULES) && S_ISGITLINK(mode))
+		return;
+
 	/* This may look odd, but it is a preparation for
 	 * feeding "there are unchanged files which should
 	 * not produce diffs, but when you are doing copy
@@ -3368,6 +3411,10 @@ void diff_change(struct diff_options *options,
 {
 	char concatpath[PATH_MAX];
 	struct diff_filespec *one, *two;
+
+	if (DIFF_OPT_TST(options, IGNORE_SUBMODULES) && S_ISGITLINK(old_mode)
+			&& S_ISGITLINK(new_mode))
+		return;
 
 	if (DIFF_OPT_TST(options, REVERSE_DIFF)) {
 		unsigned tmp;

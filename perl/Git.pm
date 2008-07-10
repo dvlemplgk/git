@@ -39,6 +39,10 @@ $VERSION = '0.01';
   my $lastrev = $repo->command_oneline( [ 'rev-list', '--all' ],
                                         STDERR => 0 );
 
+  my $sha1 = $repo->hash_and_insert_object('file.txt');
+  my $tempfile = tempfile();
+  my $size = $repo->cat_blob($sha1, $tempfile);
+
 =cut
 
 
@@ -51,6 +55,7 @@ require Exporter;
 # Methods which can be called as standalone functions as well:
 @EXPORT_OK = qw(command command_oneline command_noisy
                 command_output_pipe command_input_pipe command_close_pipe
+                command_bidi_pipe command_close_bidi_pipe
                 version exec_path hash_object git_cmd_try);
 
 
@@ -92,6 +97,7 @@ increate nonwithstanding).
 use Carp qw(carp croak); # but croak is bad - throw instead
 use Error qw(:try);
 use Cwd qw(abs_path);
+use IPC::Open2 qw(open2);
 
 }
 
@@ -215,7 +221,6 @@ sub repository {
 	$self = { opts => \%opts };
 	bless $self, $class;
 }
-
 
 =back
 
@@ -375,6 +380,60 @@ sub command_close_pipe {
 	_cmd_close($fh, $ctx);
 }
 
+=item command_bidi_pipe ( COMMAND [, ARGUMENTS... ] )
+
+Execute the given C<COMMAND> in the same way as command_output_pipe()
+does but return both an input pipe filehandle and an output pipe filehandle.
+
+The function will return return C<($pid, $pipe_in, $pipe_out, $ctx)>.
+See C<command_close_bidi_pipe()> for details.
+
+=cut
+
+sub command_bidi_pipe {
+	my ($pid, $in, $out);
+	$pid = open2($in, $out, 'git', @_);
+	return ($pid, $in, $out, join(' ', @_));
+}
+
+=item command_close_bidi_pipe ( PID, PIPE_IN, PIPE_OUT [, CTX] )
+
+Close the C<PIPE_IN> and C<PIPE_OUT> as returned from C<command_bidi_pipe()>,
+checking whether the command finished successfully. The optional C<CTX>
+argument is required if you want to see the command name in the error message,
+and it is the fourth value returned by C<command_bidi_pipe()>.  The call idiom
+is:
+
+	my ($pid, $in, $out, $ctx) = $r->command_bidi_pipe('cat-file --batch-check');
+	print "000000000\n" $out;
+	while (<$in>) { ... }
+	$r->command_close_bidi_pipe($pid, $in, $out, $ctx);
+
+Note that you should not rely on whatever actually is in C<CTX>;
+currently it is simply the command name but in future the context might
+have more complicated structure.
+
+=cut
+
+sub command_close_bidi_pipe {
+	my ($pid, $in, $out, $ctx) = @_;
+	foreach my $fh ($in, $out) {
+		unless (close $fh) {
+			if ($!) {
+				carp "error closing pipe: $!";
+			} elsif ($? >> 8) {
+				throw Git::Error::Command($ctx, $? >>8);
+			}
+		}
+	}
+
+	waitpid $pid, 0;
+
+	if ($? >> 8) {
+		throw Git::Error::Command($ctx, $? >>8);
+	}
+}
+
 
 =item command_noisy ( COMMAND [, ARGUMENTS... ] )
 
@@ -487,28 +546,26 @@ does. In scalar context requires the variable to be set only one time
 (exception is thrown otherwise), in array context returns allows the
 variable to be set multiple times and returns all the values.
 
-Must be called on a repository instance.
-
 This currently wraps command('config') so it is not so fast.
 
 =cut
 
 sub config {
-	my ($self, $var) = @_;
-	$self->repo_path()
-		or throw Error::Simple("not a repository");
+	my ($self, $var) = _maybe_self(@_);
 
 	try {
+		my @cmd = ('config');
+		unshift @cmd, $self if $self;
 		if (wantarray) {
-			return $self->command('config', '--get-all', $var);
+			return command(@cmd, '--get-all', $var);
 		} else {
-			return $self->command_oneline('config', '--get', $var);
+			return command_oneline(@cmd, '--get', $var);
 		}
 	} catch Git::Error::Command with {
 		my $E = shift;
 		if ($E->value() == 1) {
 			# Key not found.
-			return undef;
+			return;
 		} else {
 			throw $E;
 		}
@@ -522,20 +579,17 @@ Retrieve the bool configuration C<VARIABLE>. The return value
 is usable as a boolean in perl (and C<undef> if it's not defined,
 of course).
 
-Must be called on a repository instance.
-
 This currently wraps command('config') so it is not so fast.
 
 =cut
 
 sub config_bool {
-	my ($self, $var) = @_;
-	$self->repo_path()
-		or throw Error::Simple("not a repository");
+	my ($self, $var) = _maybe_self(@_);
 
 	try {
-		my $val = $self->command_oneline('config', '--bool', '--get',
-					      $var);
+		my @cmd = ('config', '--bool', '--get', $var);
+		unshift @cmd, $self if $self;
+		my $val = command_oneline(@cmd);
 		return undef unless defined $val;
 		return $val eq 'true';
 	} catch Git::Error::Command with {
@@ -557,19 +611,17 @@ or 'g' in the config file will cause the value to be multiplied
 by 1024, 1048576 (1024^2), or 1073741824 (1024^3) prior to output.
 It would return C<undef> if configuration variable is not defined,
 
-Must be called on a repository instance.
-
 This currently wraps command('config') so it is not so fast.
 
 =cut
 
 sub config_int {
-	my ($self, $var) = @_;
-	$self->repo_path()
-		or throw Error::Simple("not a repository");
+	my ($self, $var) = _maybe_self(@_);
 
 	try {
-		return $self->command_oneline('config', '--int', '--get', $var);
+		my @cmd = ('config', '--int', '--get', $var);
+		unshift @cmd, $self if $self;
+		return command_oneline(@cmd);
 	} catch Git::Error::Command with {
 		my $E = shift;
 		if ($E->value() == 1) {
@@ -639,15 +691,15 @@ The synopsis is like:
 	"$name <$email>" eq ident_person($name);
 	$time_tz =~ /^\d+ [+-]\d{4}$/;
 
-Both methods must be called on a repository instance.
-
 =cut
 
 sub ident {
-	my ($self, $type) = @_;
+	my ($self, $type) = _maybe_self(@_);
 	my $identstr;
 	if (lc $type eq lc 'committer' or lc $type eq lc 'author') {
-		$identstr = $self->command_oneline('var', 'GIT_'.uc($type).'_IDENT');
+		my @cmd = ('var', 'GIT_'.uc($type).'_IDENT');
+		unshift @cmd, $self if $self;
+		$identstr = command_oneline(@cmd);
 	} else {
 		$identstr = $type;
 	}
@@ -659,17 +711,16 @@ sub ident {
 }
 
 sub ident_person {
-	my ($self, @ident) = @_;
-	$#ident == 0 and @ident = $self->ident($ident[0]);
+	my ($self, @ident) = _maybe_self(@_);
+	$#ident == 0 and @ident = $self ? $self->ident($ident[0]) : ident($ident[0]);
 	return "$ident[0] <$ident[1]>";
 }
 
 
 =item hash_object ( TYPE, FILENAME )
 
-Compute the SHA1 object id of the given C<FILENAME> (or data waiting in
-C<FILEHANDLE>) considering it is of the C<TYPE> object type (C<blob>,
-C<commit>, C<tree>).
+Compute the SHA1 object id of the given C<FILENAME> considering it is
+of the C<TYPE> object type (C<blob>, C<commit>, C<tree>).
 
 The method can be called without any instance or on a specified Git repository,
 it makes zero difference.
@@ -685,6 +736,147 @@ sub hash_object {
 }
 
 
+=item hash_and_insert_object ( FILENAME )
+
+Compute the SHA1 object id of the given C<FILENAME> and add the object to the
+object database.
+
+The function returns the SHA1 hash.
+
+=cut
+
+# TODO: Support for passing FILEHANDLE instead of FILENAME
+sub hash_and_insert_object {
+	my ($self, $filename) = @_;
+
+	carp "Bad filename \"$filename\"" if $filename =~ /[\r\n]/;
+
+	$self->_open_hash_and_insert_object_if_needed();
+	my ($in, $out) = ($self->{hash_object_in}, $self->{hash_object_out});
+
+	unless (print $out $filename, "\n") {
+		$self->_close_hash_and_insert_object();
+		throw Error::Simple("out pipe went bad");
+	}
+
+	chomp(my $hash = <$in>);
+	unless (defined($hash)) {
+		$self->_close_hash_and_insert_object();
+		throw Error::Simple("in pipe went bad");
+	}
+
+	return $hash;
+}
+
+sub _open_hash_and_insert_object_if_needed {
+	my ($self) = @_;
+
+	return if defined($self->{hash_object_pid});
+
+	($self->{hash_object_pid}, $self->{hash_object_in},
+	 $self->{hash_object_out}, $self->{hash_object_ctx}) =
+		command_bidi_pipe(qw(hash-object -w --stdin-paths));
+}
+
+sub _close_hash_and_insert_object {
+	my ($self) = @_;
+
+	return unless defined($self->{hash_object_pid});
+
+	my @vars = map { 'hash_object_' . $_ } qw(pid in out ctx);
+
+	command_close_bidi_pipe($self->{@vars});
+	delete $self->{@vars};
+}
+
+=item cat_blob ( SHA1, FILEHANDLE )
+
+Prints the contents of the blob identified by C<SHA1> to C<FILEHANDLE> and
+returns the number of bytes printed.
+
+=cut
+
+sub cat_blob {
+	my ($self, $sha1, $fh) = @_;
+
+	$self->_open_cat_blob_if_needed();
+	my ($in, $out) = ($self->{cat_blob_in}, $self->{cat_blob_out});
+
+	unless (print $out $sha1, "\n") {
+		$self->_close_cat_blob();
+		throw Error::Simple("out pipe went bad");
+	}
+
+	my $description = <$in>;
+	if ($description =~ / missing$/) {
+		carp "$sha1 doesn't exist in the repository";
+		return -1;
+	}
+
+	if ($description !~ /^[0-9a-fA-F]{40} \S+ (\d+)$/) {
+		carp "Unexpected result returned from git cat-file";
+		return -1;
+	}
+
+	my $size = $1;
+
+	my $blob;
+	my $bytesRead = 0;
+
+	while (1) {
+		my $bytesLeft = $size - $bytesRead;
+		last unless $bytesLeft;
+
+		my $bytesToRead = $bytesLeft < 1024 ? $bytesLeft : 1024;
+		my $read = read($in, $blob, $bytesToRead, $bytesRead);
+		unless (defined($read)) {
+			$self->_close_cat_blob();
+			throw Error::Simple("in pipe went bad");
+		}
+
+		$bytesRead += $read;
+	}
+
+	# Skip past the trailing newline.
+	my $newline;
+	my $read = read($in, $newline, 1);
+	unless (defined($read)) {
+		$self->_close_cat_blob();
+		throw Error::Simple("in pipe went bad");
+	}
+	unless ($read == 1 && $newline eq "\n") {
+		$self->_close_cat_blob();
+		throw Error::Simple("didn't find newline after blob");
+	}
+
+	unless (print $fh $blob) {
+		$self->_close_cat_blob();
+		throw Error::Simple("couldn't write to passed in filehandle");
+	}
+
+	return $size;
+}
+
+sub _open_cat_blob_if_needed {
+	my ($self) = @_;
+
+	return if defined($self->{cat_blob_pid});
+
+	($self->{cat_blob_pid}, $self->{cat_blob_in},
+	 $self->{cat_blob_out}, $self->{cat_blob_ctx}) =
+		command_bidi_pipe(qw(cat-file --batch));
+}
+
+sub _close_cat_blob {
+	my ($self) = @_;
+
+	return unless defined($self->{cat_blob_pid});
+
+	my @vars = map { 'cat_blob_' . $_ } qw(pid in out ctx);
+
+	command_close_bidi_pipe($self->{@vars});
+	delete $self->{@vars};
+}
 
 =back
 
@@ -902,7 +1094,11 @@ sub _cmd_close {
 }
 
 
-sub DESTROY { }
+sub DESTROY {
+	my ($self) = @_;
+	$self->_close_hash_and_insert_object();
+	$self->_close_cat_blob();
+}
 
 
 # Pipe implementation for ActiveState Perl.

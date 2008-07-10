@@ -61,6 +61,16 @@ COMMANDS
 	Set the 'useSvnsyncProps' option in the [svn-remote] config.
 --rewrite-root=<URL>;;
 	Set the 'rewriteRoot' option in the [svn-remote] config.
+--use-log-author;;
+	When retrieving svn commits into git (as part of fetch, rebase, or
+	dcommit operations), look for the first From: or Signed-off-by: line
+	in the log message and use that as the author string.
+--add-author-from;;
+	When committing to svn from git (as part of commit or dcommit
+	operations), if the existing log message doesn't already have a
+	From: or Signed-off-by: line, append a From: line based on the
+	git commit's author string.  If you use this, then --use-log-author
+	will retrieve a valid author string for all commits.
 --username=<USER>;;
 	For transports that SVN handles authentication for (http,
 	https, and plain svn), specify the username.  For other
@@ -166,11 +176,18 @@ environment). This command has the same behaviour.
 Any other arguments are passed directly to `git log'
 
 'blame'::
-       Show what revision and author last modified each line of a file. This is
-       identical to `git blame', but SVN revision numbers are shown instead of git
-       commit hashes.
+       Show what revision and author last modified each line of a file. The
+       output of this mode is format-compatible with the output of
+       `svn blame' by default. Like the SVN blame command,
+       local uncommitted changes in the working copy are ignored;
+       the version of the file in the HEAD revision is annotated. Unknown
+       arguments are passed directly to git-blame.
 +
-All arguments are passed directly to `git blame'.
+--git-format;;
+	Produce output in the same format as `git blame', but with
+	SVN revision numbers instead of git commit hashes. In this mode,
+	changes that haven't been committed to SVN (including local
+	working-copy edits) are shown as revision 0.
 
 --
 'find-rev'::
@@ -187,6 +204,12 @@ All arguments are passed directly to `git blame'.
 	simply overwrites files with those specified in the tree or
 	commit.  All merging is assumed to have taken place
 	independently of git-svn functions.
+
+'create-ignore'::
+	Recursively finds the svn:ignore property on directories and
+	creates matching .gitignore files. The resulting files are staged to
+	be committed, but are not committed. Use -r/--revision to refer to a
+	specfic revision.
 
 'show-ignore'::
 	Recursively finds and lists the svn:ignore property on
@@ -209,6 +232,19 @@ All arguments are passed directly to `git blame'.
 	`svn info' provides.  Does not currently support a -r/--revision
 	argument.  Use the --url option to output only the value of the
 	'URL:' field.
+
+'proplist'::
+	Lists the properties stored in the Subversion repository about a
+	given file or directory.  Use -r/--revision to refer to a specific
+	Subversion revision.
+
+'propget'::
+	Gets the Subversion property given as the first argument, for a
+	file.  A specific revision can be specified with -r/--revision.
+
+'show-externals'::
+	Shows the Subversion externals.  Use -r/--revision to specify a
+	specific revision.
 
 --
 
@@ -329,10 +365,14 @@ Passed directly to git-rebase when using 'dcommit' if a
 -n::
 --dry-run::
 
-This is only used with the 'dcommit' command.
+This can be used with the 'dcommit' and 'rebase' commands.
 
-Print out the series of git arguments that would show
+For 'dcommit', print out the series of git arguments that would show
 which diffs would be committed to SVN.
+
+For 'rebase', display the local branch associated with the upstream svn
+repository associated with the current branch and the URL of svn
+repository that will be fetched from.
 
 --
 
@@ -408,6 +448,8 @@ svn-remote.<name>.rewriteRoot::
 	the repository with a public http:// or svn:// URL in the
 	metadata so users of it will see the public URL.
 
+--
+
 Since the noMetadata, rewriteRoot, useSvnsyncProps and useSvmProps
 options all affect the metadata generated and used by git-svn; they
 *must* be set in the configuration file before any history is imported
@@ -416,7 +458,6 @@ and these settings should never be changed once they are set.
 Additionally, only one of these four options can be used per-svn-remote
 section because they affect the 'git-svn-id:' metadata line.
 
---
 
 BASIC EXAMPLES
 --------------
@@ -472,7 +513,7 @@ have each person clone that repository with 'git clone':
 	cd project
 	git-init
 	git remote add origin server:/pub/project
-	git config --add remote.origin.fetch=+refs/remotes/*:refs/remotes/*
+	git config --add remote.origin.fetch '+refs/remotes/*:refs/remotes/*'
 	git fetch
 # Initialize git-svn locally (be sure to use the same URL and -T/-b/-t options as were used on server)
 	git-svn init http://svn.foo.org/project

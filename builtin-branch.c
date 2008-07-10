@@ -15,7 +15,7 @@
 #include "branch.h"
 
 static const char * const builtin_branch_usage[] = {
-	"git-branch [options] [-r | -a]",
+	"git-branch [options] [-r | -a] [--merged | --no-merged]",
 	"git-branch [options] [-l] [-f] <branchname> [<start-point>]",
 	"git-branch [options] [-r] (-d | -D) <branchname>",
 	"git-branch [options] (-m | -M) [<oldbranch>] <newbranch>",
@@ -46,6 +46,8 @@ enum color_branch {
 	COLOR_BRANCH_CURRENT = 4,
 };
 
+static int mergefilter = -1;
+
 static int parse_branch_color_slot(const char *var, int ofs)
 {
 	if (!strcasecmp(var+ofs, "plain"))
@@ -61,7 +63,7 @@ static int parse_branch_color_slot(const char *var, int ofs)
 	die("bad config variable '%s'", var);
 }
 
-static int git_branch_config(const char *var, const char *value)
+static int git_branch_config(const char *var, const char *value, void *cb)
 {
 	if (!strcmp(var, "color.branch")) {
 		branch_use_color = git_config_colorbool(var, value, -1);
@@ -74,7 +76,7 @@ static int git_branch_config(const char *var, const char *value)
 		color_parse(value, var, branch_colors[slot]);
 		return 0;
 	}
-	return git_color_default_config(var, value);
+	return git_color_default_config(var, value, cb);
 }
 
 static const char *branch_get_color(enum color_branch ix)
@@ -210,6 +212,7 @@ static int append_ref(const char *refname, const unsigned char *sha1, int flags,
 	struct ref_item *newitem;
 	int kind = REF_UNKNOWN_TYPE;
 	int len;
+	static struct commit_list branch;
 
 	/* Detect kind */
 	if (!prefixcmp(refname, "refs/heads/")) {
@@ -230,6 +233,16 @@ static int append_ref(const char *refname, const unsigned char *sha1, int flags,
 	/* Don't add types the caller doesn't want */
 	if ((kind & ref_list->kinds) == 0)
 		return 0;
+
+	if (mergefilter > -1) {
+		branch.item = lookup_commit_reference_gently(sha1, 1);
+		if (!branch.item)
+			die("Unable to lookup tip of branch %s", refname);
+		if (mergefilter == 0 && has_commit(head_sha1, &branch))
+			return 0;
+		if (mergefilter == 1 && !has_commit(head_sha1, &branch))
+			return 0;
+	}
 
 	/* Resize buffer */
 	if (ref_list->index >= ref_list->alloc) {
@@ -444,10 +457,11 @@ int cmd_branch(int argc, const char **argv, const char *prefix)
 		OPT_BIT('M', NULL, &rename, "move/rename a branch, even if target exists", 2),
 		OPT_BOOLEAN('l', NULL, &reflog, "create the branch's reflog"),
 		OPT_BOOLEAN('f', NULL, &force_create, "force creation (when already exists)"),
+		OPT_SET_INT(0, "merged", &mergefilter, "list only merged branches", 1),
 		OPT_END(),
 	};
 
-	git_config(git_branch_config);
+	git_config(git_branch_config, NULL);
 
 	if (branch_use_color == -1)
 		branch_use_color = git_use_color_default;

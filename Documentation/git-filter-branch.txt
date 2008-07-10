@@ -113,7 +113,7 @@ OPTIONS
 	stdin.  The commit id is expected on stdout.
 +
 As a special extension, the commit filter may emit multiple
-commit ids; in that case, ancestors of the original commit will
+commit ids; in that case, the rewritten children of the original commit will
 have all of them as parents.
 +
 You can use the 'map' convenience function in this filter, and other
@@ -133,10 +133,16 @@ use "--tag-name-filter cat" to simply update the tags.  In this
 case, be very careful and make sure you have the old tags
 backed up in case the conversion has run afoul.
 +
-Note that there is currently no support for proper rewriting of
-tag objects; in layman terms, if the tag has a message or signature
-attached, the rewritten tag won't have it.  Sorry.  (It is by
-definition impossible to preserve signatures at any rate.)
+Nearly proper rewriting of tag objects is supported. If the tag has
+a message attached, a new tag object will be created with the same message,
+author, and timestamp. If the tag has a signature attached, the
+signature will be stripped. It is by definition impossible to preserve
+signatures. The reason this is "nearly" proper, is because ideally if
+the tag did not change (points to the same object, has the same name, etc.)
+it should retain any signature. That is not the case, signatures will always
+be removed, buyer beware. There is also no support for changing the
+author or timestamp (or the tag message for that matter). Tags which point
+to other tags will be rewritten to point to the underlying commit.
 
 --subdirectory-filter <directory>::
 	Only look at the history which touches the given subdirectory.
@@ -155,7 +161,8 @@ definition impossible to preserve signatures at any rate.)
 	does this in the '.git-rewrite/' directory but you can override
 	that choice by this parameter.
 
--f|--force::
+-f::
+--force::
 	`git filter-branch` refuses to start with an existing temporary
 	directory or when there are already refs starting with
 	'refs/original/', unless forced.
@@ -311,4 +318,4 @@ Documentation by Petr Baudis and the git list.
 
 GIT
 ---
-Part of the linkgit:git[7] suite
+Part of the linkgit:git[1] suite

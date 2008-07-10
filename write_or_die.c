@@ -40,7 +40,7 @@ void maybe_flush_or_die(FILE *f, const char *desc)
 	}
 }
 
-int read_in_full(int fd, void *buf, size_t count)
+ssize_t read_in_full(int fd, void *buf, size_t count)
 {
 	char *p = buf;
 	ssize_t total = 0;
@@ -57,7 +57,7 @@ int read_in_full(int fd, void *buf, size_t count)
 	return total;
 }
 
-int write_in_full(int fd, const void *buf, size_t count)
+ssize_t write_in_full(int fd, const void *buf, size_t count)
 {
 	const char *p = buf;
 	ssize_t total = 0;
@@ -76,6 +76,13 @@ int write_in_full(int fd, const void *buf, size_t count)
 	}
 
 	return total;
+}
+
+void fsync_or_die(int fd, const char *msg)
+{
+	if (fsync(fd) < 0) {
+		die("%s: fsync error (%s)", msg, strerror(errno));
+	}
 }
 
 void write_or_die(int fd, const void *buf, size_t count)

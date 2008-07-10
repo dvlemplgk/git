@@ -1254,16 +1254,15 @@ these three "file stages" represents a different version of the file:
 
 -------------------------------------------------
 $ git show :1:file.txt	# the file in a common ancestor of both branches
-$ git show :2:file.txt	# the version from HEAD, but including any
-			# nonconflicting changes from MERGE_HEAD
-$ git show :3:file.txt	# the version from MERGE_HEAD, but including any
-			# nonconflicting changes from HEAD.
+$ git show :2:file.txt	# the version from HEAD.
+$ git show :3:file.txt	# the version from MERGE_HEAD.
 -------------------------------------------------
 
-Since the stage 2 and stage 3 versions have already been updated with
-nonconflicting changes, the only remaining differences between them are
-the important ones; thus linkgit:git-diff[1] can use the information in
-the index to show only those conflicts.
+When you ask linkgit:git-diff[1] to show the conflicts, it runs a
+three-way diff between the conflicted merge results in the work tree with
+stages 2 and 3 to show only hunks whose contents come from both sides,
+mixed (in other words, when a hunk's merge results come only from stage 2,
+that part is not conflicting and is not shown.  Same for stage 3).
 
 The diff above shows the differences between the working-tree version of
 file.txt and the stage 2 and stage 3 versions.  So instead of preceding
@@ -1881,7 +1880,7 @@ $ chmod a+x hooks/post-update
 
 (For an explanation of the last two lines, see
 linkgit:git-update-server-info[1], and the documentation
-link:hooks.html[Hooks used by git].)
+linkgit:githooks[5][Hooks used by git].)
 
 Advertise the URL of proj.git.  Anybody else should then be able to
 clone or pull from that URL, for example with a command line like:
@@ -1993,7 +1992,7 @@ the right to push to the same repository.  In that case, the correct
 solution is to retry the push after first updating your work by either a
 pull or a fetch followed by a rebase; see the
 <<setting-up-a-shared-repository,next section>> and
-link:cvs-migration.html[git for CVS users] for more.
+linkgit:gitcvs-migration[7][git for CVS users] for more.
 
 [[setting-up-a-shared-repository]]
 Setting up a shared repository
@@ -2002,7 +2001,7 @@ Setting up a shared repository
 Another way to collaborate is by using a model similar to that
 commonly used in CVS, where several developers with special rights
 all push to and pull from a single shared repository.  See
-link:cvs-migration.html[git for CVS users] for instructions on how to
+linkgit:gitcvs-migration[7][git for CVS users] for instructions on how to
 set this up.
 
 However, while there is nothing wrong with git's support for shared
@@ -4252,7 +4251,10 @@ You see, Git is actually the best tool to find out about the source of Git
 itself!
 
 [[glossary]]
-include::glossary.txt[]
+GIT Glossary
+============
+
+include::glossary-content.txt[]
 
 [[git-quick-start]]
 Appendix A: Git Quick Reference

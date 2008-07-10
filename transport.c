@@ -203,7 +203,7 @@ static struct ref *get_refs_via_rsync(struct transport *transport)
 }
 
 static int fetch_objs_via_rsync(struct transport *transport,
-				 int nr_objs, struct ref **to_fetch)
+				int nr_objs, const struct ref **to_fetch)
 {
 	struct strbuf buf = STRBUF_INIT;
 	struct child_process rsync;
@@ -350,7 +350,7 @@ static int rsync_transport_push(struct transport *transport,
 
 #ifndef NO_CURL /* http fetch is the only user */
 static int fetch_objs_via_walker(struct transport *transport,
-				 int nr_objs, struct ref **to_fetch)
+				 int nr_objs, const struct ref **to_fetch)
 {
 	char *dest = xstrdup(transport->url);
 	struct walker *walker = transport->data;
@@ -441,9 +441,13 @@ static struct ref *get_refs_via_curl(struct transport *transport)
 	struct ref *ref = NULL;
 	struct ref *last_ref = NULL;
 
+	struct walker *walker;
+
 	if (!transport->data)
 		transport->data = get_http_walker(transport->url,
 						transport->remote);
+
+	walker = transport->data;
 
 	refs_url = xmalloc(strlen(transport->url) + 11);
 	sprintf(refs_url, "%s/info/refs", transport->url);
@@ -500,11 +504,20 @@ static struct ref *get_refs_via_curl(struct transport *transport)
 
 	strbuf_release(&buffer);
 
+	ref = alloc_ref_from_str("HEAD");
+	if (!walker->fetch_ref(walker, ref) &&
+	    !resolve_remote_symref(ref, refs)) {
+		ref->next = refs;
+		refs = ref;
+	} else {
+		free(ref);
+	}
+
 	return refs;
 }
 
 static int fetch_objs_via_curl(struct transport *transport,
-				 int nr_objs, struct ref **to_fetch)
+				 int nr_objs, const struct ref **to_fetch)
 {
 	if (!transport->data)
 		transport->data = get_http_walker(transport->url,
@@ -532,9 +545,8 @@ static struct ref *get_refs_from_bundle(struct transport *transport)
 		die ("Could not read bundle '%s'.", transport->url);
 	for (i = 0; i < data->header.references.nr; i++) {
 		struct ref_list_entry *e = data->header.references.list + i;
-		struct ref *ref = alloc_ref(strlen(e->name) + 1);
+		struct ref *ref = alloc_ref_from_str(e->name);
 		hashcpy(ref->old_sha1, e->sha1);
-		strcpy(ref->name, e->name);
 		ref->next = result;
 		result = ref;
 	}
@@ -542,7 +554,7 @@ static struct ref *get_refs_from_bundle(struct transport *transport)
 }
 
 static int fetch_refs_from_bundle(struct transport *transport,
-			       int nr_heads, struct ref **to_fetch)
+			       int nr_heads, const struct ref **to_fetch)
 {
 	struct bundle_transport_data *data = transport->data;
 	return unbundle(&data->header, data->fd);
@@ -616,7 +628,7 @@ static struct ref *get_refs_via_connect(struct transport *transport)
 }
 
 static int fetch_refs_via_pack(struct transport *transport,
-			       int nr_heads, struct ref **to_fetch)
+			       int nr_heads, const struct ref **to_fetch)
 {
 	struct git_transport_data *data = transport->data;
 	char **heads = xmalloc(nr_heads * sizeof(*heads));
@@ -784,12 +796,12 @@ const struct ref *transport_get_remote_refs(struct transport *transport)
 	return transport->remote_refs;
 }
 
-int transport_fetch_refs(struct transport *transport, struct ref *refs)
+int transport_fetch_refs(struct transport *transport, const struct ref *refs)
 {
 	int rc;
 	int nr_heads = 0, nr_alloc = 0;
-	struct ref **heads = NULL;
-	struct ref *rm;
+	const struct ref **heads = NULL;
+	const struct ref *rm;
 
 	for (rm = refs; rm; rm = rm->next) {
 		if (rm->peer_ref &&

@@ -108,7 +108,7 @@ warning: tag 'A' is really 'Q' here
 EOF
 check_describe A-* HEAD
 test_expect_success 'warning was displayed for Q' '
-	git diff err.expect err.actual
+	test_cmp err.expect err.actual
 '
 test_expect_success 'rename tag Q back to A' '
 	mv .git/refs/tags/Q .git/refs/tags/A
@@ -138,5 +138,7 @@ check_describe "test-annotated-*" --match="test-*"
 check_describe "test1-lightweight-*" --tags --match="test1-*"
 
 check_describe "test2-lightweight-*" --tags --match="test2-*"
+
+check_describe "test2-lightweight-*" --long --tags --match="test2-*" HEAD^
 
 test_done
