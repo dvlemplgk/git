@@ -25,7 +25,6 @@ commit id embedding:
 '
 
 . ./test-lib.sh
-TAR=${TAR:-tar}
 UNZIP=${UNZIP:-unzip}
 
 SUBSTFORMAT=%H%n
@@ -68,7 +67,7 @@ test_expect_success \
 test_expect_success \
     'validate file modification time' \
     'mkdir extract &&
-     $TAR xf b.tar -C extract a/a &&
+     "$TAR" xf b.tar -C extract a/a &&
      perl -e '\''print((stat("extract/a/a"))[9], "\n")'\'' >b.mtime &&
      echo "1117231200" >expected.mtime &&
      diff expected.mtime b.mtime'
@@ -80,7 +79,7 @@ test_expect_success \
 
 test_expect_success \
     'extract tar archive' \
-    '(cd b && $TAR xf -) <b.tar'
+    '(cd b && "$TAR" xf -) <b.tar'
 
 test_expect_success \
     'validate filenames' \
@@ -97,7 +96,7 @@ test_expect_success \
 
 test_expect_success \
     'extract tar archive with prefix' \
-    '(cd c && $TAR xf -) <c.tar'
+    '(cd c && "$TAR" xf -) <c.tar'
 
 test_expect_success \
     'validate filenames with prefix' \
@@ -117,7 +116,7 @@ test_expect_success \
 
 test_expect_success \
     'extract substfiles' \
-    '(mkdir f && cd f && $TAR xf -) <f.tar'
+    '(mkdir f && cd f && "$TAR" xf -) <f.tar'
 
 test_expect_success \
      'validate substfile contents' \
@@ -129,7 +128,7 @@ test_expect_success \
 
 test_expect_success \
     'extract substfiles from archive with prefix' \
-    '(mkdir g && cd g && $TAR xf -) <g.tar'
+    '(mkdir g && cd g && "$TAR" xf -) <g.tar'
 
 test_expect_success \
      'validate substfile contents from archive with prefix' \

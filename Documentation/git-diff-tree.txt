@@ -49,13 +49,13 @@ include::diff-options.txt[]
 --stdin::
 	When '--stdin' is specified, the command does not take
 	<tree-ish> arguments from the command line.  Instead, it
-	reads either one <commit> or a pair of <tree-ish>
+	reads either one <commit> or a list of <commit>
 	separated with a single space from its standard input.
 +
 When a single commit is given on one line of such input, it compares
 the commit with its parents.  The following flags further affects its
-behavior.  This does not apply to the case where two <tree-ish>
-separated with a single space are given.
+behavior.  The remaining commits, when given, are used as if they are
+parents of the first commit.
 
 -m::
 	By default, "git-diff-tree --stdin" does not show
@@ -93,11 +93,11 @@ include::pretty-options.txt[]
 	This flag changes the way a merge commit patch is displayed,
 	in a similar way to the '-c' option. It implies the '-c'
 	and '-p' options and further compresses the patch output
-	by omitting hunks that show differences from only one
-	parent, or show the same change from all but one parent
-	for an Octopus merge.  When this optimization makes all
-	hunks disappear, the commit itself and the commit log
-	message is not shown, just like in any other "empty diff" case.
+	by omitting uninteresting hunks whose the contents in the parents
+	have only two variants and the merge result picks one of them
+	without modification.  When all hunks are uninteresting, the commit
+	itself and the commit log message is not shown, just like in any other
+	"empty diff" case.
 
 --always::
 	Show the commit itself and the commit log message even
