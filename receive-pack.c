@@ -222,7 +222,7 @@ static const char *update(struct command *cmd)
 			warning ("Allowing deletion of corrupt ref.");
 			old_sha1 = NULL;
 		}
-		if (delete_ref(name, old_sha1)) {
+		if (delete_ref(name, old_sha1, 0)) {
 			error("failed to delete %s", name);
 			return "failed to delete";
 		}
@@ -370,7 +370,8 @@ static const char *unpack(void)
 	hdr_err = parse_pack_header(&hdr);
 	if (hdr_err)
 		return hdr_err;
-	snprintf(hdr_arg, sizeof(hdr_arg), "--pack_header=%u,%u",
+	snprintf(hdr_arg, sizeof(hdr_arg),
+			"--pack_header=%"PRIu32",%"PRIu32,
 			ntohl(hdr.hdr_version), ntohl(hdr.hdr_entries));
 
 	if (ntohl(hdr.hdr_entries) < unpack_limit) {
@@ -481,7 +482,7 @@ int main(int argc, char **argv)
 	if (!dir)
 		usage(receive_pack_usage);
 
-	setup_path(NULL);
+	setup_path();
 
 	if (!enter_repo(dir, 0))
 		die("'%s': unable to chdir or not a git archive", dir);

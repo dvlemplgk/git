@@ -97,9 +97,11 @@ USAGE="[--env-filter <command>] [--tree-filter <command>] \
 OPTIONS_SPEC=
 . git-sh-setup
 
-git diff-files --quiet &&
+if [ "$(is_bare_repository)" = false ]; then
+	git diff-files --quiet &&
 	git diff-index --cached --quiet HEAD -- ||
 	die "Cannot rewrite branch(es) with a dirty working directory."
+fi
 
 tempdir=.git-rewrite
 filter_env=
@@ -359,9 +361,17 @@ do
 	;;
 	$_x40)
 		echo "Ref '$ref' was rewritten"
-		git update-ref -m "filter-branch: rewrite" \
-				"$ref" $rewritten $sha1 ||
-			die "Could not rewrite $ref"
+		if ! git update-ref -m "filter-branch: rewrite" \
+					"$ref" $rewritten $sha1 2>/dev/null; then
+			if test $(git cat-file -t "$ref") = tag; then
+				if test -z "$filter_tag_name"; then
+					warn "WARNING: You said to rewrite tagged commits, but not the corresponding tag."
+					warn "WARNING: Perhaps use '--tag-name-filter cat' to rewrite the tag."
+				fi
+			else
+				die "Could not rewrite $ref"
+			fi
+		fi
 	;;
 	*)
 		# NEEDSWORK: possibly add -Werror, making this an error
@@ -434,18 +444,20 @@ rm -rf "$tempdir"
 
 trap - 0
 
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
-test -z "$ORIG_GIT_DIR" || {
-	GIT_DIR="$ORIG_GIT_DIR" && export GIT_DIR
-}
-test -z "$ORIG_GIT_WORK_TREE" || {
-	GIT_WORK_TREE="$ORIG_GIT_WORK_TREE" &&
-	export GIT_WORK_TREE
-}
-test -z "$ORIG_GIT_INDEX_FILE" || {
-	GIT_INDEX_FILE="$ORIG_GIT_INDEX_FILE" &&
-	export GIT_INDEX_FILE
-}
-git read-tree -u -m HEAD
+if [ "$(is_bare_repository)" = false ]; then
+	unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+	test -z "$ORIG_GIT_DIR" || {
+		GIT_DIR="$ORIG_GIT_DIR" && export GIT_DIR
+	}
+	test -z "$ORIG_GIT_WORK_TREE" || {
+		GIT_WORK_TREE="$ORIG_GIT_WORK_TREE" &&
+		export GIT_WORK_TREE
+	}
+	test -z "$ORIG_GIT_INDEX_FILE" || {
+		GIT_INDEX_FILE="$ORIG_GIT_INDEX_FILE" &&
+		export GIT_INDEX_FILE
+	}
+	git read-tree -u -m HEAD
+fi
 
 exit $ret

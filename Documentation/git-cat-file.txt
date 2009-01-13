@@ -9,8 +9,8 @@ git-cat-file - Provide content or type/size information for repository objects
 SYNOPSIS
 --------
 [verse]
-'git-cat-file' [-t | -s | -e | -p | <type>] <object>
-'git-cat-file' [--batch | --batch-check] < <list-of-objects>
+'git cat-file' [-t | -s | -e | -p | <type>] <object>
+'git cat-file' [--batch | --batch-check] < <list-of-objects>
 
 DESCRIPTION
 -----------
@@ -81,7 +81,7 @@ object specified on stdin:
 ------------
 
 If '--batch-check' is specified, output of the following form is printed for
-each object specified fon stdin:
+each object specified on stdin:
 
 ------------
 <sha1> SP <type> SP <size> LF

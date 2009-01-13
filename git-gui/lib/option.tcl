@@ -123,7 +123,9 @@ proc do_options {} {
 		{b gui.trustmtime  {mc "Trust File Modification Timestamps"}}
 		{b gui.pruneduringfetch {mc "Prune Tracking Branches During Fetch"}}
 		{b gui.matchtrackingbranch {mc "Match Tracking Branches"}}
-		{i-0..99 gui.diffcontext {mc "Number of Diff Context Lines"}}
+		{b gui.fastcopyblame {mc "Blame Copy Only On Changed Files"}}
+		{i-20..200 gui.copyblamethreshold {mc "Minimum Letters To Blame Copy On"}}
+		{i-1..99 gui.diffcontext {mc "Number of Diff Context Lines"}}
 		{i-0..99 gui.commitmsgwidth {mc "Commit Message Text Width"}}
 		{t gui.newbranchtemplate {mc "New Branch Name Template"}}
 		} {

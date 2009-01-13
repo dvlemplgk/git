@@ -438,6 +438,13 @@ test_expect_success 'cvs update (-p)' '
     test -z "$(cat failures)"
 '
 
+cd "$WORKDIR"
+test_expect_success 'cvs update (module list supports packed refs)' '
+    GIT_DIR="$SERVERDIR" git pack-refs --all &&
+    GIT_CONFIG="$git_config" cvs -n up -d 2> out &&
+    grep "cvs update: New directory \`master'\''" < out
+'
+
 #------------
 # CVS STATUS
 #------------
@@ -468,6 +475,30 @@ test_expect_success 'cvs status (no subdirs in header)' '
     cd cvswork &&
     GIT_CONFIG="$git_config" cvs status | grep ^File: >../out &&
     ! grep / <../out
+'
+
+#------------
+# CVS CHECKOUT
+#------------
+
+cd "$WORKDIR"
+test_expect_success 'cvs co -c (shows module database)' '
+    GIT_CONFIG="$git_config" cvs co -c > out &&
+    grep "^master[	 ]\+master$" < out &&
+    ! grep -v "^master[	 ]\+master$" < out
+'
+
+#------------
+# CVS ANNOTATE
+#------------
+
+cd "$WORKDIR"
+test_expect_success 'cvs annotate' '
+    cd cvswork &&
+    GIT_CONFIG="$git_config" cvs annotate merge >../out &&
+    sed -e "s/ .*//" ../out >../actual &&
+    for i in 3 1 1 1 1 1 1 1 2 4; do echo 1.$i; done >../expect &&
+    test_cmp ../expect ../actual
 '
 
 test_done

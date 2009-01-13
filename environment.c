@@ -13,7 +13,7 @@ char git_default_email[MAX_GITNAME];
 char git_default_name[MAX_GITNAME];
 int user_ident_explicitly_given;
 int trust_executable_bit = 1;
-int quote_path_fully = 1;
+int trust_ctime = 1;
 int has_symlinks = 1;
 int ignore_case;
 int assume_unchanged;
@@ -71,7 +71,7 @@ static void setup_git_env(void)
 	}
 	git_graft_file = getenv(GRAFT_ENVIRONMENT);
 	if (!git_graft_file)
-		git_graft_file = xstrdup(git_path("info/grafts"));
+		git_graft_file = git_pathdup("info/grafts");
 }
 
 int is_bare_repository(void)
@@ -113,7 +113,7 @@ const char *get_git_work_tree(void)
 			work_tree = git_work_tree_cfg;
 			/* make_absolute_path also normalizes the path */
 			if (work_tree && !is_absolute_path(work_tree))
-				work_tree = xstrdup(make_absolute_path(git_path(work_tree)));
+				work_tree = xstrdup(make_absolute_path(git_path("%s", work_tree)));
 		} else if (work_tree)
 			work_tree = xstrdup(make_absolute_path(work_tree));
 		git_work_tree_initialized = 1;
@@ -128,13 +128,6 @@ char *get_object_directory(void)
 	if (!git_object_dir)
 		setup_git_env();
 	return git_object_dir;
-}
-
-char *get_refs_directory(void)
-{
-	if (!git_refs_dir)
-		setup_git_env();
-	return git_refs_dir;
 }
 
 char *get_index_file(void)

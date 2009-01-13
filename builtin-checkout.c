@@ -32,7 +32,7 @@ static int post_checkout_hook(struct commit *old, struct commit *new,
 
 	memset(&proc, 0, sizeof(proc));
 	argv[0] = name;
-	argv[1] = xstrdup(sha1_to_hex(old->object.sha1));
+	argv[1] = xstrdup(sha1_to_hex(old ? old->object.sha1 : null_sha1));
 	argv[2] = xstrdup(sha1_to_hex(new->object.sha1));
 	argv[3] = changed ? "1" : "0";
 	argv[4] = NULL;
@@ -43,7 +43,7 @@ static int post_checkout_hook(struct commit *old, struct commit *new,
 }
 
 static int update_some(const unsigned char *sha1, const char *base, int baselen,
-		       const char *pathname, unsigned mode, int stage)
+		const char *pathname, unsigned mode, int stage, void *context)
 {
 	int len;
 	struct cache_entry *ce;
@@ -67,7 +67,7 @@ static int update_some(const unsigned char *sha1, const char *base, int baselen,
 
 static int read_tree_some(struct tree *tree, const char **pathspec)
 {
-	read_tree_recursive(tree, "", 0, 0, pathspec, update_some);
+	read_tree_recursive(tree, "", 0, 0, pathspec, update_some, NULL);
 
 	/* update the index with the given tree's info
 	 * for all args, expanding wildcards, and exit
@@ -75,6 +75,15 @@ static int read_tree_some(struct tree *tree, const char **pathspec)
 	 */
 	return 0;
 }
+
+static int skip_same_name(struct cache_entry *ce, int pos)
+{
+	while (++pos < active_nr &&
+	       !strcmp(active_cache[pos]->name, ce->name))
+		; /* skip */
+	return pos;
+}
+
 
 static int checkout_paths(struct tree *source_tree, const char **pathspec)
 {
@@ -107,6 +116,20 @@ static int checkout_paths(struct tree *source_tree, const char **pathspec)
 	if (report_path_error(ps_matched, pathspec, 0))
 		return 1;
 
+	/* Any unmerged paths? */
+	for (pos = 0; pos < active_nr; pos++) {
+		struct cache_entry *ce = active_cache[pos];
+		if (pathspec_match(pathspec, NULL, ce->name, 0)) {
+			if (!ce_stage(ce))
+				continue;
+			errs = 1;
+			error("path '%s' is unmerged", ce->name);
+			pos = skip_same_name(ce, pos) - 1;
+		}
+	}
+	if (errs)
+		return 1;
+
 	/* Now we are committed to check them out */
 	memset(&state, 0, sizeof(state));
 	state.force = 1;
@@ -114,7 +137,11 @@ static int checkout_paths(struct tree *source_tree, const char **pathspec)
 	for (pos = 0; pos < active_nr; pos++) {
 		struct cache_entry *ce = active_cache[pos];
 		if (pathspec_match(pathspec, NULL, ce->name, 0)) {
-			errs |= checkout_entry(ce, &state, NULL);
+			if (!ce_stage(ce)) {
+				errs |= checkout_entry(ce, &state, NULL);
+				continue;
+			}
+			pos = skip_same_name(ce, pos) - 1;
 		}
 	}
 
@@ -242,6 +269,7 @@ static int merge_working_tree(struct checkout_opts *opts,
 		}
 
 		/* 2-way merge to the new branch */
+		topts.initial_checkout = is_cache_unborn();
 		topts.update = 1;
 		topts.merge = 1;
 		topts.gently = opts->merge;
@@ -299,103 +327,21 @@ static int merge_working_tree(struct checkout_opts *opts,
 	    commit_locked_index(lock_file))
 		die("unable to write new index file");
 
-	if (!opts->force)
+	if (!opts->force && !opts->quiet)
 		show_local_changes(&new->commit->object);
 
 	return 0;
 }
 
-static void report_tracking(struct branch_info *new, struct checkout_opts *opts)
+static void report_tracking(struct branch_info *new)
 {
-	/*
-	 * We have switched to a new branch; is it building on
-	 * top of another branch, and if so does that other branch
-	 * have changes we do not have yet?
-	 */
-	char *base;
-	unsigned char sha1[20];
-	struct commit *ours, *theirs;
-	char symmetric[84];
-	struct rev_info revs;
-	const char *rev_argv[10];
-	int rev_argc;
-	int num_ours, num_theirs;
-	const char *remote_msg;
+	struct strbuf sb = STRBUF_INIT;
 	struct branch *branch = branch_get(new->name);
 
-	/*
-	 * Nothing to report unless we are marked to build on top of
-	 * somebody else.
-	 */
-	if (!branch || !branch->merge || !branch->merge[0] || !branch->merge[0]->dst)
+	if (!format_tracking_info(branch, &sb))
 		return;
-
-	/*
-	 * If what we used to build on no longer exists, there is
-	 * nothing to report.
-	 */
-	base = branch->merge[0]->dst;
-	if (!resolve_ref(base, sha1, 1, NULL))
-		return;
-
-	theirs = lookup_commit(sha1);
-	ours = new->commit;
-	if (!hashcmp(sha1, ours->object.sha1))
-		return; /* we are the same */
-
-	/* Run "rev-list --left-right ours...theirs" internally... */
-	rev_argc = 0;
-	rev_argv[rev_argc++] = NULL;
-	rev_argv[rev_argc++] = "--left-right";
-	rev_argv[rev_argc++] = symmetric;
-	rev_argv[rev_argc++] = "--";
-	rev_argv[rev_argc] = NULL;
-
-	strcpy(symmetric, sha1_to_hex(ours->object.sha1));
-	strcpy(symmetric + 40, "...");
-	strcpy(symmetric + 43, sha1_to_hex(theirs->object.sha1));
-
-	init_revisions(&revs, NULL);
-	setup_revisions(rev_argc, rev_argv, &revs, NULL);
-	prepare_revision_walk(&revs);
-
-	/* ... and count the commits on each side. */
-	num_ours = 0;
-	num_theirs = 0;
-	while (1) {
-		struct commit *c = get_revision(&revs);
-		if (!c)
-			break;
-		if (c->object.flags & SYMMETRIC_LEFT)
-			num_ours++;
-		else
-			num_theirs++;
-	}
-
-	if (!prefixcmp(base, "refs/remotes/")) {
-		remote_msg = " remote";
-		base += strlen("refs/remotes/");
-	} else {
-		remote_msg = "";
-	}
-
-	if (!num_theirs)
-		printf("Your branch is ahead of the tracked%s branch '%s' "
-		       "by %d commit%s.\n",
-		       remote_msg, base,
-		       num_ours, (num_ours == 1) ? "" : "s");
-	else if (!num_ours)
-		printf("Your branch is behind the tracked%s branch '%s' "
-		       "by %d commit%s,\n"
-		       "and can be fast-forwarded.\n",
-		       remote_msg, base,
-		       num_theirs, (num_theirs == 1) ? "" : "s");
-	else
-		printf("Your branch and the tracked%s branch '%s' "
-		       "have diverged,\nand respectively "
-		       "have %d and %d different commit(s) each.\n",
-		       remote_msg, base,
-		       num_ours, num_theirs);
+	fputs(sb.buf, stdout);
+	strbuf_release(&sb);
 }
 
 static void update_refs_for_switch(struct checkout_opts *opts,
@@ -413,10 +359,10 @@ static void update_refs_for_switch(struct checkout_opts *opts,
 
 	strbuf_init(&msg, 0);
 	old_desc = old->name;
-	if (!old_desc)
+	if (!old_desc && old->commit)
 		old_desc = sha1_to_hex(old->commit->object.sha1);
 	strbuf_addf(&msg, "checkout: moving from %s to %s",
-		    old_desc, new->name);
+		    old_desc ? old_desc : "(invalid)", new->name);
 
 	if (new->path) {
 		create_symref("HEAD", new->path, msg.buf);
@@ -441,7 +387,7 @@ static void update_refs_for_switch(struct checkout_opts *opts,
 	remove_branch_state();
 	strbuf_release(&msg);
 	if (!opts->quiet && (new->path || !strcmp(new->name, "HEAD")))
-		report_tracking(new, opts);
+		report_tracking(new);
 }
 
 static int switch_branches(struct checkout_opts *opts, struct branch_info *new)
@@ -468,16 +414,14 @@ static int switch_branches(struct checkout_opts *opts, struct branch_info *new)
 	}
 
 	/*
-	 * If the new thing isn't a branch and isn't HEAD and we're
-	 * not starting a new branch, and we want messages, and we
-	 * weren't on a branch, and we're moving to a new commit,
-	 * describe the old commit.
+	 * If we were on a detached HEAD, but we are now moving to
+	 * a new commit, we want to mention the old commit once more
+	 * to remind the user that it might be lost.
 	 */
-	if (!new->path && strcmp(new->name, "HEAD") && !opts->new_branch &&
-	    !opts->quiet && !old.path && new->commit != old.commit)
+	if (!opts->quiet && !old.path && old.commit && new->commit != old.commit)
 		describe_detached_head("Previous HEAD position was", old.commit);
 
-	if (!old.commit) {
+	if (!old.commit && !opts->force) {
 		if (!opts->quiet) {
 			fprintf(stderr, "warning: You appear to be on a branch yet to be born.\n");
 			fprintf(stderr, "warning: Forcing checkout of %s.\n", new->name);
@@ -512,6 +456,7 @@ int cmd_checkout(int argc, const char **argv, const char *prefix)
 		OPT_BOOLEAN('m', NULL, &opts.merge, "merge"),
 		OPT_END(),
 	};
+	int has_dash_dash;
 
 	memset(&opts, 0, sizeof(opts));
 	memset(&new, 0, sizeof(new));
@@ -522,11 +467,55 @@ int cmd_checkout(int argc, const char **argv, const char *prefix)
 
 	argc = parse_options(argc, argv, options, checkout_usage,
 			     PARSE_OPT_KEEP_DASHDASH);
+
+	if (!opts.new_branch && (opts.track != git_branch_track))
+		die("git checkout: --track and --no-track require -b");
+
+	if (opts.force && opts.merge)
+		die("git checkout: -f and -m are incompatible");
+
+	/*
+	 * case 1: git checkout <ref> -- [<paths>]
+	 *
+	 *   <ref> must be a valid tree, everything after the '--' must be
+	 *   a path.
+	 *
+	 * case 2: git checkout -- [<paths>]
+	 *
+	 *   everything after the '--' must be paths.
+	 *
+	 * case 3: git checkout <something> [<paths>]
+	 *
+	 *   With no paths, if <something> is a commit, that is to
+	 *   switch to the branch or detach HEAD at it.
+	 *
+	 *   Otherwise <something> shall not be ambiguous.
+	 *   - If it's *only* a reference, treat it like case (1).
+	 *   - If it's only a path, treat it like case (2).
+	 *   - else: fail.
+	 *
+	 */
 	if (argc) {
+		if (!strcmp(argv[0], "--")) {       /* case (2) */
+			argv++;
+			argc--;
+			goto no_reference;
+		}
+
 		arg = argv[0];
-		if (get_sha1(arg, rev))
-			;
-		else if ((new.commit = lookup_commit_reference_gently(rev, 1))) {
+		has_dash_dash = (argc > 1) && !strcmp(argv[1], "--");
+
+		if (get_sha1(arg, rev)) {
+			if (has_dash_dash)          /* case (1) */
+				die("invalid reference: %s", arg);
+			goto no_reference;          /* case (3 -> 2) */
+		}
+
+		/* we can't end up being in (2) anymore, eat the argument */
+		argv++;
+		argc--;
+
+		if ((new.commit = lookup_commit_reference_gently(rev, 1))) {
 			new.name = arg;
 			setup_branch_path(&new);
 			if (resolve_ref(new.path, rev, 1, NULL))
@@ -535,25 +524,28 @@ int cmd_checkout(int argc, const char **argv, const char *prefix)
 				new.path = NULL;
 			parse_commit(new.commit);
 			source_tree = new.commit->tree;
-			argv++;
-			argc--;
-		} else if ((source_tree = parse_tree_indirect(rev))) {
+		} else
+			source_tree = parse_tree_indirect(rev);
+
+		if (!source_tree)                   /* case (1): want a tree */
+			die("reference is not a tree: %s", arg);
+		if (!has_dash_dash) {/* case (3 -> 1) */
+			/*
+			 * Do not complain the most common case
+			 *	git checkout branch
+			 * even if there happen to be a file called 'branch';
+			 * it would be extremely annoying.
+			 */
+			if (argc)
+				verify_non_filename(NULL, arg);
+		}
+		else {
 			argv++;
 			argc--;
 		}
 	}
 
-	if (argc && !strcmp(argv[0], "--")) {
-		argv++;
-		argc--;
-	}
-
-	if (!opts.new_branch && (opts.track != git_branch_track))
-		die("git checkout: --track and --no-track require -b");
-
-	if (opts.force && opts.merge)
-		die("git checkout: -f and -m are incompatible");
-
+no_reference:
 	if (argc) {
 		const char **pathspec = get_pathspec(prefix, argv);
 
@@ -570,6 +562,18 @@ int cmd_checkout(int argc, const char **argv, const char *prefix)
 		}
 
 		return checkout_paths(source_tree, pathspec);
+	}
+
+	if (opts.new_branch) {
+		struct strbuf buf;
+		strbuf_init(&buf, 0);
+		strbuf_addstr(&buf, "refs/heads/");
+		strbuf_addstr(&buf, opts.new_branch);
+		if (!get_sha1(buf.buf, rev))
+			die("git checkout: branch %s already exists", opts.new_branch);
+		if (check_ref_format(buf.buf))
+			die("git checkout: we do not like '%s' as a branch name.", opts.new_branch);
+		strbuf_release(&buf);
 	}
 
 	if (new.name && !new.commit) {

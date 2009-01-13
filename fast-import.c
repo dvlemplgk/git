@@ -43,7 +43,7 @@ Format of STDIN stream:
 
   new_tag ::= 'tag' sp tag_str lf
     'from' sp (ref_str | hexsha1 | sha1exp_str | idnum) lf
-    'tagger' sp name '<' email '>' when lf
+    ('tagger' sp name '<' email '>' when lf)?
     tag_msg;
   tag_msg ::= data;
 
@@ -816,7 +816,7 @@ static void start_packfile(void)
 	int pack_fd;
 
 	snprintf(tmpfile, sizeof(tmpfile),
-		"%s/tmp_pack_XXXXXX", get_object_directory());
+		"%s/pack/tmp_pack_XXXXXX", get_object_directory());
 	pack_fd = xmkstemp(tmpfile);
 	p = xcalloc(1, sizeof(*p) + strlen(tmpfile) + 2);
 	strcpy(p->pack_name, tmpfile);
@@ -878,7 +878,7 @@ static char *create_index(void)
 	}
 
 	snprintf(tmpfile, sizeof(tmpfile),
-		"%s/tmp_idx_XXXXXX", get_object_directory());
+		"%s/pack/tmp_idx_XXXXXX", get_object_directory());
 	idx_fd = xmkstemp(tmpfile);
 	f = sha1fd(idx_fd, tmpfile);
 	sha1write(f, array, 256 * sizeof(int));
@@ -951,7 +951,8 @@ static void end_packfile(void)
 
 		close_pack_windows(pack_data);
 		fixup_pack_header_footer(pack_data->pack_fd, pack_data->sha1,
-				    pack_data->pack_name, object_count);
+				    pack_data->pack_name, object_count,
+				    NULL, 0);
 		close(pack_data->pack_fd);
 		idx_name = keep_pack(create_index());
 
@@ -981,8 +982,10 @@ static void end_packfile(void)
 
 		pack_id++;
 	}
-	else
+	else {
+		close(old_p->pack_fd);
 		unlink(old_p->pack_name);
+	}
 	free(old_p);
 
 	/* We can't carry a delta across packfiles. */
@@ -1868,6 +1871,7 @@ static void file_change_m(struct branch *b)
 	case S_IFREG | 0644:
 	case S_IFREG | 0755:
 	case S_IFLNK:
+	case S_IFGITLINK:
 	case 0644:
 	case 0755:
 		/* ok */
@@ -1900,7 +1904,20 @@ static void file_change_m(struct branch *b)
 		p = uq.buf;
 	}
 
-	if (inline_data) {
+	if (S_ISGITLINK(mode)) {
+		if (inline_data)
+			die("Git links cannot be specified 'inline': %s",
+				command_buf.buf);
+		else if (oe) {
+			if (oe->type != OBJ_COMMIT)
+				die("Not a commit (actually a %s): %s",
+					typename(oe->type), command_buf.buf);
+		}
+		/*
+		 * Accept the sha1 without checking; it expected to be in
+		 * another repository.
+		 */
+	} else if (inline_data) {
 		static struct strbuf buf = STRBUF_INIT;
 
 		if (p != uq.buf) {
@@ -2247,23 +2264,27 @@ static void parse_new_tag(void)
 	read_next_command();
 
 	/* tagger ... */
-	if (prefixcmp(command_buf.buf, "tagger "))
-		die("Expected tagger command, got %s", command_buf.buf);
-	tagger = parse_ident(command_buf.buf + 7);
+	if (!prefixcmp(command_buf.buf, "tagger ")) {
+		tagger = parse_ident(command_buf.buf + 7);
+		read_next_command();
+	} else
+		tagger = NULL;
 
 	/* tag payload/message */
-	read_next_command();
 	parse_data(&msg);
 
 	/* build the tag object */
 	strbuf_reset(&new_data);
+
 	strbuf_addf(&new_data,
-		"object %s\n"
-		"type %s\n"
-		"tag %s\n"
-		"tagger %s\n"
-		"\n",
-		sha1_to_hex(sha1), commit_type, t->name, tagger);
+		    "object %s\n"
+		    "type %s\n"
+		    "tag %s\n",
+		    sha1_to_hex(sha1), commit_type, t->name);
+	if (tagger)
+		strbuf_addf(&new_data,
+			    "tagger %s\n", tagger);
+	strbuf_addch(&new_data, '\n');
 	strbuf_addbuf(&new_data, &msg);
 	free(tagger);
 
@@ -2374,7 +2395,7 @@ static int git_pack_config(const char *k, const char *v, void *cb)
 }
 
 static const char fast_import_usage[] =
-"git-fast-import [--date-format=f] [--max-pack-size=n] [--depth=n] [--active-branches=n] [--export-marks=marks.file]";
+"git fast-import [--date-format=f] [--max-pack-size=n] [--depth=n] [--active-branches=n] [--export-marks=marks.file]";
 
 int main(int argc, const char **argv)
 {

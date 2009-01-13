@@ -178,7 +178,7 @@ test_expect_success 'failed (non-fast-forward) push with matching heads' '
 	mk_test heads/master &&
 	git push testrepo : &&
 	git commit --amend -massaged &&
-	! git push testrepo &&
+	test_must_fail git push testrepo &&
 	check_push_result $the_commit heads/master &&
 	git reset --hard $the_commit
 
@@ -374,7 +374,7 @@ test_expect_success 'push with +HEAD' '
 
 	# Without force rewinding should fail
 	git reset --hard HEAD^ &&
-	! git push testrepo HEAD &&
+	test_must_fail git push testrepo HEAD &&
 	check_push_result $the_commit heads/local &&
 
 	# With force rewinding should succeed
@@ -437,6 +437,37 @@ test_expect_success 'push updates local refs' '
 
 '
 
+test_expect_success 'push updates up-to-date local refs' '
+
+	rm -rf parent child &&
+	mkdir parent &&
+	(cd parent && git init &&
+		echo one >foo && git add foo && git commit -m one) &&
+	git clone parent child1 &&
+	git clone parent child2 &&
+	(cd child1 &&
+		echo two >foo && git commit -a -m two &&
+		git push) &&
+	(cd child2 &&
+		git pull ../child1 master &&
+		git push &&
+	test $(git rev-parse master) = $(git rev-parse remotes/origin/master))
+
+'
+
+test_expect_success 'push preserves up-to-date packed refs' '
+
+	rm -rf parent child &&
+	mkdir parent &&
+	(cd parent && git init &&
+		echo one >foo && git add foo && git commit -m one) &&
+	git clone parent child &&
+	(cd child &&
+		git push &&
+	! test -f .git/refs/remotes/origin/master)
+
+'
+
 test_expect_success 'push does not update local refs on failure' '
 
 	rm -rf parent child &&
@@ -448,7 +479,7 @@ test_expect_success 'push does not update local refs on failure' '
 	git clone parent child &&
 	(cd child &&
 		echo two >foo && git commit -a -m two &&
-		! git push &&
+		test_must_fail git push &&
 		test $(git rev-parse master) != \
 			$(git rev-parse remotes/origin/master))
 
@@ -459,8 +490,58 @@ test_expect_success 'allow deleting an invalid remote ref' '
 	pwd &&
 	rm -f testrepo/.git/objects/??/* &&
 	git push testrepo :refs/heads/master &&
-	(cd testrepo && ! git rev-parse --verify refs/heads/master)
+	(cd testrepo && test_must_fail git rev-parse --verify refs/heads/master)
 
+'
+
+test_expect_success 'fetch with branches' '
+	mk_empty &&
+	git branch second $the_first_commit &&
+	git checkout second &&
+	echo ".." > testrepo/.git/branches/branch1 &&
+	(cd testrepo &&
+		git fetch branch1 &&
+		r=$(git show-ref -s --verify refs/heads/branch1) &&
+		test "z$r" = "z$the_commit" &&
+		test 1 = $(git for-each-ref refs/heads | wc -l)
+	) &&
+	git checkout master
+'
+
+test_expect_success 'fetch with branches containing #' '
+	mk_empty &&
+	echo "..#second" > testrepo/.git/branches/branch2 &&
+	(cd testrepo &&
+		git fetch branch2 &&
+		r=$(git show-ref -s --verify refs/heads/branch2) &&
+		test "z$r" = "z$the_first_commit" &&
+		test 1 = $(git for-each-ref refs/heads | wc -l)
+	) &&
+	git checkout master
+'
+
+test_expect_success 'push with branches' '
+	mk_empty &&
+	git checkout second &&
+	echo "testrepo" > .git/branches/branch1 &&
+	git push branch1 &&
+	(cd testrepo &&
+		r=$(git show-ref -s --verify refs/heads/master) &&
+		test "z$r" = "z$the_first_commit" &&
+		test 1 = $(git for-each-ref refs/heads | wc -l)
+	)
+'
+
+test_expect_success 'push with branches containing #' '
+	mk_empty &&
+	echo "testrepo#branch3" > .git/branches/branch2 &&
+	git push branch2 &&
+	(cd testrepo &&
+		r=$(git show-ref -s --verify refs/heads/branch3) &&
+		test "z$r" = "z$the_first_commit" &&
+		test 1 = $(git for-each-ref refs/heads | wc -l)
+	) &&
+	git checkout master
 '
 
 test_done

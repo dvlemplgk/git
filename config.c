@@ -16,6 +16,8 @@ static int config_linenr;
 static int config_file_eof;
 static int zlib_compression_seen;
 
+const char *config_exclusive_filename = NULL;
+
 static int get_next_char(void)
 {
 	int c;
@@ -339,6 +341,10 @@ static int git_default_core_config(const char *var, const char *value)
 		trust_executable_bit = git_config_bool(var, value);
 		return 0;
 	}
+	if (!strcmp(var, "core.trustctime")) {
+		trust_ctime = git_config_bool(var, value);
+		return 0;
+	}
 
 	if (!strcmp(var, "core.quotepath")) {
 		quote_path_fully = git_config_bool(var, value);
@@ -579,19 +585,12 @@ int git_config_from_file(config_fn_t fn, const char *filename, void *data)
 const char *git_etc_gitconfig(void)
 {
 	static const char *system_wide;
-	if (!system_wide) {
-		system_wide = ETC_GITCONFIG;
-		if (!is_absolute_path(system_wide)) {
-			/* interpret path relative to exec-dir */
-			struct strbuf d = STRBUF_INIT;
-			strbuf_addf(&d, "%s/%s", git_exec_path(), system_wide);
-			system_wide = strbuf_detach(&d, NULL);
-		}
-	}
+	if (!system_wide)
+		system_wide = system_path(ETC_GITCONFIG);
 	return system_wide;
 }
 
-int git_env_bool(const char *k, int def)
+static int git_env_bool(const char *k, int def)
 {
 	const char *v = getenv(k);
 	return v ? git_config_bool(k, v) : def;
@@ -611,31 +610,28 @@ int git_config(config_fn_t fn, void *data)
 {
 	int ret = 0;
 	char *repo_config = NULL;
-	const char *home = NULL, *filename;
+	const char *home = NULL;
 
 	/* $GIT_CONFIG makes git read _only_ the given config file,
 	 * $GIT_CONFIG_LOCAL will make it process it in addition to the
 	 * global config file, the same way it would the per-repository
 	 * config file otherwise. */
-	filename = getenv(CONFIG_ENVIRONMENT);
-	if (!filename) {
-		if (git_config_system() && !access(git_etc_gitconfig(), R_OK))
-			ret += git_config_from_file(fn, git_etc_gitconfig(),
-				data);
-		home = getenv("HOME");
-		filename = getenv(CONFIG_LOCAL_ENVIRONMENT);
-		if (!filename)
-			filename = repo_config = xstrdup(git_path("config"));
-	}
+	if (config_exclusive_filename)
+		return git_config_from_file(fn, config_exclusive_filename, data);
+	if (git_config_system() && !access(git_etc_gitconfig(), R_OK))
+		ret += git_config_from_file(fn, git_etc_gitconfig(),
+					    data);
 
+	home = getenv("HOME");
 	if (git_config_global() && home) {
 		char *user_config = xstrdup(mkpath("%s/.gitconfig", home));
 		if (!access(user_config, R_OK))
-			ret = git_config_from_file(fn, user_config, data);
+			ret += git_config_from_file(fn, user_config, data);
 		free(user_config);
 	}
 
-	ret += git_config_from_file(fn, filename, data);
+	repo_config = git_pathdup("config");
+	ret += git_config_from_file(fn, repo_config, data);
 	free(repo_config);
 	return ret;
 }
@@ -873,13 +869,10 @@ int git_config_set_multivar(const char* key, const char* value,
 	struct lock_file *lock = NULL;
 	const char* last_dot = strrchr(key, '.');
 
-	config_filename = getenv(CONFIG_ENVIRONMENT);
-	if (!config_filename) {
-		config_filename = getenv(CONFIG_LOCAL_ENVIRONMENT);
-		if (!config_filename)
-			config_filename  = git_path("config");
-	}
-	config_filename = xstrdup(config_filename);
+	if (config_exclusive_filename)
+		config_filename = xstrdup(config_exclusive_filename);
+	else
+		config_filename = git_pathdup("config");
 
 	/*
 	 * Since "key" actually contains the section name and the real
@@ -1136,13 +1129,10 @@ int git_config_rename_section(const char *old_name, const char *new_name)
 	int out_fd;
 	char buf[1024];
 
-	config_filename = getenv(CONFIG_ENVIRONMENT);
-	if (!config_filename) {
-		config_filename = getenv(CONFIG_LOCAL_ENVIRONMENT);
-		if (!config_filename)
-			config_filename  = git_path("config");
-	}
-	config_filename = xstrdup(config_filename);
+	if (config_exclusive_filename)
+		config_filename = xstrdup(config_exclusive_filename);
+	else
+		config_filename = git_pathdup("config");
 	out_fd = hold_lock_file_for_update(lock, config_filename, 0);
 	if (out_fd < 0) {
 		ret = error("could not lock config file %s", config_filename);

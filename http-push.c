@@ -14,7 +14,7 @@
 #include <expat.h>
 
 static const char http_push_usage[] =
-"git-http-push [--all] [--dry-run] [--force] [--verbose] <remote> [<head>...]\n";
+"git http-push [--all] [--dry-run] [--force] [--verbose] <remote> [<head>...]\n";
 
 #ifndef XML_STATUS_OK
 enum XML_Status {
@@ -783,7 +783,7 @@ static void finish_request(struct transfer_request *request)
 					lst = &((*lst)->next);
 				*lst = (*lst)->next;
 
-				if (!verify_pack(target, 0))
+				if (!verify_pack(target))
 					install_packed_git(target);
 				else
 					remote->can_update_info_refs = 0;

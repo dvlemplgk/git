@@ -56,6 +56,12 @@ M 644 :2 file2
 M 644 :3 file3
 M 755 :4 file4
 
+tag series-A
+from :5
+data <<EOF
+An annotated tag without a tagger
+EOF
+
 INPUT_END
 test_expect_success \
     'A: create pack from stdin' \
@@ -100,6 +106,18 @@ printf "$file4_data" >expect
 test_expect_success \
 	'A: verify file4' \
 	'git cat-file blob master:file4 >actual && test_cmp expect actual'
+
+cat >expect <<EOF
+object $(git rev-parse refs/heads/master)
+type commit
+tag series-A
+
+An annotated tag without a tagger
+EOF
+test_expect_success 'A: verify tag/series-A' '
+	git cat-file tag tags/series-A >actual &&
+	test_cmp expect actual
+'
 
 cat >expect <<EOF
 :2 `git rev-parse --verify master:file2`
@@ -166,7 +184,7 @@ M 755 0000000000000000000000000000000000000001 zero1
 
 INPUT_END
 test_expect_success 'B: fail on invalid blob sha1' '
-    ! git-fast-import <input
+    test_must_fail git-fast-import <input
 '
 rm -f .git/objects/pack_* .git/objects/index_*
 
@@ -181,7 +199,7 @@ from refs/heads/master
 
 INPUT_END
 test_expect_success 'B: fail on invalid branch name ".badbranchname"' '
-    ! git-fast-import <input
+    test_must_fail git-fast-import <input
 '
 rm -f .git/objects/pack_* .git/objects/index_*
 
@@ -196,7 +214,7 @@ from refs/heads/master
 
 INPUT_END
 test_expect_success 'B: fail on invalid branch name "bad[branch]name"' '
-    ! git-fast-import <input
+    test_must_fail git-fast-import <input
 '
 rm -f .git/objects/pack_* .git/objects/index_*
 
@@ -340,7 +358,7 @@ from refs/heads/branch^0
 
 INPUT_END
 test_expect_success 'E: rfc2822 date, --date-format=raw' '
-    ! git-fast-import --date-format=raw <input
+    test_must_fail git-fast-import --date-format=raw <input
 '
 test_expect_success \
     'E: rfc2822 date, --date-format=rfc2822' \
@@ -917,5 +935,157 @@ test_expect_success \
 	'git-fast-import <input >actual &&
 	 grep "progress " <input >expect &&
 	 test_cmp expect actual'
+
+###
+### series P (gitlinks)
+###
+
+cat >input <<INPUT_END
+blob
+mark :1
+data 10
+test file
+
+reset refs/heads/sub
+commit refs/heads/sub
+mark :2
+committer $GIT_COMMITTER_NAME <$GIT_COMMITTER_EMAIL> $GIT_COMMITTER_DATE
+data 12
+sub_initial
+M 100644 :1 file
+
+blob
+mark :3
+data <<DATAEND
+[submodule "sub"]
+	path = sub
+	url = "`pwd`/sub"
+DATAEND
+
+commit refs/heads/subuse1
+mark :4
+committer $GIT_COMMITTER_NAME <$GIT_COMMITTER_EMAIL> $GIT_COMMITTER_DATE
+data 8
+initial
+from refs/heads/master
+M 100644 :3 .gitmodules
+M 160000 :2 sub
+
+blob
+mark :5
+data 20
+test file
+more data
+
+commit refs/heads/sub
+mark :6
+committer $GIT_COMMITTER_NAME <$GIT_COMMITTER_EMAIL> $GIT_COMMITTER_DATE
+data 11
+sub_second
+from :2
+M 100644 :5 file
+
+commit refs/heads/subuse1
+mark :7
+committer $GIT_COMMITTER_NAME <$GIT_COMMITTER_EMAIL> $GIT_COMMITTER_DATE
+data 7
+second
+from :4
+M 160000 :6 sub
+
+INPUT_END
+
+test_expect_success \
+	'P: supermodule & submodule mix' \
+	'git-fast-import <input &&
+	 git checkout subuse1 &&
+	 rm -rf sub && mkdir sub && cd sub &&
+	 git init &&
+	 git fetch --update-head-ok .. refs/heads/sub:refs/heads/master &&
+	 git checkout master &&
+	 cd .. &&
+	 git submodule init &&
+	 git submodule update'
+
+SUBLAST=$(git-rev-parse --verify sub)
+SUBPREV=$(git-rev-parse --verify sub^)
+
+cat >input <<INPUT_END
+blob
+mark :1
+data <<DATAEND
+[submodule "sub"]
+	path = sub
+	url = "`pwd`/sub"
+DATAEND
+
+commit refs/heads/subuse2
+mark :2
+committer $GIT_COMMITTER_NAME <$GIT_COMMITTER_EMAIL> $GIT_COMMITTER_DATE
+data 8
+initial
+from refs/heads/master
+M 100644 :1 .gitmodules
+M 160000 $SUBPREV sub
+
+commit refs/heads/subuse2
+mark :3
+committer $GIT_COMMITTER_NAME <$GIT_COMMITTER_EMAIL> $GIT_COMMITTER_DATE
+data 7
+second
+from :2
+M 160000 $SUBLAST sub
+
+INPUT_END
+
+test_expect_success \
+	'P: verbatim SHA gitlinks' \
+	'git branch -D sub &&
+	 git gc && git prune &&
+	 git-fast-import <input &&
+	 test $(git-rev-parse --verify subuse2) = $(git-rev-parse --verify subuse1)'
+
+test_tick
+cat >input <<INPUT_END
+commit refs/heads/subuse3
+mark :1
+committer $GIT_COMMITTER_NAME <$GIT_COMMITTER_EMAIL> $GIT_COMMITTER_DATE
+data <<COMMIT
+corrupt
+COMMIT
+
+from refs/heads/subuse2
+M 160000 inline sub
+data <<DATA
+$SUBPREV
+DATA
+
+INPUT_END
+
+test_expect_success 'P: fail on inline gitlink' '
+    test_must_fail git-fast-import <input'
+
+test_tick
+cat >input <<INPUT_END
+blob
+mark :1
+data <<DATA
+$SUBPREV
+DATA
+
+commit refs/heads/subuse3
+mark :2
+committer $GIT_COMMITTER_NAME <$GIT_COMMITTER_EMAIL> $GIT_COMMITTER_DATE
+data <<COMMIT
+corrupt
+COMMIT
+
+from refs/heads/subuse2
+M 160000 :1 sub
+
+INPUT_END
+
+test_expect_success 'P: fail on blob mark in gitlink' '
+    test_must_fail git-fast-import <input'
 
 test_done

@@ -17,7 +17,7 @@ test_expect_success \
     'prepare a trivial repository' \
     'echo Hello > A &&
      git update-index --add A &&
-     git-commit -m "Initial commit." &&
+     git commit -m "Initial commit." &&
      HEAD=$(git rev-parse --verify HEAD)'
 
 SHA1=
@@ -43,7 +43,7 @@ test_expect_success 'git branch c/d should barf if branch c exists' '
      git branch c &&
      git pack-refs --all &&
      rm -f .git/refs/heads/c &&
-     ! git branch c/d
+     test_must_fail git branch c/d
 '
 
 test_expect_success \
@@ -72,7 +72,7 @@ test_expect_success \
 test_expect_success 'git branch i/j/k should barf if branch i exists' '
      git branch i &&
      git pack-refs --all --prune &&
-     ! git branch i/j/k
+     test_must_fail git branch i/j/k
 '
 
 test_expect_success \
@@ -96,8 +96,15 @@ test_expect_success \
      git branch -d n/o/p &&
      git branch n'
 
+test_expect_success \
+	'see if up-to-date packed refs are preserved' \
+	'git branch q &&
+	 git pack-refs --all --prune &&
+	 git update-ref refs/heads/q refs/heads/q &&
+	 ! test -f .git/refs/heads/q'
+
 test_expect_success 'pack, prune and repack' '
-	git-tag foo &&
+	git tag foo &&
 	git pack-refs --all --prune &&
 	git show-ref >all-of-them &&
 	git pack-refs &&

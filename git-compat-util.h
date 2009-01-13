@@ -63,17 +63,18 @@
 #include <sys/time.h>
 #include <time.h>
 #include <signal.h>
-#include <sys/wait.h>
 #include <fnmatch.h>
+#include <assert.h>
+#include <regex.h>
+#include <utime.h>
+#ifndef __MINGW32__
+#include <sys/wait.h>
 #include <sys/poll.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
-#include <utime.h>
 #ifndef NO_SYS_SELECT_H
 #include <sys/select.h>
 #endif
-#include <assert.h>
-#include <regex.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
@@ -89,6 +90,10 @@
 #include <grp.h>
 #define _ALL_SOURCE 1
 #endif
+#else 	/* __MINGW32__ */
+/* pull in Windows compatibility stuff */
+#include "compat/mingw.h"
+#endif	/* __MINGW32__ */
 
 #ifndef NO_ICONV
 #include <iconv.h>
@@ -103,6 +108,30 @@
 
 #ifndef PRIuMAX
 #define PRIuMAX "llu"
+#endif
+
+#ifndef PRIu32
+#define PRIu32 "u"
+#endif
+
+#ifndef PRIx32
+#define PRIx32 "x"
+#endif
+
+#ifndef PATH_SEP
+#define PATH_SEP ':'
+#endif
+
+#ifndef STRIP_EXTENSION
+#define STRIP_EXTENSION ""
+#endif
+
+#ifndef has_dos_drive_prefix
+#define has_dos_drive_prefix(path) 0
+#endif
+
+#ifndef is_dir_sep
+#define is_dir_sep(c) ((c) == '/')
 #endif
 
 #ifdef __GNUC__
@@ -126,6 +155,13 @@ extern void set_error_routine(void (*routine)(const char *err, va_list params));
 extern void set_warn_routine(void (*routine)(const char *warn, va_list params));
 
 extern int prefixcmp(const char *str, const char *prefix);
+extern time_t tm_to_time_t(const struct tm *tm);
+
+static inline const char *skip_prefix(const char *str, const char *prefix)
+{
+	size_t len = strlen(prefix);
+	return strncmp(str, prefix, len) ? NULL : str + len;
+}
 
 #ifdef NO_MMAP
 
@@ -163,6 +199,12 @@ extern int git_munmap(void *start, size_t length);
 #define pread git_pread
 extern ssize_t git_pread(int fd, void *buf, size_t count, off_t offset);
 #endif
+/*
+ * Forward decl that will remind us if its twin in cache.h changes.
+ * This function is used in compat/pread.c.  But we can't include
+ * cache.h there.
+ */
+extern ssize_t read_in_full(int fd, void *buf, size_t count);
 
 #ifdef NO_SETENV
 #define setenv gitsetenv
@@ -240,161 +282,18 @@ static inline char *gitstrchrnul(const char *s, int c)
 
 extern void release_pack_memory(size_t, int);
 
-static inline char* xstrdup(const char *str)
-{
-	char *ret = strdup(str);
-	if (!ret) {
-		release_pack_memory(strlen(str) + 1, -1);
-		ret = strdup(str);
-		if (!ret)
-			die("Out of memory, strdup failed");
-	}
-	return ret;
-}
-
-static inline void *xmalloc(size_t size)
-{
-	void *ret = malloc(size);
-	if (!ret && !size)
-		ret = malloc(1);
-	if (!ret) {
-		release_pack_memory(size, -1);
-		ret = malloc(size);
-		if (!ret && !size)
-			ret = malloc(1);
-		if (!ret)
-			die("Out of memory, malloc failed");
-	}
-#ifdef XMALLOC_POISON
-	memset(ret, 0xA5, size);
-#endif
-	return ret;
-}
-
-/*
- * xmemdupz() allocates (len + 1) bytes of memory, duplicates "len" bytes of
- * "data" to the allocated memory, zero terminates the allocated memory,
- * and returns a pointer to the allocated memory. If the allocation fails,
- * the program dies.
- */
-static inline void *xmemdupz(const void *data, size_t len)
-{
-	char *p = xmalloc(len + 1);
-	memcpy(p, data, len);
-	p[len] = '\0';
-	return p;
-}
-
-static inline char *xstrndup(const char *str, size_t len)
-{
-	char *p = memchr(str, '\0', len);
-	return xmemdupz(str, p ? p - str : len);
-}
-
-static inline void *xrealloc(void *ptr, size_t size)
-{
-	void *ret = realloc(ptr, size);
-	if (!ret && !size)
-		ret = realloc(ptr, 1);
-	if (!ret) {
-		release_pack_memory(size, -1);
-		ret = realloc(ptr, size);
-		if (!ret && !size)
-			ret = realloc(ptr, 1);
-		if (!ret)
-			die("Out of memory, realloc failed");
-	}
-	return ret;
-}
-
-static inline void *xcalloc(size_t nmemb, size_t size)
-{
-	void *ret = calloc(nmemb, size);
-	if (!ret && (!nmemb || !size))
-		ret = calloc(1, 1);
-	if (!ret) {
-		release_pack_memory(nmemb * size, -1);
-		ret = calloc(nmemb, size);
-		if (!ret && (!nmemb || !size))
-			ret = calloc(1, 1);
-		if (!ret)
-			die("Out of memory, calloc failed");
-	}
-	return ret;
-}
-
-static inline void *xmmap(void *start, size_t length,
-	int prot, int flags, int fd, off_t offset)
-{
-	void *ret = mmap(start, length, prot, flags, fd, offset);
-	if (ret == MAP_FAILED) {
-		if (!length)
-			return NULL;
-		release_pack_memory(length, fd);
-		ret = mmap(start, length, prot, flags, fd, offset);
-		if (ret == MAP_FAILED)
-			die("Out of memory? mmap failed: %s", strerror(errno));
-	}
-	return ret;
-}
-
-/*
- * xread() is the same a read(), but it automatically restarts read()
- * operations with a recoverable error (EAGAIN and EINTR). xread()
- * DOES NOT GUARANTEE that "len" bytes is read even if the data is available.
- */
-static inline ssize_t xread(int fd, void *buf, size_t len)
-{
-	ssize_t nr;
-	while (1) {
-		nr = read(fd, buf, len);
-		if ((nr < 0) && (errno == EAGAIN || errno == EINTR))
-			continue;
-		return nr;
-	}
-}
-
-/*
- * xwrite() is the same a write(), but it automatically restarts write()
- * operations with a recoverable error (EAGAIN and EINTR). xwrite() DOES NOT
- * GUARANTEE that "len" bytes is written even if the operation is successful.
- */
-static inline ssize_t xwrite(int fd, const void *buf, size_t len)
-{
-	ssize_t nr;
-	while (1) {
-		nr = write(fd, buf, len);
-		if ((nr < 0) && (errno == EAGAIN || errno == EINTR))
-			continue;
-		return nr;
-	}
-}
-
-static inline int xdup(int fd)
-{
-	int ret = dup(fd);
-	if (ret < 0)
-		die("dup failed: %s", strerror(errno));
-	return ret;
-}
-
-static inline FILE *xfdopen(int fd, const char *mode)
-{
-	FILE *stream = fdopen(fd, mode);
-	if (stream == NULL)
-		die("Out of memory? fdopen failed: %s", strerror(errno));
-	return stream;
-}
-
-static inline int xmkstemp(char *template)
-{
-	int fd;
-
-	fd = mkstemp(template);
-	if (fd < 0)
-		die("Unable to create temporary file: %s", strerror(errno));
-	return fd;
-}
+extern char *xstrdup(const char *str);
+extern void *xmalloc(size_t size);
+extern void *xmemdupz(const void *data, size_t len);
+extern char *xstrndup(const char *str, size_t len);
+extern void *xrealloc(void *ptr, size_t size);
+extern void *xcalloc(size_t nmemb, size_t size);
+extern void *xmmap(void *start, size_t length, int prot, int flags, int fd, off_t offset);
+extern ssize_t xread(int fd, void *buf, size_t len);
+extern ssize_t xwrite(int fd, const void *buf, size_t len);
+extern int xdup(int fd);
+extern FILE *xfdopen(int fd, const char *mode);
+extern int xmkstemp(char *template);
 
 static inline size_t xsize_t(off_t len)
 {

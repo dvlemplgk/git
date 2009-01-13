@@ -104,20 +104,20 @@ test_expect_success 'fetch must not resolve short tag name' '
 	cd five &&
 	git init &&
 
-	! git fetch .. anno:five
+	test_must_fail git fetch .. anno:five
 
 '
 
 test_expect_success 'fetch must not resolve short remote name' '
 
 	cd "$D" &&
-	git-update-ref refs/remotes/six/HEAD HEAD
+	git update-ref refs/remotes/six/HEAD HEAD
 
 	mkdir six &&
 	cd six &&
 	git init &&
 
-	! git fetch .. six:six
+	test_must_fail git fetch .. six:six
 
 '
 
@@ -143,7 +143,7 @@ test_expect_success 'create bundle 2' '
 test_expect_success 'unbundle 1' '
 	cd "$D/bundle" &&
 	git checkout -b some-branch &&
-	! git fetch "$D/bundle1" master:master
+	test_must_fail git fetch "$D/bundle1" master:master
 '
 
 test_expect_success 'bundle 1 has only 3 files ' '
@@ -236,7 +236,7 @@ test_expect_success 'fetch with a non-applying branch.<name>.merge' '
 
 # the strange name is: a\!'b
 test_expect_success 'quoting of a strangely named repo' '
-	! git fetch "a\\!'\''b" > result 2>&1 &&
+	test_must_fail git fetch "a\\!'\''b" > result 2>&1 &&
 	cat result &&
 	grep "fatal: '\''a\\\\!'\''b'\''" result
 '
@@ -264,7 +264,7 @@ test_expect_success 'explicit fetch should not update tracking' '
 		git fetch origin master &&
 		n=$(git rev-parse --verify refs/remotes/origin/master) &&
 		test "$o" = "$n" &&
-		! git rev-parse --verify refs/remotes/origin/side
+		test_must_fail git rev-parse --verify refs/remotes/origin/side
 	)
 '
 
@@ -278,7 +278,7 @@ test_expect_success 'explicit pull should not update tracking' '
 		git pull origin master &&
 		n=$(git rev-parse --verify refs/remotes/origin/master) &&
 		test "$o" = "$n" &&
-		! git rev-parse --verify refs/remotes/origin/side
+		test_must_fail git rev-parse --verify refs/remotes/origin/side
 	)
 '
 
@@ -300,6 +300,18 @@ test_expect_success 'pushing nonexistent branch by mistake should not segv' '
 
 	cd "$D" &&
 	test_must_fail git push seven no:no
+
+'
+
+test_expect_success 'refuse to fetch into the current branch' '
+
+	test_must_fail git fetch . side:master
+
+'
+
+test_expect_success 'fetch into the current branch with --update-head-ok' '
+
+	git fetch --update-head-ok . side:master
 
 '
 

@@ -11,7 +11,7 @@ test_expect_success 'split sample box' \
 	'git mailsplit -o. ../t5100/sample.mbox >last &&
 	last=`cat last` &&
 	echo total is $last &&
-	test `cat last` = 10'
+	test `cat last` = 11'
 
 for mail in `echo 00*`
 do
@@ -40,6 +40,17 @@ test_expect_success 'Preserve NULs out of MIME encoded message' '
 	cmp ../t5100/nul-b64.in 00001 &&
 	git mailinfo msg patch <00001 &&
 	cmp ../t5100/nul-b64.expect patch
+
+'
+
+test_expect_success 'mailinfo on from header without name works' '
+
+	mkdir info-from &&
+	git mailsplit -oinfo-from "$TEST_DIRECTORY"/t5100/info-from.in &&
+	test_cmp "$TEST_DIRECTORY"/t5100/info-from.in info-from/0001 &&
+	git mailinfo info-from/msg info-from/patch \
+	  <info-from/0001 >info-from/out &&
+	test_cmp "$TEST_DIRECTORY"/t5100/info-from.expect info-from/out
 
 '
 

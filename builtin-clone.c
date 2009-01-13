@@ -18,6 +18,7 @@
 #include "transport.h"
 #include "strbuf.h"
 #include "dir.h"
+#include "pack-refs.h"
 
 /*
  * Overall FIXMEs:
@@ -28,11 +29,11 @@
  *
  */
 static const char * const builtin_clone_usage[] = {
-	"git-clone [options] [--] <repo> [<dir>]",
+	"git clone [options] [--] <repo> [<dir>]",
 	NULL
 };
 
-static int option_quiet, option_no_checkout, option_bare;
+static int option_quiet, option_no_checkout, option_bare, option_mirror;
 static int option_local, option_no_hardlinks, option_shared;
 static char *option_template, *option_reference, *option_depth;
 static char *option_origin = NULL;
@@ -44,6 +45,8 @@ static struct option builtin_clone_options[] = {
 		    "don't create a checkout"),
 	OPT_BOOLEAN(0, "bare", &option_bare, "create a bare repository"),
 	OPT_BOOLEAN(0, "naked", &option_bare, "create a bare repository"),
+	OPT_BOOLEAN(0, "mirror", &option_mirror,
+		    "create a mirror repository (implies bare)"),
 	OPT_BOOLEAN('l', "local", &option_local,
 		    "to clone from a local repository"),
 	OPT_BOOLEAN(0, "no-hardlinks", &option_no_hardlinks,
@@ -55,7 +58,7 @@ static struct option builtin_clone_options[] = {
 	OPT_STRING(0, "reference", &option_reference, "repo",
 		   "reference repository"),
 	OPT_STRING('o', "origin", &option_origin, "branch",
-		   "use <branch> instead or 'origin' to track upstream"),
+		   "use <branch> instead of 'origin' to track upstream"),
 	OPT_STRING('u', "upload-pack", &option_upload_pack, "path",
 		   "path to git-upload-pack on the remote"),
 	OPT_STRING(0, "depth", &option_depth, "depth",
@@ -92,37 +95,46 @@ static char *get_repo_path(const char *repo, int *is_bundle)
 	return NULL;
 }
 
-static char *guess_dir_name(const char *repo, int is_bundle)
+static char *guess_dir_name(const char *repo, int is_bundle, int is_bare)
 {
-	const char *p, *start, *end, *limit;
-	int after_slash_or_colon;
+	const char *end = repo + strlen(repo), *start;
 
-	/* Guess dir name from repository: strip trailing '/',
-	 * strip trailing '[:/]*.{git,bundle}', strip leading '.*[/:]'. */
+	/*
+	 * Strip trailing slashes and /.git
+	 */
+	while (repo < end && is_dir_sep(end[-1]))
+		end--;
+	if (end - repo > 5 && is_dir_sep(end[-5]) &&
+	    !strncmp(end - 4, ".git", 4)) {
+		end -= 5;
+		while (repo < end && is_dir_sep(end[-1]))
+			end--;
+	}
 
-	after_slash_or_colon = 1;
-	limit = repo + strlen(repo);
-	start = repo;
-	end = limit;
-	for (p = repo; p < limit; p++) {
-		const char *prefix = is_bundle ? ".bundle" : ".git";
-		if (!prefixcmp(p, prefix)) {
-			if (!after_slash_or_colon)
-				end = p;
-			p += strlen(prefix) - 1;
-		} else if (!prefixcmp(p, ".bundle")) {
-			if (!after_slash_or_colon)
-				end = p;
-			p += 7;
-		} else if (*p == '/' || *p == ':') {
-			if (end == limit)
-				end = p;
-			after_slash_or_colon = 1;
-		} else if (after_slash_or_colon) {
-			start = p;
-			end = limit;
-			after_slash_or_colon = 0;
-		}
+	/*
+	 * Find last component, but be prepared that repo could have
+	 * the form  "remote.example.com:foo.git", i.e. no slash
+	 * in the directory part.
+	 */
+	start = end;
+	while (repo < start && !is_dir_sep(start[-1]) && start[-1] != ':')
+		start--;
+
+	/*
+	 * Strip .{bundle,git}.
+	 */
+	if (is_bundle) {
+		if (end - start > 7 && !strncmp(end - 7, ".bundle", 7))
+			end -= 7;
+	} else {
+		if (end - start > 4 && !strncmp(end - 4, ".git", 4))
+			end -= 4;
+	}
+
+	if (is_bare) {
+		char *result = xmalloc(end - start + 5);
+		sprintf(result, "%.*s.git", (int)(end - start), start);
+		return result;
 	}
 
 	return xstrndup(start, end - start);
@@ -133,6 +145,15 @@ static int is_directory(const char *path)
 	struct stat buf;
 
 	return !stat(path, &buf) && S_ISDIR(buf.st_mode);
+}
+
+static void strip_trailing_slashes(char *dir)
+{
+	char *end = dir + strlen(dir);
+
+	while (dir < end - 1 && is_dir_sep(end[-1]))
+		end--;
+	*end = '\0';
 }
 
 static void setup_reference(const char *repo)
@@ -318,11 +339,15 @@ static struct ref *write_remote_refs(const struct ref *refs,
 	struct ref *r;
 
 	get_fetch_map(refs, refspec, &tail, 0);
-	get_fetch_map(refs, tag_refspec, &tail, 0);
+	if (!option_mirror)
+		get_fetch_map(refs, tag_refspec, &tail, 0);
 
 	for (r = local_refs; r; r = r->next)
-		update_ref(reflog,
-			   r->peer_ref->name, r->old_sha1, NULL, 0, DIE_ON_ERR);
+		add_extra_ref(r->peer_ref->name, r->old_sha1, 0);
+
+	pack_refs(PACK_REFS_ALL);
+	clear_extra_refs();
+
 	return local_refs;
 }
 
@@ -338,6 +363,7 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 	char branch_top[256], key[256], value[256];
 	struct strbuf reflog_msg;
 	struct transport *transport = NULL;
+	char *src_ref_prefix = "refs/heads/";
 
 	struct refspec refspec;
 
@@ -351,6 +377,9 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 
 	if (option_no_hardlinks)
 		use_local_hardlinks = 0;
+
+	if (option_mirror)
+		option_bare = 1;
 
 	if (option_bare) {
 		if (option_origin)
@@ -367,7 +396,7 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 
 	path = get_repo_path(repo_name, &is_bundle);
 	if (path)
-		repo = path;
+		repo = xstrdup(make_nonrelative_path(repo_name));
 	else if (!strchr(repo_name, ':'))
 		repo = xstrdup(make_absolute_path(repo_name));
 	else
@@ -376,7 +405,8 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 	if (argc == 2)
 		dir = xstrdup(argv[1]);
 	else
-		dir = guess_dir_name(repo_name, is_bundle);
+		dir = guess_dir_name(repo_name, is_bundle, option_bare);
+	strip_trailing_slashes(dir);
 
 	if (!stat(dir, &buf))
 		die("destination directory '%s' already exists.", dir);
@@ -402,10 +432,11 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 	if (!option_bare) {
 		junk_work_tree = work_tree;
 		if (safe_create_leading_directories_const(work_tree) < 0)
-			die("could not create leading directories of '%s'",
-					work_tree);
+			die("could not create leading directories of '%s': %s",
+					work_tree, strerror(errno));
 		if (mkdir(work_tree, 0755))
-			die("could not create work tree dir '%s'.", work_tree);
+			die("could not create work tree dir '%s': %s.",
+					work_tree, strerror(errno));
 		set_git_work_tree(work_tree);
 	}
 	junk_git_dir = git_dir;
@@ -433,26 +464,36 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 	git_config(git_default_config, NULL);
 
 	if (option_bare) {
-		strcpy(branch_top, "refs/heads/");
+		if (option_mirror)
+			src_ref_prefix = "refs/";
+		strcpy(branch_top, src_ref_prefix);
 
 		git_config_set("core.bare", "true");
 	} else {
 		snprintf(branch_top, sizeof(branch_top),
 			 "refs/remotes/%s/", option_origin);
+	}
 
+	if (option_mirror || !option_bare) {
 		/* Configure the remote */
+		if (option_mirror) {
+			snprintf(key, sizeof(key),
+					"remote.%s.mirror", option_origin);
+			git_config_set(key, "true");
+		}
+
 		snprintf(key, sizeof(key), "remote.%s.url", option_origin);
 		git_config_set(key, repo);
 
 		snprintf(key, sizeof(key), "remote.%s.fetch", option_origin);
 		snprintf(value, sizeof(value),
-				"+refs/heads/*:%s*", branch_top);
+				"+%s*:%s*", src_ref_prefix, branch_top);
 		git_config_set_multivar(key, value, "^$", 0);
 	}
 
 	refspec.force = 0;
 	refspec.pattern = 1;
-	refspec.src = "refs/heads/";
+	refspec.src = src_ref_prefix;
 	refspec.dst = branch_top;
 
 	if (path && !is_bundle)

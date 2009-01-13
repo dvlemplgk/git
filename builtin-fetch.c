@@ -5,14 +5,14 @@
 #include "refs.h"
 #include "commit.h"
 #include "builtin.h"
-#include "path-list.h"
+#include "string-list.h"
 #include "remote.h"
 #include "transport.h"
 #include "run-command.h"
 #include "parse-options.h"
 
 static const char * const builtin_fetch_usage[] = {
-	"git-fetch [options] [<repository> <refspec>...]",
+	"git fetch [options] [<repository> <refspec>...]",
 	NULL
 };
 
@@ -86,10 +86,10 @@ static void add_merge_config(struct ref **head,
 		/*
 		 * Not fetched to a tracking branch?  We need to fetch
 		 * it anyway to allow this branch's "branch.$name.merge"
-		 * to be honored by git-pull, but we do not have to
+		 * to be honored by 'git pull', but we do not have to
 		 * fail if branch.$name.merge is misconfigured to point
 		 * at a nonexisting branch.  If we were indeed called by
-		 * git-pull, it will notice the misconfiguration because
+		 * 'git pull', it will notice the misconfiguration because
 		 * there is no entry in the resulting FETCH_HEAD marked
 		 * for merging.
 		 */
@@ -396,7 +396,7 @@ static int store_updated_refs(const char *url, const char *remote_name,
  * The refs we are going to fetch are in to_fetch (nr_heads in
  * total).  If running
  *
- *  $ git-rev-list --objects to_fetch[0] to_fetch[1] ... --not --all
+ *  $ git rev-list --objects to_fetch[0] to_fetch[1] ... --not --all
  *
  * does not error out, that means everything reachable from the
  * refs we are going to fetch exists and is connected to some of
@@ -465,8 +465,8 @@ static int fetch_refs(struct transport *transport, struct ref *ref_map)
 static int add_existing(const char *refname, const unsigned char *sha1,
 			int flag, void *cbdata)
 {
-	struct path_list *list = (struct path_list *)cbdata;
-	path_list_insert(refname, list);
+	struct string_list *list = (struct string_list *)cbdata;
+	string_list_insert(refname, list);
 	return 0;
 }
 
@@ -485,8 +485,8 @@ static void find_non_local_tags(struct transport *transport,
 			struct ref **head,
 			struct ref ***tail)
 {
-	struct path_list existing_refs = { NULL, 0, 0, 0 };
-	struct path_list new_refs = { NULL, 0, 0, 1 };
+	struct string_list existing_refs = { NULL, 0, 0, 0 };
+	struct string_list new_refs = { NULL, 0, 0, 1 };
 	char *ref_name;
 	int ref_name_len;
 	const unsigned char *ref_sha1;
@@ -515,11 +515,11 @@ static void find_non_local_tags(struct transport *transport,
 			}
 		}
 
-		if (!path_list_has_path(&existing_refs, ref_name) &&
-		    !path_list_has_path(&new_refs, ref_name) &&
+		if (!string_list_has_string(&existing_refs, ref_name) &&
+		    !string_list_has_string(&new_refs, ref_name) &&
 		    (has_sha1_file(ref->old_sha1) ||
 		     will_fetch(head, ref->old_sha1))) {
-			path_list_insert(ref_name, &new_refs);
+			string_list_insert(ref_name, &new_refs);
 
 			rm = alloc_ref_from_str(ref_name);
 			rm->peer_ref = alloc_ref_from_str(ref_name);
@@ -530,8 +530,21 @@ static void find_non_local_tags(struct transport *transport,
 		}
 		free(ref_name);
 	}
-	path_list_clear(&existing_refs, 0);
-	path_list_clear(&new_refs, 0);
+	string_list_clear(&existing_refs, 0);
+	string_list_clear(&new_refs, 0);
+}
+
+static void check_not_current_branch(struct ref *ref_map)
+{
+	struct branch *current_branch = branch_get(NULL);
+
+	if (is_bare_repository() || !current_branch)
+		return;
+
+	for (; ref_map; ref_map = ref_map->next)
+		if (ref_map->peer_ref && !strcmp(current_branch->refname,
+					ref_map->peer_ref->name))
+			die("Refusing to fetch into current branch");
 }
 
 static int do_fetch(struct transport *transport,
@@ -558,6 +571,8 @@ static int do_fetch(struct transport *transport,
 	}
 
 	ref_map = get_ref_map(transport, refs, ref_count, tags, &autotags);
+	if (!update_head_ok)
+		check_not_current_branch(ref_map);
 
 	for (rm = ref_map; rm; rm = rm->next) {
 		if (rm->peer_ref)

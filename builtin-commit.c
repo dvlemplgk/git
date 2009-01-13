@@ -21,16 +21,17 @@
 #include "strbuf.h"
 #include "utf8.h"
 #include "parse-options.h"
-#include "path-list.h"
+#include "string-list.h"
+#include "rerere.h"
 #include "unpack-trees.h"
 
 static const char * const builtin_commit_usage[] = {
-	"git-commit [options] [--] <filepattern>...",
+	"git commit [options] [--] <filepattern>...",
 	NULL
 };
 
 static const char * const builtin_status_usage[] = {
-	"git-status [options] [--] <filepattern>...",
+	"git status [options] [--] <filepattern>...",
 	NULL
 };
 
@@ -50,7 +51,8 @@ static const char *template_file;
 static char *edit_message, *use_message;
 static char *author_name, *author_email, *author_date;
 static int all, edit_flag, also, interactive, only, amend, signoff;
-static int quiet, verbose, untracked_files, no_verify, allow_empty;
+static int quiet, verbose, no_verify, allow_empty;
+static char *untracked_files_arg;
 /*
  * The default commit message cleanup mode will remove the lines
  * beginning with # (shell comments) and leading and trailing
@@ -66,8 +68,8 @@ static enum {
 static char *cleanup_arg;
 
 static int use_editor = 1, initial_commit, in_merge;
-const char *only_include_assumed;
-struct strbuf message;
+static const char *only_include_assumed;
+static struct strbuf message;
 
 static int opt_parse_m(const struct option *opt, const char *arg, int unset)
 {
@@ -76,8 +78,7 @@ static int opt_parse_m(const struct option *opt, const char *arg, int unset)
 		strbuf_setlen(buf, 0);
 	else {
 		strbuf_addstr(buf, arg);
-		strbuf_addch(buf, '\n');
-		strbuf_addch(buf, '\n');
+		strbuf_addstr(buf, "\n\n");
 	}
 	return 0;
 }
@@ -103,7 +104,7 @@ static struct option builtin_commit_options[] = {
 	OPT_BOOLEAN('o', "only", &only, "commit only specified files"),
 	OPT_BOOLEAN('n', "no-verify", &no_verify, "bypass pre-commit hook"),
 	OPT_BOOLEAN(0, "amend", &amend, "amend previous commit"),
-	OPT_BOOLEAN('u', "untracked-files", &untracked_files, "show all untracked files"),
+	{ OPTION_STRING, 'u', "untracked-files", &untracked_files_arg, "mode", "show untracked files, optional modes: all, normal, no. (Default: all)", PARSE_OPT_OPTARG, NULL, (intptr_t)"all" },
 	OPT_BOOLEAN(0, "allow-empty", &allow_empty, "ok to record an empty change"),
 	OPT_STRING(0, "cleanup", &cleanup_arg, "default", "how to strip spaces and #comments from message"),
 
@@ -148,7 +149,7 @@ static int commit_index_files(void)
  * Take a union of paths in the index and the named tree (typically, "HEAD"),
  * and return the paths that match the given pattern in list.
  */
-static int list_paths(struct path_list *list, const char *with_tree,
+static int list_paths(struct string_list *list, const char *with_tree,
 		      const char *prefix, const char **pattern)
 {
 	int i;
@@ -167,24 +168,24 @@ static int list_paths(struct path_list *list, const char *with_tree,
 			continue;
 		if (!pathspec_match(pattern, m, ce->name, 0))
 			continue;
-		path_list_insert(ce->name, list);
+		string_list_insert(ce->name, list);
 	}
 
 	return report_path_error(m, pattern, prefix ? strlen(prefix) : 0);
 }
 
-static void add_remove_files(struct path_list *list)
+static void add_remove_files(struct string_list *list)
 {
 	int i;
 	for (i = 0; i < list->nr; i++) {
 		struct stat st;
-		struct path_list_item *p = &(list->items[i]);
+		struct string_list_item *p = &(list->items[i]);
 
-		if (!lstat(p->path, &st)) {
-			if (add_to_cache(p->path, &st, 0))
+		if (!lstat(p->string, &st)) {
+			if (add_to_cache(p->string, &st, 0))
 				die("updating files failed");
 		} else
-			remove_file_from_cache(p->path);
+			remove_file_from_cache(p->string);
 	}
 }
 
@@ -219,7 +220,7 @@ static void create_base_index(void)
 static char *prepare_index(int argc, const char **argv, const char *prefix)
 {
 	int fd;
-	struct path_list partial;
+	struct string_list partial;
 	const char **pathspec = NULL;
 
 	if (interactive) {
@@ -303,7 +304,7 @@ static char *prepare_index(int argc, const char **argv, const char *prefix)
 		die("cannot do a partial commit during a merge.");
 
 	memset(&partial, 0, sizeof(partial));
-	partial.strdup_paths = 1;
+	partial.strdup_strings = 1;
 	if (list_paths(&partial, initial_commit ? NULL : "HEAD", prefix, pathspec))
 		exit(1);
 
@@ -319,7 +320,8 @@ static char *prepare_index(int argc, const char **argv, const char *prefix)
 		die("unable to write new_index file");
 
 	fd = hold_lock_file_for_update(&false_lock,
-				       git_path("next-index-%d", getpid()), 1);
+				       git_path("next-index-%d", getpid()),
+				       LOCK_DIE_ON_ERROR);
 
 	create_base_index();
 	add_remove_files(&partial);
@@ -348,7 +350,7 @@ static int run_status(FILE *fp, const char *index_file, const char *prefix, int 
 		s.reference = "HEAD^1";
 	}
 	s.verbose = verbose;
-	s.untracked = untracked_files;
+	s.untracked = (show_untracked_files == SHOW_ALL_UNTRACKED_FILES);
 	s.index_file = index_file;
 	s.fp = fp;
 	s.nowarn = nowarn;
@@ -503,7 +505,8 @@ static int prepare_to_commit(const char *index_file, const char *prefix)
 
 	fp = fopen(git_path(commit_editmsg), "w");
 	if (fp == NULL)
-		die("could not open %s", git_path(commit_editmsg));
+		die("could not open %s: %s",
+		    git_path(commit_editmsg), strerror(errno));
 
 	if (cleanup_mode != CLEANUP_NONE)
 		stripspace(&sb, 0);
@@ -552,13 +555,18 @@ static int prepare_to_commit(const char *index_file, const char *prefix)
 
 		fprintf(fp,
 			"\n"
-			"# Please enter the commit message for your changes.\n"
-			"# (Comment lines starting with '#' will ");
+			"# Please enter the commit message for your changes.");
 		if (cleanup_mode == CLEANUP_ALL)
-			fprintf(fp, "not be included)\n");
+			fprintf(fp,
+				" Lines starting\n"
+				"# with '#' will be ignored, and an empty"
+				" message aborts the commit.\n");
 		else /* CLEANUP_SPACE, that is. */
-			fprintf(fp, "be kept.\n"
-				"# You can remove them yourself if you want to)\n");
+			fprintf(fp,
+				" Lines starting\n"
+				"# with '#' will be kept; you may remove them"
+				" yourself if you want to.\n"
+				"# An empty message aborts the commit.\n");
 		if (only_include_assumed)
 			fprintf(fp, "# %s\n", only_include_assumed);
 
@@ -632,7 +640,7 @@ static int prepare_to_commit(const char *index_file, const char *prefix)
 		active_cache_tree = cache_tree();
 	if (cache_tree_update(active_cache_tree,
 			      active_cache, active_nr, 0, 0) < 0) {
-		error("Error building trees");
+		error("Error building trees; the index is unmerged?");
 		return 0;
 	}
 
@@ -644,7 +652,11 @@ static int prepare_to_commit(const char *index_file, const char *prefix)
 		char index[PATH_MAX];
 		const char *env[2] = { index, NULL };
 		snprintf(index, sizeof(index), "GIT_INDEX_FILE=%s", index_file);
-		launch_editor(git_path(commit_editmsg), NULL, env);
+		if (launch_editor(git_path(commit_editmsg), NULL, env)) {
+			fprintf(stderr,
+			"Please supply the message using either -m or -F option.\n");
+			exit(1);
+		}
 	}
 
 	if (!no_verify &&
@@ -799,6 +811,17 @@ static int parse_and_validate_options(int argc, const char *argv[],
 	else
 		die("Invalid cleanup mode %s", cleanup_arg);
 
+	if (!untracked_files_arg)
+		; /* default already initialized */
+	else if (!strcmp(untracked_files_arg, "no"))
+		show_untracked_files = SHOW_NO_UNTRACKED_FILES;
+	else if (!strcmp(untracked_files_arg, "normal"))
+		show_untracked_files = SHOW_NORMAL_UNTRACKED_FILES;
+	else if (!strcmp(untracked_files_arg, "all"))
+		show_untracked_files = SHOW_ALL_UNTRACKED_FILES;
+	else
+		die("Invalid untracked files mode '%s'", untracked_files_arg);
+
 	if (all && argc > 0)
 		die("Paths with -a does not make sense.");
 	else if (interactive && argc > 0)
@@ -860,13 +883,13 @@ static void print_summary(const char *prefix, const unsigned char *sha1)
 
 	if (!log_tree_commit(&rev, commit)) {
 		struct strbuf buf = STRBUF_INIT;
-		format_commit_message(commit, "%h: %s", &buf);
+		format_commit_message(commit, "%h: %s", &buf, DATE_NORMAL);
 		printf("%s\n", buf.buf);
 		strbuf_release(&buf);
 	}
 }
 
-int git_commit_config(const char *k, const char *v, void *cb)
+static int git_commit_config(const char *k, const char *v, void *cb)
 {
 	if (!strcmp(k, "commit.template"))
 		return git_config_string(&template_file, k, v);
@@ -981,15 +1004,18 @@ int cmd_commit(int argc, const char **argv, const char *prefix)
 	}
 
 	/* Truncate the message just before the diff, if any. */
-	p = strstr(sb.buf, "\ndiff --git a/");
-	if (p != NULL)
-		strbuf_setlen(&sb, p - sb.buf + 1);
+	if (verbose) {
+		p = strstr(sb.buf, "\ndiff --git ");
+		if (p != NULL)
+			strbuf_setlen(&sb, p - sb.buf + 1);
+	}
 
 	if (cleanup_mode != CLEANUP_NONE)
 		stripspace(&sb, cleanup_mode == CLEANUP_ALL);
 	if (sb.len < header_len || message_is_empty(&sb, header_len)) {
 		rollback_index_files();
-		die("no commit message?  aborting commit.");
+		fprintf(stderr, "Aborting commit due to empty commit message.\n");
+		exit(1);
 	}
 	strbuf_addch(&sb, '\0');
 	if (is_encoding_utf8(git_commit_encoding) && !is_utf8(sb.buf))

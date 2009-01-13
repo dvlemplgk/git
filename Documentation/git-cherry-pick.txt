@@ -7,7 +7,7 @@ git-cherry-pick - Apply the change introduced by an existing commit
 
 SYNOPSIS
 --------
-'git-cherry-pick' [--edit] [-n] [-m parent-number] [-s] [-x] <commit>
+'git cherry-pick' [--edit] [-n] [-m parent-number] [-s] [-x] <commit>
 
 DESCRIPTION
 -----------
@@ -19,12 +19,12 @@ OPTIONS
 -------
 <commit>::
 	Commit to cherry-pick.
-	For a more complete list of ways to spell commits, see
+	For a more complete list of ways to spell commits, see the
 	"SPECIFYING REVISIONS" section in linkgit:git-rev-parse[1].
 
 -e::
 --edit::
-	With this option, `git-cherry-pick` will let you edit the commit
+	With this option, 'git-cherry-pick' will let you edit the commit
 	message prior to committing.
 
 -x::
@@ -55,13 +55,12 @@ OPTIONS
 
 -n::
 --no-commit::
-	Usually the command automatically creates a commit with
-	a commit log message stating which commit was
-	cherry-picked.  This flag applies the change necessary
-	to cherry-pick the named commit to your working tree
-	and the index, but does not make the commit.  In addition,
-	when this option is used, your index does not have to match
-	the HEAD commit.  The cherry-pick is done against the
+	Usually the command automatically creates a commit.
+	This flag applies the change necessary to cherry-pick
+	the named commit to your working tree and the index,
+	but does not make the commit.  In addition, when this
+	option is used, your index does not have to match the
+	HEAD commit.  The cherry-pick is done against the
 	beginning state of your index.
 +
 This is useful when cherry-picking more than one commits'

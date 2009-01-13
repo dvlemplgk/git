@@ -78,7 +78,7 @@ test_expect_success 'git whatchanged -p --root' 'cmp whatchanged.expect whatchan
 git tag my-first-tag
 test_expect_success 'git tag my-first-tag' 'cmp .git/refs/heads/master .git/refs/tags/my-first-tag'
 
-# TODO: test git-clone
+# TODO: test git clone
 
 git checkout -b mybranch
 test_expect_success 'git checkout -b mybranch' 'cmp .git/refs/heads/master .git/refs/heads/mybranch'
@@ -102,7 +102,7 @@ echo "Lots of fun" >>example
 git commit -m 'Some fun.' -i hello example
 
 test_expect_success 'git resolve now fails' '
-	! git merge -m "Merge work in mybranch" mybranch
+	test_must_fail git merge -m "Merge work in mybranch" mybranch
 '
 
 cat > hello << EOF

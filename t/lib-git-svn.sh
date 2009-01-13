@@ -98,7 +98,7 @@ LoadModule dav_module $SVN_HTTPD_MODULE_PATH/mod_dav.so
 LoadModule dav_svn_module $SVN_HTTPD_MODULE_PATH/mod_dav_svn.so
 <Location /$repo_base_path>
 	DAV svn
-	SVNPath $rawsvnrepo
+	SVNPath "$rawsvnrepo"
 </Location>
 EOF
 	"$SVN_HTTPD_PATH" -f "$GIT_DIR"/httpd.conf -k start
@@ -135,3 +135,20 @@ close $wr or die $!;
 close $rd or die $!;
 EOF
 }
+
+require_svnserve () {
+    if test -z "$SVNSERVE_PORT"
+    then
+        say 'skipping svnserve test. (set $SVNSERVE_PORT to enable)'
+        test_done
+        exit
+    fi
+}
+
+start_svnserve () {
+    svnserve --listen-port $SVNSERVE_PORT \
+             --root "$rawsvnrepo" \
+             --listen-once \
+             --listen-host 127.0.0.1 &
+}
+

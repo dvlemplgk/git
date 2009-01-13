@@ -6,7 +6,10 @@
 
 #include "cache.h"
 
-static time_t my_mktime(struct tm *tm)
+/*
+ * This is like mktime, but without normalization of tm_wday and tm_yday.
+ */
+time_t tm_to_time_t(const struct tm *tm)
 {
 	static const int mdays[] = {
 	    0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334
@@ -67,7 +70,7 @@ static int local_tzoffset(unsigned long time)
 
 	t = time;
 	localtime_r(&t, &tm);
-	t_local = my_mktime(&tm);
+	t_local = tm_to_time_t(&tm);
 
 	if (t_local < t) {
 		eastwest = -1;
@@ -322,7 +325,7 @@ static int is_date(int year, int month, int day, struct tm *now_tm, time_t now, 
 		if (!now_tm)
 			return 1;
 
-		specified = my_mktime(r);
+		specified = tm_to_time_t(r);
 
 		/* Be it commit time or author time, it does not make
 		 * sense to specify timestamp way into the future.  Make
@@ -399,6 +402,15 @@ static int match_multi_number(unsigned long num, char c, const char *date, char 
 	return end - date;
 }
 
+/* Have we filled in any part of the time/date yet? */
+static inline int nodate(struct tm *tm)
+{
+	return tm->tm_year < 0 &&
+		tm->tm_mon < 0 &&
+		tm->tm_mday < 0 &&
+		!(tm->tm_hour | tm->tm_min | tm->tm_sec);
+}
+
 /*
  * We've seen a digit. Time? Year? Date?
  */
@@ -415,7 +427,7 @@ static int match_digit(const char *date, struct tm *tm, int *offset, int *tm_gmt
 	 * more than 8 digits. This is because we don't want to rule out
 	 * numbers like 20070606 as a YYYYMMDD date.
 	 */
-	if (num >= 100000000) {
+	if (num >= 100000000 && nodate(tm)) {
 		time_t time = num;
 		if (gmtime_r(&time, tm)) {
 			*tm_gmt = 1;
@@ -460,6 +472,13 @@ static int match_digit(const char *date, struct tm *tm, int *offset, int *tm_gmt
 	}
 
 	/*
+	 * Ignore lots of numerals. We took care of 4-digit years above.
+	 * Days or months must be one or two digits.
+	 */
+	if (n > 2)
+		return n;
+
+	/*
 	 * NOTE! We will give precedence to day-of-month over month or
 	 * year numbers in the 1-12 range. So 05 is always "mday 5",
 	 * unless we already have a mday..
@@ -485,10 +504,6 @@ static int match_digit(const char *date, struct tm *tm, int *offset, int *tm_gmt
 
 	if (num > 0 && num < 32) {
 		tm->tm_mday = num;
-	} else if (num > 1900) {
-		tm->tm_year = num - 1900;
-	} else if (num > 70) {
-		tm->tm_year = num;
 	} else if (num > 0 && num < 13) {
 		tm->tm_mon = num-1;
 	}
@@ -572,7 +587,7 @@ int parse_date(const char *date, char *result, int maxlen)
 	}
 
 	/* mktime uses local timezone */
-	then = my_mktime(&tm);
+	then = tm_to_time_t(&tm);
 	if (offset == -1)
 		offset = (then - mktime(&tm)) / 60;
 
@@ -611,7 +626,7 @@ void datestamp(char *buf, int bufsize)
 
 	time(&now);
 
-	offset = my_mktime(localtime(&now)) - now;
+	offset = tm_to_time_t(localtime(&now)) - now;
 	offset /= 60;
 
 	date_string(now, offset, buf, bufsize);
@@ -820,7 +835,9 @@ static const char *approxidate_digit(const char *date, struct tm *tm, int *num)
 		}
 	}
 
-	*num = number;
+	/* Accept zero-padding only for small numbers ("Dec 02", never "Dec 0002") */
+	if (date[0] != '0' || end - date <= 2)
+		*num = number;
 	return end;
 }
 

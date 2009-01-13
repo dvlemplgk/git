@@ -222,6 +222,9 @@ D-C-O.  Indeed you are encouraged to do so.  Do not forget to
 place an in-body "From: " line at the beginning to properly attribute
 the change to its true author (see (2) above).
 
+Also notice that a real name is used in the Signed-off-by: line. Please
+don't hide your real name.
+
 Some people also put extra tags at the end.
 
 "Acked-by:" says that the patch was reviewed by the person who
@@ -301,7 +304,7 @@ If it does not apply correctly, there can be various reasons.
   patch appropriately.
 
 * Your MUA corrupted your patch; "am" would complain that
-  the patch does not apply.  Look at .dotest/ subdirectory and
+  the patch does not apply.  Look at .git/rebase-apply/ subdirectory and
   see what 'patch' file contains and check for the common
   corruption patterns mentioned above.
 
@@ -419,6 +422,11 @@ settings but I haven't tried, yet.
 	mail.identity.default.compose_html	=> false
 	mail.identity.id?.compose_html		=> false
 
+(Lukas Sandström)
+
+There is a script in contrib/thunderbird-patch-inline which can help
+you include patches with Thunderbird in an easy way. To use it, do the
+steps above and then use the script as the external editor.
 
 Gnus
 ----
@@ -451,3 +459,30 @@ This should help you to submit patches inline using KMail.
 
 5) Back in the compose window: add whatever other text you wish to the
 message, complete the addressing and subject fields, and press send.
+
+
+Gmail
+-----
+
+Submitting properly formatted patches via Gmail is simple now that
+IMAP support is available. First, edit your ~/.gitconfig to specify your
+account settings:
+
+[imap]
+	folder = "[Gmail]/Drafts"
+	host = imaps://imap.gmail.com
+	user = user@gmail.com
+	pass = p4ssw0rd
+	port = 993
+	sslverify = false
+
+Next, ensure that your Gmail settings are correct. In "Settings" the
+"Use Unicode (UTF-8) encoding for outgoing messages" should be checked.
+
+Once your commits are ready to send to the mailing list, run the following
+command to send the patch emails to your Gmail Drafts folder.
+
+	$ git format-patch -M --stdout origin/master | git imap-send
+
+Go to your Gmail account, open the Drafts folder, find the patch email, fill
+in the To: and CC: fields and send away!

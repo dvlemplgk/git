@@ -5,6 +5,7 @@ test_description='git-cvsimport basic tests'
 
 CVSROOT=$(pwd)/cvsroot
 export CVSROOT
+unset CVS_SERVER
 # for clean cvsps cache
 HOME=$(pwd)
 export HOME
@@ -18,7 +19,7 @@ fi
 
 cvsps_version=`cvsps -h 2>&1 | sed -ne 's/cvsps version //p'`
 case "$cvsps_version" in
-2.1)
+2.1 | 2.2*)
 	;;
 '')
 	say 'skipping cvsimport tests, cvsps not found'
@@ -26,7 +27,7 @@ case "$cvsps_version" in
 	exit
 	;;
 *)
-	say 'skipping cvsimport tests, cvsps too old'
+	say 'skipping cvsimport tests, unsupported cvsps version'
 	test_done
 	exit
 	;;

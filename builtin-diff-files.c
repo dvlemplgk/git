@@ -10,7 +10,7 @@
 #include "builtin.h"
 
 static const char diff_files_usage[] =
-"git-diff-files [-q] [-0/-1/2/3 |-c|--cc] [<common diff options>] [<path>...]"
+"git diff-files [-q] [-0/-1/2/3 |-c|--cc] [<common diff options>] [<path>...]"
 COMMON_DIFF_OPTIONS_HELP;
 
 int cmd_diff_files(int argc, const char **argv, const char *prefix)
@@ -50,7 +50,12 @@ int cmd_diff_files(int argc, const char **argv, const char *prefix)
 	    3 < rev.max_count)
 		usage(diff_files_usage);
 
-	if (rev.max_count == -1 &&
+	/*
+	 * "diff-files --base -p" should not combine merges because it
+	 * was not asked to.  "diff-files -c -p" should not densify
+	 * (the user should ask with "diff-files --cc" explicitly).
+	 */
+	if (rev.max_count == -1 && !rev.combine_merges &&
 	    (rev.diffopt.output_format & DIFF_FORMAT_PATCH))
 		rev.combine_merges = rev.dense_combined_merges = 1;
 

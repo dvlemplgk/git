@@ -63,7 +63,7 @@ test_expect_failure 'pretend we have fixed a known breakage' '
 
 # updating a new file without --add should fail.
 test_expect_success 'git update-index without --add should fail adding.' '
-    ! git update-index should-be-empty
+    test_must_fail git update-index should-be-empty
 '
 
 # and with --add it should succeed, even if it is empty (it used to fail).
@@ -83,7 +83,7 @@ test_expect_success \
 # Removing paths.
 rm -f should-be-empty full-of-directories
 test_expect_success 'git update-index without --remove should fail removing.' '
-    ! git update-index should-be-empty
+    test_must_fail git update-index should-be-empty
 '
 
 test_expect_success \
@@ -217,7 +217,7 @@ test_expect_success \
     'git update-index --index-info < badobjects'
 
 test_expect_success 'writing this tree without --missing-ok.' '
-    ! git write-tree
+    test_must_fail git write-tree
 '
 
 test_expect_success \
@@ -301,14 +301,14 @@ test_expect_success 'absolute path works as expected' '
 	mkdir third &&
 	dir="$(cd .git; pwd -P)" &&
 	dir2=third/../second/other/.git &&
-	test "$dir" = "$(test-absolute-path $dir2)" &&
+	test "$dir" = "$(test-path-utils make_absolute_path $dir2)" &&
 	file="$dir"/index &&
-	test "$file" = "$(test-absolute-path $dir2/index)" &&
+	test "$file" = "$(test-path-utils make_absolute_path $dir2/index)" &&
 	basename=blub &&
-	test "$dir/$basename" = "$(cd .git && test-absolute-path "$basename")" &&
+	test "$dir/$basename" = "$(cd .git && test-path-utils make_absolute_path "$basename")" &&
 	ln -s ../first/file .git/syml &&
 	sym="$(cd first; pwd -P)"/file &&
-	test "$sym" = "$(test-absolute-path "$dir2/syml")"
+	test "$sym" = "$(test-path-utils make_absolute_path "$dir2/syml")"
 '
 
 test_expect_success 'very long name in the index handled sanely' '

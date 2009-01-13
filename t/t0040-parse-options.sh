@@ -47,6 +47,7 @@ test_expect_success 'test help' '
 cat > expect << EOF
 boolean: 2
 integer: 1729
+timestamp: 0
 string: 123
 abbrev: 7
 verbose: 2
@@ -63,6 +64,7 @@ test_expect_success 'short options' '
 cat > expect << EOF
 boolean: 2
 integer: 1729
+timestamp: 0
 string: 321
 abbrev: 10
 verbose: 2
@@ -78,9 +80,17 @@ test_expect_success 'long options' '
 	test_cmp expect output
 '
 
+test_expect_success 'missing required value' '
+	test-parse-options -s;
+	test $? = 129 &&
+	test-parse-options --string;
+	test $? = 129
+'
+
 cat > expect << EOF
 boolean: 1
 integer: 13
+timestamp: 0
 string: 123
 abbrev: 7
 verbose: 0
@@ -101,6 +111,7 @@ test_expect_success 'intermingled arguments' '
 cat > expect << EOF
 boolean: 0
 integer: 2
+timestamp: 0
 string: (not set)
 abbrev: 7
 verbose: 0
@@ -128,6 +139,7 @@ test_expect_success 'ambiguously abbreviated option' '
 cat > expect << EOF
 boolean: 0
 integer: 0
+timestamp: 0
 string: 123
 abbrev: 7
 verbose: 0
@@ -154,6 +166,7 @@ test_expect_success 'detect possible typos' '
 cat > expect <<EOF
 boolean: 0
 integer: 0
+timestamp: 0
 string: (not set)
 abbrev: 7
 verbose: 0
@@ -170,7 +183,8 @@ test_expect_success 'keep some options as arguments' '
 
 cat > expect <<EOF
 boolean: 0
-integer: 1
+integer: 0
+timestamp: 1
 string: default
 abbrev: 7
 verbose: 0
@@ -190,6 +204,7 @@ cat > expect <<EOF
 Callback: "four", 0
 boolean: 5
 integer: 4
+timestamp: 0
 string: (not set)
 abbrev: 7
 verbose: 0
@@ -216,6 +231,7 @@ test_expect_success 'OPT_CALLBACK() and callback errors work' '
 cat > expect <<EOF
 boolean: 1
 integer: 23
+timestamp: 0
 string: (not set)
 abbrev: 7
 verbose: 0

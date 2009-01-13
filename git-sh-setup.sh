@@ -32,15 +32,16 @@ if test -n "$OPTIONS_SPEC"; then
 		echo exit $?
 	)"
 else
+	dashless=$(basename "$0" | sed -e 's/-/ /')
 	usage() {
-		die "Usage: $0 $USAGE"
+		die "Usage: $dashless $USAGE"
 	}
 
 	if [ -z "$LONG_USAGE" ]
 	then
-		LONG_USAGE="Usage: $0 $USAGE"
+		LONG_USAGE="Usage: $dashless $USAGE"
 	else
-		LONG_USAGE="Usage: $0 $USAGE
+		LONG_USAGE="Usage: $dashless $USAGE
 
 $LONG_USAGE"
 	fi
@@ -142,3 +143,16 @@ then
 	}
 	: ${GIT_OBJECT_DIRECTORY="$GIT_DIR/objects"}
 fi
+
+# Fix some commands on Windows
+case $(uname -s) in
+*MINGW*)
+	# Windows has its own (incompatible) sort and find
+	sort () {
+		/usr/bin/sort "$@"
+	}
+	find () {
+		/usr/bin/find "$@"
+	}
+	;;
+esac

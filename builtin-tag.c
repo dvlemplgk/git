@@ -14,67 +14,14 @@
 #include "parse-options.h"
 
 static const char * const git_tag_usage[] = {
-	"git-tag [-a|-s|-u <key-id>] [-f] [-m <msg>|-F <file>] <tagname> [<head>]",
-	"git-tag -d <tagname>...",
-	"git-tag -l [-n[<num>]] [<pattern>]",
-	"git-tag -v <tagname>...",
+	"git tag [-a|-s|-u <key-id>] [-f] [-m <msg>|-F <file>] <tagname> [<head>]",
+	"git tag -d <tagname>...",
+	"git tag -l [-n[<num>]] [<pattern>]",
+	"git tag -v <tagname>...",
 	NULL
 };
 
 static char signingkey[1000];
-
-void launch_editor(const char *path, struct strbuf *buffer, const char *const *env)
-{
-	const char *editor, *terminal;
-
-	editor = getenv("GIT_EDITOR");
-	if (!editor && editor_program)
-		editor = editor_program;
-	if (!editor)
-		editor = getenv("VISUAL");
-	if (!editor)
-		editor = getenv("EDITOR");
-
-	terminal = getenv("TERM");
-	if (!editor && (!terminal || !strcmp(terminal, "dumb"))) {
-		fprintf(stderr,
-		"Terminal is dumb but no VISUAL nor EDITOR defined.\n"
-		"Please supply the message using either -m or -F option.\n");
-		exit(1);
-	}
-
-	if (!editor)
-		editor = "vi";
-
-	if (strcmp(editor, ":")) {
-		size_t len = strlen(editor);
-		int i = 0;
-		const char *args[6];
-		struct strbuf arg0;
-
-		strbuf_init(&arg0, 0);
-		if (strcspn(editor, "$ \t'") != len) {
-			/* there are specials */
-			strbuf_addf(&arg0, "%s \"$@\"", editor);
-			args[i++] = "sh";
-			args[i++] = "-c";
-			args[i++] = arg0.buf;
-		}
-		args[i++] = editor;
-		args[i++] = path;
-		args[i] = NULL;
-
-		if (run_command_v_opt_cd_env(args, 0, NULL, env))
-			die("There was a problem with the editor %s.", editor);
-		strbuf_release(&arg0);
-	}
-
-	if (!buffer)
-		return;
-	if (strbuf_read_file(buffer, path, 0) < 0)
-		die("could not read message file '%s': %s",
-		    path, strerror(errno));
-}
 
 struct tag_filter {
 	const char *pattern;
@@ -178,7 +125,7 @@ static int for_each_tag_name(const char **argv, each_tag_name_fn fn)
 static int delete_tag(const char *name, const char *ref,
 				const unsigned char *sha1)
 {
-	if (delete_ref(ref, sha1))
+	if (delete_ref(ref, sha1, 0))
 		return 1;
 	printf("Deleted tag '%s'\n", name);
 	return 0;
@@ -202,6 +149,7 @@ static int do_sign(struct strbuf *buffer)
 	const char *args[4];
 	char *bracket;
 	int len;
+	int i, j;
 
 	if (!*signingkey) {
 		if (strlcpy(signingkey, git_committer_info(IDENT_ERROR_ON_NO_NAME),
@@ -240,6 +188,15 @@ static int do_sign(struct strbuf *buffer)
 
 	if (finish_command(&gpg) || !len || len < 0)
 		return error("gpg failed to sign the tag");
+
+	/* Strip CR from the line endings, in case we are on Windows. */
+	for (i = j = 0; i < buffer->len; i++)
+		if (buffer->buf[i] != '\r') {
+			if (i != j)
+				buffer->buf[j] = buffer->buf[i];
+			j++;
+		}
+	strbuf_setlen(buffer, j);
 
 	return 0;
 }
@@ -296,6 +253,15 @@ static void write_tag_body(int fd, const unsigned char *sha1)
 	free(buf);
 }
 
+static int build_tag_object(struct strbuf *buf, int sign, unsigned char *result)
+{
+	if (sign && do_sign(buf) < 0)
+		return error("unable to sign the tag");
+	if (write_sha1_file(buf->buf, buf->len, tag_type, result) < 0)
+		return error("unable to write tag file");
+	return 0;
+}
+
 static void create_tag(const unsigned char *object, const char *tag,
 		       struct strbuf *buf, int message, int sign,
 		       unsigned char *prev, unsigned char *result)
@@ -303,6 +269,7 @@ static void create_tag(const unsigned char *object, const char *tag,
 	enum object_type type;
 	char header_buf[1024];
 	int header_len;
+	char *path = NULL;
 
 	type = sha1_object_info(object, NULL);
 	if (type <= OBJ_NONE)
@@ -322,11 +289,10 @@ static void create_tag(const unsigned char *object, const char *tag,
 		die("tag header too big.");
 
 	if (!message) {
-		char *path;
 		int fd;
 
 		/* write the template message before editing: */
-		path = xstrdup(git_path("TAG_EDITMSG"));
+		path = git_pathdup("TAG_EDITMSG");
 		fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
 		if (fd < 0)
 			die("could not create file '%s': %s",
@@ -338,10 +304,11 @@ static void create_tag(const unsigned char *object, const char *tag,
 			write_or_die(fd, tag_template, strlen(tag_template));
 		close(fd);
 
-		launch_editor(path, buf, NULL);
-
-		unlink(path);
-		free(path);
+		if (launch_editor(path, buf, NULL)) {
+			fprintf(stderr,
+			"Please supply the message using either -m or -F option.\n");
+			exit(1);
+		}
 	}
 
 	stripspace(buf, 1);
@@ -351,10 +318,16 @@ static void create_tag(const unsigned char *object, const char *tag,
 
 	strbuf_insert(buf, 0, header_buf, header_len);
 
-	if (sign && do_sign(buf) < 0)
-		die("unable to sign the tag");
-	if (write_sha1_file(buf->buf, buf->len, tag_type, result) < 0)
-		die("unable to write tag file");
+	if (build_tag_object(buf, sign, result) < 0) {
+		if (path)
+			fprintf(stderr, "The tag message has been left in %s\n",
+				path);
+		exit(128);
+	}
+	if (path) {
+		unlink(path);
+		free(path);
+	}
 }
 
 struct msg_arg {
@@ -383,7 +356,7 @@ int cmd_tag(int argc, const char **argv, const char *prefix)
 	const char *object_ref, *tag;
 	struct ref_lock *lock;
 
-	int annotate = 0, sign = 0, force = 0, lines = 0,
+	int annotate = 0, sign = 0, force = 0, lines = -1,
 		list = 0, delete = 0, verify = 0;
 	const char *msgfile = NULL, *keyid = NULL;
 	struct msg_arg msg = { 0, STRBUF_INIT };
@@ -419,9 +392,19 @@ int cmd_tag(int argc, const char **argv, const char *prefix)
 	}
 	if (sign)
 		annotate = 1;
+	if (argc == 0 && !(delete || verify))
+		list = 1;
 
+	if ((annotate || msg.given || msgfile || force) &&
+	    (list || delete || verify))
+		usage_with_options(git_tag_usage, options);
+
+	if (list + delete + verify > 1)
+		usage_with_options(git_tag_usage, options);
 	if (list)
-		return list_tags(argv[0], lines);
+		return list_tags(argv[0], lines == -1 ? 0 : lines);
+	if (lines != -1)
+		die("-n option is only allowed with -l.");
 	if (delete)
 		return for_each_tag_name(argv, delete_tag);
 	if (verify)
@@ -446,11 +429,6 @@ int cmd_tag(int argc, const char **argv, const char *prefix)
 		}
 	}
 
-	if (argc == 0) {
-		if (annotate)
-			usage_with_options(git_tag_usage, options);
-		return list_tags(NULL, lines);
-	}
 	tag = argv[0];
 
 	object_ref = argc == 2 ? argv[1] : "HEAD";

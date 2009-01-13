@@ -5,7 +5,7 @@
 #include "builtin.h"
 
 static const char diff_cache_usage[] =
-"git-diff-index [-m] [--cached] "
+"git diff-index [-m] [--cached] "
 "[<common diff options>] <tree-ish> [<path>...]"
 COMMON_DIFF_OPTIONS_HELP;
 
@@ -39,6 +39,8 @@ int cmd_diff_index(int argc, const char **argv, const char *prefix)
 	if (rev.pending.nr != 1 ||
 	    rev.max_count != -1 || rev.min_age != -1 || rev.max_age != -1)
 		usage(diff_cache_usage);
+	if (!cached)
+		setup_work_tree();
 	if (read_cache() < 0) {
 		perror("read_cache");
 		return -1;

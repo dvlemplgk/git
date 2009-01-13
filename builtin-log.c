@@ -313,7 +313,7 @@ static int show_object(const unsigned char *sha1, int show_tag_object,
 
 static int show_tree_object(const unsigned char *sha1,
 		const char *base, int baselen,
-		const char *pathname, unsigned mode, int stage)
+		const char *pathname, unsigned mode, int stage, void *context)
 {
 	printf("%s%s\n", pathname, S_ISDIR(mode) ? "/" : "");
 	return 0;
@@ -356,7 +356,13 @@ int cmd_show(int argc, const char **argv, const char *prefix)
 					t->tag,
 					diff_get_color_opt(&rev.diffopt, DIFF_RESET));
 			ret = show_object(o->sha1, 1, &rev);
-			objects[i].item = parse_object(t->tagged->sha1);
+			if (ret)
+				break;
+			o = parse_object(t->tagged->sha1);
+			if (!o)
+				ret = error("Could not read object %s",
+					    sha1_to_hex(t->tagged->sha1));
+			objects[i].item = o;
 			i--;
 			break;
 		}
@@ -366,7 +372,7 @@ int cmd_show(int argc, const char **argv, const char *prefix)
 					name,
 					diff_get_color_opt(&rev.diffopt, DIFF_RESET));
 			read_tree_recursive((struct tree *)o, "", 0, 0, NULL,
-					show_tree_object);
+					show_tree_object, NULL);
 			break;
 		case OBJ_COMMIT:
 			rev.pending.nr = rev.pending.alloc = 0;
@@ -461,7 +467,7 @@ static int extra_cc_alloc;
 static void add_header(const char *value)
 {
 	int len = strlen(value);
-	while (value[len - 1] == '\n')
+	while (len && value[len - 1] == '\n')
 		len--;
 	if (!strncasecmp(value, "to: ", 4)) {
 		ALLOC_GROW(extra_to, extra_to_nr + 1, extra_to_alloc);
@@ -835,7 +841,7 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 			committer = git_committer_info(IDENT_ERROR_ON_NO_NAME);
 			endpos = strchr(committer, '>');
 			if (!endpos)
-				die("bogos committer info %s\n", committer);
+				die("bogus committer info %s\n", committer);
 			add_signoff = xmemdupz(committer, endpos - committer + 1);
 		}
 		else if (!strcmp(argv[i], "--attach")) {
@@ -1082,7 +1088,7 @@ static int add_pending_commit(const char *arg, struct rev_info *revs, int flags)
 }
 
 static const char cherry_usage[] =
-"git-cherry [-v] <upstream> [<head>] [<limit>]";
+"git cherry [-v] <upstream> [<head>] [<limit>]";
 int cmd_cherry(int argc, const char **argv, const char *prefix)
 {
 	struct rev_info revs;

@@ -1,10 +1,14 @@
 #!/bin/sh
 
-test_description='git-repack works correctly'
+test_description='git repack works correctly'
 
 . ./test-lib.sh
 
-test_expect_success '-A option leaves unreachable objects unpacked' '
+fsha1=
+csha1=
+tsha1=
+
+test_expect_success '-A with -d option leaves unreachable objects unpacked' '
 	echo content > file1 &&
 	git add . &&
 	git commit -m initial_commit &&
@@ -42,6 +46,48 @@ test_expect_success '-A option leaves unreachable objects unpacked' '
 	git show $fsha1 &&
 	git show $csha1 &&
 	git show $tsha1
+'
+
+compare_mtimes ()
+{
+	perl -e 'my $reference = shift;
+		 foreach my $file (@ARGV) {
+			exit(1) unless(-f $file && -M $file == -M $reference);
+		 }
+		 exit(0);
+		' -- "$@"
+}
+
+test_expect_success '-A without -d option leaves unreachable objects packed' '
+	fsha1path=$(echo "$fsha1" | sed -e "s|\(..\)|\1/|") &&
+	fsha1path=".git/objects/$fsha1path" &&
+	csha1path=$(echo "$csha1" | sed -e "s|\(..\)|\1/|") &&
+	csha1path=".git/objects/$csha1path" &&
+	tsha1path=$(echo "$tsha1" | sed -e "s|\(..\)|\1/|") &&
+	tsha1path=".git/objects/$tsha1path" &&
+	git branch transient_branch $csha1 &&
+	git repack -a -d -l &&
+	test ! -f "$fsha1path" &&
+	test ! -f "$csha1path" &&
+	test ! -f "$tsha1path" &&
+	test 1 = $(ls -1 .git/objects/pack/pack-*.pack | wc -l) &&
+	packfile=$(ls .git/objects/pack/pack-*.pack) &&
+	git branch -D transient_branch &&
+	sleep 1 &&
+	git repack -A -l &&
+	test ! -f "$fsha1path" &&
+	test ! -f "$csha1path" &&
+	test ! -f "$tsha1path" &&
+	git show $fsha1 &&
+	git show $csha1 &&
+	git show $tsha1
+'
+
+test_expect_success 'unpacked objects receive timestamp of pack file' '
+	tmppack=".git/objects/pack/tmp_pack" &&
+	ln "$packfile" "$tmppack" &&
+	git repack -A -l -d &&
+	compare_mtimes "$tmppack" "$fsha1path" "$csha1path" "$tsha1path"
 '
 
 test_done

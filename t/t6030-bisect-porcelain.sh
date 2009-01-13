@@ -2,7 +2,7 @@
 #
 # Copyright (c) 2007 Christian Couder
 #
-test_description='Tests git-bisect functionality'
+test_description='Tests git bisect functionality'
 
 exec </dev/null
 
@@ -23,7 +23,7 @@ add_line_into_file()
     fi
 
     test_tick
-    git-commit --quiet -m "$MSG" $_file
+    git commit --quiet -m "$MSG" $_file
 }
 
 HASH1=
@@ -76,7 +76,7 @@ test_expect_success 'bisect fails if given any junk instead of revs' '
 	test_must_fail git bisect start foo $HASH1 -- &&
 	test_must_fail git bisect start $HASH4 $HASH1 bar -- &&
 	test -z "$(git for-each-ref "refs/bisect/*")" &&
-	test_must_fail ls .git/BISECT_* &&
+	test -z "$(ls .git/BISECT_* 2>/dev/null)" &&
 	git bisect start &&
 	test_must_fail git bisect good foo $HASH1 &&
 	test_must_fail git bisect good $HASH1 bar &&

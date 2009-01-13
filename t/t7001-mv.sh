@@ -8,7 +8,7 @@ test_expect_success \
     'mkdir path0 path1 &&
      cp ../../COPYING path0/COPYING &&
      git add path0/COPYING &&
-     git-commit -m add -a'
+     git commit -m add -a'
 
 test_expect_success \
     'moving the file out of subdirectory' \
@@ -17,7 +17,7 @@ test_expect_success \
 # in path0 currently
 test_expect_success \
     'commiting the change' \
-    'cd .. && git-commit -m move-out -a'
+    'cd .. && git commit -m move-out -a'
 
 test_expect_success \
     'checking the commit' \
@@ -31,7 +31,7 @@ test_expect_success \
 # in path0 currently
 test_expect_success \
     'commiting the change' \
-    'cd .. && git-commit -m move-in -a'
+    'cd .. && git commit -m move-in -a'
 
 test_expect_success \
     'checking the commit' \
@@ -42,7 +42,7 @@ test_expect_success \
     'adding another file' \
     'cp ../../README path0/README &&
      git add path0/README &&
-     git-commit -m add2 -a'
+     git commit -m add2 -a'
 
 test_expect_success \
     'moving whole subdirectory' \
@@ -50,7 +50,7 @@ test_expect_success \
 
 test_expect_success \
     'commiting the change' \
-    'git-commit -m dir-move -a'
+    'git commit -m dir-move -a'
 
 test_expect_success \
     'checking the commit' \
@@ -69,7 +69,7 @@ test_expect_success \
 
 test_expect_success \
     'commiting the change' \
-    'git-commit -m dir-move -a'
+    'git commit -m dir-move -a'
 
 test_expect_success \
     'checking the commit' \
@@ -80,7 +80,7 @@ test_expect_success \
 
 test_expect_success \
     'do not move directory over existing directory' \
-    'mkdir path0 && mkdir path0/path2 && ! git mv path2 path0'
+    'mkdir path0 && mkdir path0/path2 && test_must_fail git mv path2 path0'
 
 test_expect_success \
     'move into "."' \
@@ -149,11 +149,65 @@ test_expect_success 'absolute pathname outside should fail' '(
 	>sub/file &&
 	git add sub/file &&
 
-	! git mv sub "$out/out" &&
+	test_must_fail git mv sub "$out/out" &&
 	test -d sub &&
 	! test -d ../in &&
 	git ls-files --error-unmatch sub/file
 
 )'
+
+test_expect_success 'git mv should not change sha1 of moved cache entry' '
+
+	rm -fr .git &&
+	git init &&
+	echo 1 >dirty &&
+	git add dirty &&
+	entry="$(git ls-files --stage dirty | cut -f 1)"
+	git mv dirty dirty2 &&
+	[ "$entry" = "$(git ls-files --stage dirty2 | cut -f 1)" ] &&
+	echo 2 >dirty2 &&
+	git mv dirty2 dirty &&
+	[ "$entry" = "$(git ls-files --stage dirty | cut -f 1)" ]
+
+'
+
+rm -f dirty dirty2
+
+test_expect_success 'git mv should overwrite symlink to a file' '
+
+	rm -fr .git &&
+	git init &&
+	echo 1 >moved &&
+	ln -s moved symlink &&
+	git add moved symlink &&
+	test_must_fail git mv moved symlink &&
+	git mv -f moved symlink &&
+	! test -e moved &&
+	test -f symlink &&
+	test "$(cat symlink)" = 1 &&
+	git update-index --refresh &&
+	git diff-files --quiet
+
+'
+
+rm -f moved symlink
+
+test_expect_success 'git mv should overwrite file with a symlink' '
+
+	rm -fr .git &&
+	git init &&
+	echo 1 >moved &&
+	ln -s moved symlink &&
+	git add moved symlink &&
+	test_must_fail git mv symlink moved &&
+	git mv -f symlink moved &&
+	! test -e symlink &&
+	test -h moved &&
+	git update-index --refresh &&
+	git diff-files --quiet
+
+'
+
+rm -f moved symlink
 
 test_done

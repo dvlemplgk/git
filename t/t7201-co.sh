@@ -3,7 +3,7 @@
 # Copyright (c) 2006 Junio C Hamano
 #
 
-test_description='git-checkout tests.
+test_description='git checkout tests.
 
 Creates master, forks renamer and side branches from it.
 Test switching across them.
@@ -330,11 +330,57 @@ test_expect_success \
     test "$(git config branch.track2.merge)"
     git config branch.autosetupmerge false'
 
-test_expect_success \
-    'checkout w/--track from non-branch HEAD fails' '
-    git checkout -b delete-me master &&
-    rm .git/refs/heads/delete-me &&
-    test refs/heads/delete-me = "$(git symbolic-ref HEAD)" &&
-    !(git checkout --track -b track)'
+test_expect_success 'checkout w/--track from non-branch HEAD fails' '
+    git checkout master^0 &&
+    test_must_fail git symbolic-ref HEAD &&
+    test_must_fail git checkout --track -b track &&
+    test_must_fail git rev-parse --verify track &&
+    test_must_fail git symbolic-ref HEAD &&
+    test "z$(git rev-parse master^0)" = "z$(git rev-parse HEAD)"
+'
+
+test_expect_success 'detach a symbolic link HEAD' '
+    git checkout master &&
+    git config --bool core.prefersymlinkrefs yes &&
+    git checkout side &&
+    git checkout master &&
+    it=$(git symbolic-ref HEAD) &&
+    test "z$it" = zrefs/heads/master &&
+    here=$(git rev-parse --verify refs/heads/master) &&
+    git checkout side^ &&
+    test "z$(git rev-parse --verify refs/heads/master)" = "z$here"
+'
+
+test_expect_success 'checkout an unmerged path should fail' '
+	rm -f .git/index &&
+	O=$(echo original | git hash-object -w --stdin) &&
+	A=$(echo ourside | git hash-object -w --stdin) &&
+	B=$(echo theirside | git hash-object -w --stdin) &&
+	(
+		echo "100644 $A 0	fild" &&
+		echo "100644 $O 1	file" &&
+		echo "100644 $A 2	file" &&
+		echo "100644 $B 3	file" &&
+		echo "100644 $A 0	filf"
+	) | git update-index --index-info &&
+	echo "none of the above" >sample &&
+	cat sample >fild &&
+	cat sample >file &&
+	cat sample >filf &&
+	test_must_fail git checkout fild file filf &&
+	test_cmp sample fild &&
+	test_cmp sample filf &&
+	test_cmp sample file
+'
+
+test_expect_success 'failing checkout -b should not break working tree' '
+	git reset --hard master &&
+	git symbolic-ref HEAD refs/heads/master &&
+	test_must_fail git checkout -b renamer side^ &&
+	test $(git symbolic-ref HEAD) = refs/heads/master &&
+	git diff --exit-code &&
+	git diff --cached --exit-code
+
+'
 
 test_done

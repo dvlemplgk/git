@@ -85,12 +85,12 @@ test_expect_success '.gitignore is honored' '
 '
 
 test_expect_success 'error out when attempting to add ignored ones without -f' '
-	! git add a.?? &&
+	test_must_fail git add a.?? &&
 	! (git ls-files | grep "\\.ig")
 '
 
 test_expect_success 'error out when attempting to add ignored ones without -f' '
-	! git add d.?? &&
+	test_must_fail git add d.?? &&
 	! (git ls-files | grep "\\.ig")
 '
 
@@ -222,11 +222,11 @@ test_expect_success 'git add (add.ignore-errors = false)' '
 	! ( git ls-files foo1 | grep foo1 )
 '
 
-test_expect_success 'git add '\''fo\?bar'\'' ignores foobar' '
+test_expect_success 'git add '\''fo\[ou\]bar'\'' ignores foobar' '
 	git reset --hard &&
-	touch fo\?bar foobar &&
-	git add '\''fo\?bar'\'' &&
-	git ls-files fo\?bar | grep -F fo\?bar &&
+	touch fo\[ou\]bar foobar &&
+	git add '\''fo\[ou\]bar'\'' &&
+	git ls-files fo\[ou\]bar | grep -F fo\[ou\]bar &&
 	! ( git ls-files foobar | grep foobar )
 '
 

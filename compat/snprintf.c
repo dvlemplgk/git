@@ -1,12 +1,27 @@
 #include "../git-compat-util.h"
 
+/*
+ * The size parameter specifies the available space, i.e. includes
+ * the trailing NUL byte; but Windows's vsnprintf expects the
+ * number of characters to write without the trailing NUL.
+ */
+#ifndef SNPRINTF_SIZE_CORR
+#define SNPRINTF_SIZE_CORR 0
+#endif
+
 #undef vsnprintf
 int git_vsnprintf(char *str, size_t maxsize, const char *format, va_list ap)
 {
 	char *s;
-	int ret;
+	int ret = -1;
 
-	ret = vsnprintf(str, maxsize, format, ap);
+	if (maxsize > 0) {
+		ret = vsnprintf(str, maxsize-SNPRINTF_SIZE_CORR, format, ap);
+		if (ret == maxsize-1)
+			ret = -1;
+		/* Windows does not NUL-terminate if result fills buffer */
+		str[maxsize-1] = 0;
+	}
 	if (ret != -1)
 		return ret;
 
@@ -20,7 +35,9 @@ int git_vsnprintf(char *str, size_t maxsize, const char *format, va_list ap)
 		if (! str)
 			break;
 		s = str;
-		ret = vsnprintf(str, maxsize, format, ap);
+		ret = vsnprintf(str, maxsize-SNPRINTF_SIZE_CORR, format, ap);
+		if (ret == maxsize-1)
+			ret = -1;
 	}
 	free(s);
 	return ret;

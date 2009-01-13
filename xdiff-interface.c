@@ -179,10 +179,20 @@ struct ff_regs {
 static long ff_regexp(const char *line, long len,
 		char *buffer, long buffer_size, void *priv)
 {
-	char *line_buffer = xstrndup(line, len); /* make NUL terminated */
+	char *line_buffer;
 	struct ff_regs *regs = priv;
 	regmatch_t pmatch[2];
 	int result = 0, i;
+
+	/* Exclude terminating newline (and cr) from matching */
+	if (len > 0 && line[len-1] == '\n') {
+		if (len > 1 && line[len-2] == '\r')
+			len -= 2;
+		else
+			len--;
+	}
+
+	line_buffer = xstrndup(line, len); /* make NUL terminated */
 
 	for (i = 0; i < regs->nr; i++) {
 		struct ff_reg *reg = regs->array + i;
@@ -206,7 +216,7 @@ static long ff_regexp(const char *line, long len,
 	return result;
 }
 
-void xdiff_set_find_func(xdemitconf_t *xecfg, const char *value)
+void xdiff_set_find_func(xdemitconf_t *xecfg, const char *value, int cflags)
 {
 	int i;
 	struct ff_regs *regs;
@@ -231,7 +241,7 @@ void xdiff_set_find_func(xdemitconf_t *xecfg, const char *value)
 			expression = buffer = xstrndup(value, ep - value);
 		else
 			expression = value;
-		if (regcomp(&reg->re, expression, 0))
+		if (regcomp(&reg->re, expression, cflags))
 			die("Invalid regexp to look for hunk header: %s", expression);
 		free(buffer);
 		value = ep + 1;

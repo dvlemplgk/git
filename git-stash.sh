@@ -1,7 +1,13 @@
 #!/bin/sh
 # Copyright (c) 2007, Nanako Shiraishi
 
-USAGE='[  | save | list | show | apply | clear | drop | pop | create ]'
+dashless=$(basename "$0" | sed -e 's/-/ /')
+USAGE="list [<options>]
+   or: $dashless (show | drop | pop ) [<stash>]
+   or: $dashless apply [--index] [<stash>]
+   or: $dashless branch <branchname> [<stash>]
+   or: $dashless [save [--keep-index] [<message>]]
+   or: $dashless clear"
 
 SUBDIRECTORY_OK=Yes
 OPTIONS_SPEC=
@@ -33,6 +39,7 @@ clear_stash () {
 create_stash () {
 	stash_msg="$1"
 
+	git update-index -q --refresh
 	if no_changes
 	then
 		exit 0
@@ -86,8 +93,16 @@ create_stash () {
 }
 
 save_stash () {
-	stash_msg="$1"
+	keep_index=
+	case "$1" in
+	--keep-index)
+		keep_index=t
+		shift
+	esac
 
+	stash_msg="$*"
+
+	git update-index -q --refresh
 	if no_changes
 	then
 		echo 'No local changes to save'
@@ -104,6 +119,13 @@ save_stash () {
 	git update-ref -m "$stash_msg" $ref_stash $w_commit ||
 		die "Cannot save the current status"
 	printf 'Saved working directory and index state "%s"\n' "$stash_msg"
+
+	git reset --hard
+
+	if test -n "$keep_index" && test -n $i_tree
+	then
+		git read-tree --reset -u $i_tree
+	fi
 }
 
 have_stash () {
@@ -122,16 +144,16 @@ show_stash () {
 	then
 		flags=--stat
 	fi
-	s=$(git rev-parse --revs-only --no-flags --default $ref_stash "$@")
 
-	w_commit=$(git rev-parse --verify "$s") &&
-	b_commit=$(git rev-parse --verify "$s^") &&
+	w_commit=$(git rev-parse --verify --default $ref_stash "$@") &&
+	b_commit=$(git rev-parse --verify "$w_commit^") &&
 	git diff $flags $b_commit $w_commit
 }
 
 apply_stash () {
+	git update-index -q --refresh &&
 	git diff-files --quiet --ignore-submodules ||
-		die 'Cannot restore on top of a dirty state'
+		die 'Cannot apply to a dirty working tree, please stage your changes'
 
 	unstash_index=
 	case "$1" in
@@ -146,14 +168,15 @@ apply_stash () {
 
 	# stash records the work tree, and is a merge between the
 	# base commit (first parent) and the index tree (second parent).
-	s=$(git rev-parse --revs-only --no-flags --default $ref_stash "$@") &&
+	s=$(git rev-parse --verify --default $ref_stash "$@") &&
 	w_tree=$(git rev-parse --verify "$s:") &&
 	b_tree=$(git rev-parse --verify "$s^1:") &&
 	i_tree=$(git rev-parse --verify "$s^2:") ||
 		die "$*: no valid stashed state found"
 
 	unstashed_index_tree=
-	if test -n "$unstash_index" && test "$b_tree" != "$i_tree"
+	if test -n "$unstash_index" && test "$b_tree" != "$i_tree" &&
+			test "$c_tree" != "$i_tree"
 	then
 		git diff-tree --binary $s^2^..$s^2 | git apply --cached
 		test $? -ne 0 &&
@@ -205,7 +228,7 @@ drop_stash () {
 		shift
 	fi
 	# Verify supplied argument looks like a stash entry
-	s=$(git rev-parse --revs-only --no-flags "$@") &&
+	s=$(git rev-parse --verify "$@") &&
 	git rev-parse --verify "$s:"   > /dev/null 2>&1 &&
 	git rev-parse --verify "$s^1:" > /dev/null 2>&1 &&
 	git rev-parse --verify "$s^2:" > /dev/null 2>&1 ||
@@ -216,6 +239,23 @@ drop_stash () {
 
 	# clear_stash if we just dropped the last stash entry
 	git rev-parse --verify "$ref_stash@{0}" > /dev/null 2>&1 || clear_stash
+}
+
+apply_to_branch () {
+	have_stash || die 'Nothing to apply'
+
+	test -n "$1" || die 'No branch name specified'
+	branch=$1
+
+	if test -z "$2"
+	then
+		set x "$ref_stash@{0}"
+	fi
+	stash=$2
+
+	git-checkout -b $branch $stash^ &&
+	apply_stash --index $stash &&
+	drop_stash $stash
 }
 
 # Main command set
@@ -235,7 +275,7 @@ show)
 	;;
 save)
 	shift
-	save_stash "$*" && git-reset --hard
+	save_stash "$@"
 	;;
 apply)
 	shift
@@ -264,12 +304,15 @@ pop)
 		drop_stash "$@"
 	fi
 	;;
+branch)
+	shift
+	apply_to_branch "$@"
+	;;
 *)
 	if test $# -eq 0
 	then
 		save_stash &&
-		echo '(To restore them type "git stash apply")' &&
-		git-reset --hard
+		echo '(To restore them type "git stash apply")'
 	else
 		usage
 	fi

@@ -32,6 +32,60 @@ static char *cleanup_path(char *path)
 	return path;
 }
 
+char *mksnpath(char *buf, size_t n, const char *fmt, ...)
+{
+	va_list args;
+	unsigned len;
+
+	va_start(args, fmt);
+	len = vsnprintf(buf, n, fmt, args);
+	va_end(args);
+	if (len >= n) {
+		strlcpy(buf, bad_path, n);
+		return buf;
+	}
+	return cleanup_path(buf);
+}
+
+static char *git_vsnpath(char *buf, size_t n, const char *fmt, va_list args)
+{
+	const char *git_dir = get_git_dir();
+	size_t len;
+
+	len = strlen(git_dir);
+	if (n < len + 1)
+		goto bad;
+	memcpy(buf, git_dir, len);
+	if (len && !is_dir_sep(git_dir[len-1]))
+		buf[len++] = '/';
+	len += vsnprintf(buf + len, n - len, fmt, args);
+	if (len >= n)
+		goto bad;
+	return cleanup_path(buf);
+bad:
+	strlcpy(buf, bad_path, n);
+	return buf;
+}
+
+char *git_snpath(char *buf, size_t n, const char *fmt, ...)
+{
+	va_list args;
+	va_start(args, fmt);
+	(void)git_vsnpath(buf, n, fmt, args);
+	va_end(args);
+	return buf;
+}
+
+char *git_pathdup(const char *fmt, ...)
+{
+	char path[PATH_MAX];
+	va_list args;
+	va_start(args, fmt);
+	(void)git_vsnpath(path, sizeof(path), fmt, args);
+	va_end(args);
+	return xstrdup(path);
+}
+
 char *mkpath(const char *fmt, ...)
 {
 	va_list args;
@@ -291,45 +345,6 @@ int adjust_shared_perm(const char *path)
 	return 0;
 }
 
-static const char *get_pwd_cwd(void)
-{
-	static char cwd[PATH_MAX + 1];
-	char *pwd;
-	struct stat cwd_stat, pwd_stat;
-	if (getcwd(cwd, PATH_MAX) == NULL)
-		return NULL;
-	pwd = getenv("PWD");
-	if (pwd && strcmp(pwd, cwd)) {
-		stat(cwd, &cwd_stat);
-		if (!stat(pwd, &pwd_stat) &&
-		    pwd_stat.st_dev == cwd_stat.st_dev &&
-		    pwd_stat.st_ino == cwd_stat.st_ino) {
-			strlcpy(cwd, pwd, PATH_MAX);
-		}
-	}
-	return cwd;
-}
-
-const char *make_nonrelative_path(const char *path)
-{
-	static char buf[PATH_MAX + 1];
-
-	if (is_absolute_path(path)) {
-		if (strlcpy(buf, path, PATH_MAX) >= PATH_MAX)
-			die ("Too long path: %.*s", 60, path);
-	} else {
-		const char *cwd = get_pwd_cwd();
-		if (!cwd)
-			die("Cannot determine the current working directory");
-		if (snprintf(buf, PATH_MAX, "%s/%s", cwd, path) >= PATH_MAX)
-			die ("Too long path: %.*s", 60, path);
-	}
-	return buf;
-}
-
-/* We allow "recursive" symbolic links. Only within reason, though. */
-#define MAXDEPTH 5
-
 const char *make_relative_path(const char *abs, const char *base)
 {
 	static char buf[PATH_MAX + 1];
@@ -347,66 +362,98 @@ const char *make_relative_path(const char *abs, const char *base)
 	return buf;
 }
 
-const char *make_absolute_path(const char *path)
+/*
+ * path = absolute path
+ * buf = buffer of at least max(2, strlen(path)+1) bytes
+ * It is okay if buf == path, but they should not overlap otherwise.
+ *
+ * Performs the following normalizations on path, storing the result in buf:
+ * - Removes trailing slashes.
+ * - Removes empty components.
+ * - Removes "." components.
+ * - Removes ".." components, and the components the precede them.
+ * "" and paths that contain only slashes are normalized to "/".
+ * Returns the length of the output.
+ *
+ * Note that this function is purely textual.  It does not follow symlinks,
+ * verify the existence of the path, or make any system calls.
+ */
+int normalize_absolute_path(char *buf, const char *path)
 {
-	static char bufs[2][PATH_MAX + 1], *buf = bufs[0], *next_buf = bufs[1];
-	char cwd[1024] = "";
-	int buf_index = 1, len;
+	const char *comp_start = path, *comp_end = path;
+	char *dst = buf;
+	int comp_len;
+	assert(buf);
+	assert(path);
 
-	int depth = MAXDEPTH;
-	char *last_elem = NULL;
-	struct stat st;
+	while (*comp_start) {
+		assert(*comp_start == '/');
+		while (*++comp_end && *comp_end != '/')
+			; /* nothing */
+		comp_len = comp_end - comp_start;
 
-	if (strlcpy(buf, path, PATH_MAX) >= PATH_MAX)
-		die ("Too long path: %.*s", 60, path);
+		if (!strncmp("/",  comp_start, comp_len) ||
+		    !strncmp("/.", comp_start, comp_len))
+			goto next;
 
-	while (depth--) {
-		if (stat(buf, &st) || !S_ISDIR(st.st_mode)) {
-			char *last_slash = strrchr(buf, '/');
-			if (last_slash) {
-				*last_slash = '\0';
-				last_elem = xstrdup(last_slash + 1);
-			} else {
-				last_elem = xstrdup(buf);
-				*buf = '\0';
-			}
+		if (!strncmp("/..", comp_start, comp_len)) {
+			while (dst > buf && *--dst != '/')
+				; /* nothing */
+			goto next;
 		}
 
-		if (*buf) {
-			if (!*cwd && !getcwd(cwd, sizeof(cwd)))
-				die ("Could not get current working directory");
-
-			if (chdir(buf))
-				die ("Could not switch to '%s'", buf);
-		}
-		if (!getcwd(buf, PATH_MAX))
-			die ("Could not get current working directory");
-
-		if (last_elem) {
-			int len = strlen(buf);
-			if (len + strlen(last_elem) + 2 > PATH_MAX)
-				die ("Too long path name: '%s/%s'",
-						buf, last_elem);
-			buf[len] = '/';
-			strcpy(buf + len + 1, last_elem);
-			free(last_elem);
-			last_elem = NULL;
-		}
-
-		if (!lstat(buf, &st) && S_ISLNK(st.st_mode)) {
-			len = readlink(buf, next_buf, PATH_MAX);
-			if (len < 0)
-				die ("Invalid symlink: %s", buf);
-			next_buf[len] = '\0';
-			buf = next_buf;
-			buf_index = 1 - buf_index;
-			next_buf = bufs[buf_index];
-		} else
-			break;
+		memmove(dst, comp_start, comp_len);
+		dst += comp_len;
+	next:
+		comp_start = comp_end;
 	}
 
-	if (*cwd && chdir(cwd))
-		die ("Could not change back to '%s'", cwd);
+	if (dst == buf)
+		*dst++ = '/';
 
-	return buf;
+	*dst = '\0';
+	return dst - buf;
+}
+
+/*
+ * path = Canonical absolute path
+ * prefix_list = Colon-separated list of absolute paths
+ *
+ * Determines, for each path in prefix_list, whether the "prefix" really
+ * is an ancestor directory of path.  Returns the length of the longest
+ * ancestor directory, excluding any trailing slashes, or -1 if no prefix
+ * is an ancestor.  (Note that this means 0 is returned if prefix_list is
+ * "/".) "/foo" is not considered an ancestor of "/foobar".  Directories
+ * are not considered to be their own ancestors.  path must be in a
+ * canonical form: empty components, or "." or ".." components are not
+ * allowed.  prefix_list may be null, which is like "".
+ */
+int longest_ancestor_length(const char *path, const char *prefix_list)
+{
+	char buf[PATH_MAX+1];
+	const char *ceil, *colon;
+	int len, max_len = -1;
+
+	if (prefix_list == NULL || !strcmp(path, "/"))
+		return -1;
+
+	for (colon = ceil = prefix_list; *colon; ceil = colon+1) {
+		for (colon = ceil; *colon && *colon != ':'; colon++);
+		len = colon - ceil;
+		if (len == 0 || len > PATH_MAX || !is_absolute_path(ceil))
+			continue;
+		strlcpy(buf, ceil, len+1);
+		len = normalize_absolute_path(buf, buf);
+		/* Strip "trailing slashes" from "/". */
+		if (len == 1)
+			len = 0;
+
+		if (!strncmp(path, buf, len) &&
+		    path[len] == '/' &&
+		    len > max_len) {
+			max_len = len;
+		}
+	}
+
+	return max_len;
 }

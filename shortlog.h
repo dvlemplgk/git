@@ -1,20 +1,21 @@
 #ifndef SHORTLOG_H
 #define SHORTLOG_H
 
-#include "path-list.h"
+#include "string-list.h"
 
 struct shortlog {
-	struct path_list list;
+	struct string_list list;
 	int summary;
 	int wrap_lines;
 	int sort_by_number;
 	int wrap;
 	int in1;
 	int in2;
+	int user_format;
 
 	char *common_repo_prefix;
 	int email;
-	struct path_list mailmap;
+	struct string_list mailmap;
 };
 
 void shortlog_init(struct shortlog *log);

@@ -5,12 +5,12 @@
 
 OPTIONS_KEEPDASHDASH=
 OPTIONS_SPEC="\
-git-repack [options]
+git repack [options]
 --
 a               pack everything in a single pack
 A               same as -a, and turn unreachable objects loose
 d               remove redundant packs, and run git-prune-packed
-f               pass --no-reuse-delta to git-pack-objects
+f               pass --no-reuse-object to git-pack-objects
 n               do not run git-update-server-info
 q,quiet         be quiet
 l               pass --local to git-pack-objects
@@ -44,11 +44,7 @@ do
 	shift
 done
 
-# Later we will default repack.UseDeltaBaseOffset to true
-default_dbo=false
-
-case "`git config --bool repack.usedeltabaseoffset ||
-       echo $default_dbo`" in
+case "`git config --bool repack.usedeltabaseoffset || echo true`" in
 true)
 	extra="$extra --delta-base-offset" ;;
 esac
@@ -75,19 +71,17 @@ case ",$all_into_one," in
 				existing="$existing $e"
 			fi
 		done
-	fi
-	if test -z "$args"
-	then
-		args='--unpacked --incremental'
-	elif test -n "$unpack_unreachable"
-	then
-		args="$args $unpack_unreachable"
+		if test -n "$args" -a -n "$unpack_unreachable" -a \
+			-n "$remove_redundant"
+		then
+			args="$args $unpack_unreachable"
+		fi
 	fi
 	;;
 esac
 
 args="$args $local $quiet $no_reuse$extra"
-names=$(git pack-objects --non-empty --all --reflog $args </dev/null "$PACKTMP") ||
+names=$(git pack-objects --honor-pack-keep --non-empty --all --reflog $args </dev/null "$PACKTMP") ||
 	exit 1
 if [ -z "$names" ]; then
 	if test -z "$quiet"; then

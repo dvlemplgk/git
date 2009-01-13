@@ -13,9 +13,9 @@
  */
 
 static const char reflog_expire_usage[] =
-"git-reflog (show|expire) [--verbose] [--dry-run] [--stale-fix] [--expire=<time>] [--expire-unreachable=<time>] [--all] <refs>...";
+"git reflog (show|expire) [--verbose] [--dry-run] [--stale-fix] [--expire=<time>] [--expire-unreachable=<time>] [--all] <refs>...";
 static const char reflog_delete_usage[] =
-"git-reflog delete [--verbose] [--dry-run] [--rewrite] [--updateref] <refs>...";
+"git reflog delete [--verbose] [--dry-run] [--rewrite] [--updateref] <refs>...";
 
 static unsigned long default_reflog_expire;
 static unsigned long default_reflog_expire_unreachable;
@@ -277,11 +277,11 @@ static int expire_reflog(const char *ref, const unsigned char *sha1, int unused,
 	lock = lock_any_ref_for_update(ref, sha1, 0);
 	if (!lock)
 		return error("cannot lock ref '%s'", ref);
-	log_file = xstrdup(git_path("logs/%s", ref));
+	log_file = git_pathdup("logs/%s", ref);
 	if (!file_exists(log_file))
 		goto finish;
 	if (!cmd->dry_run) {
-		newlog_path = xstrdup(git_path("logs/%s.lock", ref));
+		newlog_path = git_pathdup("logs/%s.lock", ref);
 		cb.newlog = fopen(newlog_path, "w");
 	}
 
@@ -630,7 +630,7 @@ static int cmd_reflog_delete(int argc, const char **argv, const char *prefix)
  */
 
 static const char reflog_usage[] =
-"git-reflog (expire | ...)";
+"git reflog (expire | ...)";
 
 int cmd_reflog(int argc, const char **argv, const char *prefix)
 {

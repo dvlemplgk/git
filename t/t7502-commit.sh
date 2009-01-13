@@ -141,8 +141,8 @@ test_expect_success 'cleanup commit messages (strip,-F)' '
 
 echo "sample
 
-# Please enter the commit message for your changes.
-# (Comment lines starting with '#' will not be included)" >expect
+# Please enter the commit message for your changes. Lines starting
+# with '#' will be ignored, and an empty message aborts the commit." >expect
 
 test_expect_success 'cleanup commit messages (strip,-F,-e)' '
 
@@ -228,10 +228,12 @@ EOF
 
 test_expect_success 'a SIGTERM should break locks' '
 	echo >>negative &&
-	"$SHELL_PATH" -c '\''
+	! "$SHELL_PATH" -c '\''
 	  echo kill -TERM $$ >> .git/FAKE_EDITOR
-	  GIT_EDITOR=.git/FAKE_EDITOR exec git commit -a'\'' && exit 1  # should fail
-	! test -f .git/index.lock
+	  GIT_EDITOR=.git/FAKE_EDITOR
+	  export GIT_EDITOR
+	  exec git commit -a'\'' &&
+	test ! -f .git/index.lock
 '
 
 rm -f .git/MERGE_MSG .git/COMMIT_EDITMSG

@@ -18,7 +18,7 @@ static struct fetch_pack_args args = {
 };
 
 static const char fetch_pack_usage[] =
-"git-fetch-pack [--all] [--quiet|-q] [--keep|-k] [--thin] [--include-tag] [--upload-pack=<git-upload-pack>] [--depth=<n>] [--no-progress] [-v] [<host>:]<directory> [<refs>...]";
+"git fetch-pack [--all] [--quiet|-q] [--keep|-k] [--thin] [--include-tag] [--upload-pack=<git-upload-pack>] [--depth=<n>] [--no-progress] [-v] [<host>:]<directory> [<refs>...]";
 
 #define COMPLETE	(1U << 0)
 #define COMMON		(1U << 1)
@@ -520,7 +520,8 @@ static int get_pack(int xd[2], char **pack_lockfile)
 
 		if (read_pack_header(demux.out, &header))
 			die("protocol error: bad pack header");
-		snprintf(hdr_arg, sizeof(hdr_arg), "--pack_header=%u,%u",
+		snprintf(hdr_arg, sizeof(hdr_arg),
+			 "--pack_header=%"PRIu32",%"PRIu32,
 			 ntohl(header.hdr_version), ntohl(header.hdr_entries));
 		if (ntohl(header.hdr_entries) < unpack_limit)
 			do_keep = 0;
@@ -608,7 +609,7 @@ static struct ref *do_fetch_pack(int fd[2],
 			fprintf(stderr, "warning: no common commits\n");
 
 	if (get_pack(fd, pack_lockfile))
-		die("git-fetch-pack: fetch failed.");
+		die("git fetch-pack: fetch failed.");
 
  all_done:
 	return ref;
@@ -749,7 +750,7 @@ int cmd_fetch_pack(int argc, const char **argv, const char *prefix)
 	if (!ret && nr_heads) {
 		/* If the heads to pull were given, we should have
 		 * consumed all of them by matching the remote.
-		 * Otherwise, 'git-fetch remote no-such-ref' would
+		 * Otherwise, 'git fetch remote no-such-ref' would
 		 * silently succeed without issuing an error.
 		 */
 		for (i = 0; i < nr_heads; i++)
@@ -779,7 +780,8 @@ struct ref *fetch_pack(struct fetch_pack_args *my_args,
 	struct ref *ref_cpy;
 
 	fetch_pack_setup();
-	memcpy(&args, my_args, sizeof(args));
+	if (&args != my_args)
+		memcpy(&args, my_args, sizeof(args));
 	if (args.depth > 0) {
 		if (stat(git_path("shallow"), &st))
 			st.st_mtime = 0;
@@ -812,7 +814,8 @@ struct ref *fetch_pack(struct fetch_pack_args *my_args,
 			  )
 			die("shallow file was changed during fetch");
 
-		fd = hold_lock_file_for_update(&lock, shallow, 1);
+		fd = hold_lock_file_for_update(&lock, shallow,
+					       LOCK_DIE_ON_ERROR);
 		if (!write_shallow_commits(fd, 0)) {
 			unlink(shallow);
 			rollback_lock_file(&lock);
@@ -821,5 +824,6 @@ struct ref *fetch_pack(struct fetch_pack_args *my_args,
 		}
 	}
 
+	reprepare_packed_git();
 	return ref_cpy;
 }

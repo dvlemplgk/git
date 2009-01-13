@@ -40,7 +40,7 @@ static struct option builtin_help_options[] = {
 };
 
 static const char * const builtin_help_usage[] = {
-	"git-help [--all] [--man|--web|--info] [command]",
+	"git help [--all] [--man|--web|--info] [command]",
 	NULL
 };
 
@@ -391,6 +391,32 @@ static void pretty_print_string_list(struct cmdnames *cmds, int longest)
 	}
 }
 
+static int is_executable(const char *name)
+{
+	struct stat st;
+
+	if (stat(name, &st) || /* stat, not lstat */
+	    !S_ISREG(st.st_mode))
+		return 0;
+
+#ifdef __MINGW32__
+	/* cannot trust the executable bit, peek into the file instead */
+	char buf[3] = { 0 };
+	int n;
+	int fd = open(name, O_RDONLY);
+	st.st_mode &= ~S_IXUSR;
+	if (fd >= 0) {
+		n = read(fd, buf, 2);
+		if (n == 2)
+			/* DOS executables start with "MZ" */
+			if (!strcmp(buf, "#!") || !strcmp(buf, "MZ"))
+				st.st_mode |= S_IXUSR;
+		close(fd);
+	}
+#endif
+	return st.st_mode & S_IXUSR;
+}
+
 static unsigned int list_commands_in_dir(struct cmdnames *cmds,
 					 const char *path)
 {
@@ -399,20 +425,24 @@ static unsigned int list_commands_in_dir(struct cmdnames *cmds,
 	int prefix_len = strlen(prefix);
 	DIR *dir = opendir(path);
 	struct dirent *de;
+	struct strbuf buf = STRBUF_INIT;
+	int len;
 
-	if (!dir || chdir(path))
+	if (!dir)
 		return 0;
 
+	strbuf_addf(&buf, "%s/", path);
+	len = buf.len;
+
 	while ((de = readdir(dir)) != NULL) {
-		struct stat st;
 		int entlen;
 
 		if (prefixcmp(de->d_name, prefix))
 			continue;
 
-		if (stat(de->d_name, &st) || /* stat, not lstat */
-		    !S_ISREG(st.st_mode) ||
-		    !(st.st_mode & S_IXUSR))
+		strbuf_setlen(&buf, len);
+		strbuf_addstr(&buf, de->d_name);
+		if (!is_executable(buf.buf))
 			continue;
 
 		entlen = strlen(de->d_name) - prefix_len;
@@ -425,6 +455,7 @@ static unsigned int list_commands_in_dir(struct cmdnames *cmds,
 		add_cmdname(cmds, de->d_name + prefix_len, entlen);
 	}
 	closedir(dir);
+	strbuf_release(&buf);
 
 	return longest;
 }
@@ -447,7 +478,7 @@ static unsigned int load_command_list(void)
 
 	path = paths = xstrdup(env_path);
 	while (1) {
-		if ((colon = strchr(path, ':')))
+		if ((colon = strchr(path, PATH_SEP)))
 			*colon = 0;
 
 		len = list_commands_in_dir(&other_cmds, path);
@@ -524,7 +555,18 @@ static int is_git_command(const char *s)
 {
 	load_command_list();
 	return is_in_cmdlist(&main_cmds, s) ||
-		is_in_cmdlist(&other_cmds, s);
+		is_in_cmdlist(&other_cmds, s) ||
+		!strcmp(s, "help");
+}
+
+static const char *prepend(const char *prefix, const char *cmd)
+{
+	size_t pre_len = strlen(prefix);
+	size_t cmd_len = strlen(cmd);
+	char *p = xmalloc(pre_len + cmd_len + 1);
+	memcpy(p, prefix, pre_len);
+	strcpy(p + pre_len, cmd);
+	return p;
 }
 
 static const char *cmd_to_page(const char *git_cmd)
@@ -533,14 +575,10 @@ static const char *cmd_to_page(const char *git_cmd)
 		return "git";
 	else if (!prefixcmp(git_cmd, "git"))
 		return git_cmd;
-	else {
-		int page_len = strlen(git_cmd) + 4;
-		char *p = xmalloc(page_len + 1);
-		strcpy(p, "git-");
-		strcpy(p + 4, git_cmd);
-		p[page_len] = 0;
-		return p;
-	}
+	else if (is_git_command(git_cmd))
+		return prepend("git-", git_cmd);
+	else
+		return prepend("git", git_cmd);
 }
 
 static void setup_man_path(void)
@@ -604,14 +642,28 @@ static void show_info_page(const char *git_cmd)
 static void get_html_page_path(struct strbuf *page_path, const char *page)
 {
 	struct stat st;
+	const char *html_path = system_path(GIT_HTML_PATH);
 
 	/* Check that we have a git documentation directory. */
-	if (stat(GIT_HTML_PATH "/git.html", &st) || !S_ISREG(st.st_mode))
-		die("'%s': not a documentation directory.", GIT_HTML_PATH);
+	if (stat(mkpath("%s/git.html", html_path), &st)
+	    || !S_ISREG(st.st_mode))
+		die("'%s': not a documentation directory.", html_path);
 
 	strbuf_init(page_path, 0);
-	strbuf_addf(page_path, GIT_HTML_PATH "/%s.html", page);
+	strbuf_addf(page_path, "%s/%s.html", html_path, page);
 }
+
+/*
+ * If open_html is not defined in a platform-specific way (see for
+ * example compat/mingw.h), we use the script web--browse to display
+ * HTML.
+ */
+#ifndef open_html
+void open_html(const char *path)
+{
+	execl_git_cmd("web--browse", "-c", "help.browser", path, NULL);
+}
+#endif
 
 static void show_html_page(const char *git_cmd)
 {
@@ -620,7 +672,7 @@ static void show_html_page(const char *git_cmd)
 
 	get_html_page_path(&page_path, page);
 
-	execl_git_cmd("web--browse", "-c", "help.browser", page_path.buf, NULL);
+	open_html(page_path.buf);
 }
 
 void help_unknown_cmd(const char *cmd)

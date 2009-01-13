@@ -5,13 +5,12 @@
 SUBDIRECTORY_OK=Yes
 OPTIONS_KEEPDASHDASH=
 OPTIONS_SPEC="\
-git-am [options] <mbox>|<Maildir>...
-git-am [options] --resolved
-git-am [options] --skip
+git am [options] [<mbox>|<Maildir>...]
+git am [options] (--resolved | --skip | --abort)
 --
 d,dotest=       (removed -- do not use)
 i,interactive   run interactively
-b,binary        pass --allow-binary-replacement to git-apply
+b,binary        (historical option -- no-op)
 3,3way          allow fall back on 3way merging if needed
 s,signoff       add a Signed-off-by line to the commit message
 u,utf8          recode into utf8 (default)
@@ -22,6 +21,7 @@ p=              pass it through git-apply
 resolvemsg=     override error message when patch failure occurs
 r,resolved      to be used after a patch failure
 skip            skip the current patch
+abort           restore the original branch and abort the patching operation.
 rebasing        (internal use for git-rebase)"
 
 . git-sh-setup
@@ -43,7 +43,7 @@ stop_here_user_resolve () {
 	    printf '%s\n' "$resolvemsg"
 	    stop_here $1
     fi
-    cmdline=$(basename $0)
+    cmdline="git am"
     if test '' != "$interactive"
     then
         cmdline="$cmdline -i"
@@ -54,6 +54,7 @@ stop_here_user_resolve () {
     fi
     echo "When you have resolved this problem run \"$cmdline --resolved\"."
     echo "If you would prefer to skip this patch, instead run \"$cmdline --skip\"."
+    echo "To restore the original branch and stop patching run \"$cmdline --abort\"."
 
     stop_here $1
 }
@@ -86,7 +87,7 @@ fall_back_3way () {
 
     echo Using index info to reconstruct a base tree...
     if GIT_INDEX_FILE="$dotest/patch-merge-tmp-index" \
-	git apply $binary --cached <"$dotest/patch"
+	git apply --cached <"$dotest/patch"
     then
 	mv "$dotest/patch-merge-base+" "$dotest/patch-merge-base"
 	mv "$dotest/patch-merge-tmp-index" "$dotest/patch-merge-index"
@@ -119,8 +120,8 @@ It does not apply to blobs recorded in its index."
 }
 
 prec=4
-dotest=".dotest"
-sign= utf8=t keep= skip= interactive= resolved= binary= rebasing=
+dotest="$GIT_DIR/rebase-apply"
+sign= utf8=t keep= skip= interactive= resolved= rebasing= abort=
 resolvemsg= resume=
 git_apply_opt=
 
@@ -130,7 +131,7 @@ do
 	-i|--interactive)
 		interactive=t ;;
 	-b|--binary)
-		binary=t ;;
+		: ;;
 	-3|--3way)
 		threeway=t ;;
 	-s|--signoff)
@@ -145,8 +146,10 @@ do
 		resolved=t ;;
 	--skip)
 		skip=t ;;
+	--abort)
+		abort=t ;;
 	--rebasing)
-		rebasing=t threeway=t keep=t binary=t ;;
+		rebasing=t threeway=t keep=t ;;
 	-d|--dotest)
 		die "-d option is no longer supported.  Do not use."
 		;;
@@ -177,7 +180,7 @@ fi
 
 if test -d "$dotest"
 then
-	case "$#,$skip$resolved" in
+	case "$#,$skip$resolved$abort" in
 	0,*t*)
 		# Explicit resume command and we do not have file, so
 		# we are happy.
@@ -195,11 +198,27 @@ then
 		false
 		;;
 	esac ||
-	die "previous dotest directory $dotest still exists but mbox given."
+	die "previous rebase directory $dotest still exists but mbox given."
 	resume=yes
+
+	case "$skip,$abort" in
+	t,)
+		git rerere clear
+		git read-tree --reset -u HEAD HEAD
+		orig_head=$(cat "$GIT_DIR/ORIG_HEAD")
+		git reset HEAD
+		git update-ref ORIG_HEAD $orig_head
+		;;
+	,t)
+		git rerere clear
+		git read-tree --reset -u HEAD ORIG_HEAD
+		git reset ORIG_HEAD
+		rm -fr "$dotest"
+		exit ;;
+	esac
 else
-	# Make sure we are not given --skip nor --resolved
-	test ",$skip,$resolved," = ,,, ||
+	# Make sure we are not given --skip, --resolved, nor --abort
+	test "$skip$resolved$abort" = "" ||
 		die "Resolve operation not in progress, we are not resuming."
 
 	# Start afresh.
@@ -228,10 +247,9 @@ else
 		exit 1
 	}
 
-	# -b, -s, -u, -k and --whitespace flags are kept for the
+	# -s, -u, -k and --whitespace flags are kept for the
 	# resuming session after a patch failure.
 	# -3 and -i can and must be given when resuming.
-	echo "$binary" >"$dotest/binary"
 	echo " $ws" >"$dotest/whitespace"
 	echo "$sign" >"$dotest/sign"
 	echo "$utf8" >"$dotest/utf8"
@@ -242,6 +260,7 @@ else
 		: >"$dotest/rebasing"
 	else
 		: >"$dotest/applying"
+		git update-ref ORIG_HEAD HEAD
 	fi
 fi
 
@@ -254,10 +273,6 @@ case "$resolved" in
 	fi
 esac
 
-if test "$(cat "$dotest/binary")" = t
-then
-	binary=--allow-binary-replacement
-fi
 if test "$(cat "$dotest/utf8")" = t
 then
 	utf8=-u
@@ -271,7 +286,7 @@ fi
 ws=`cat "$dotest/whitespace"`
 if test "$(cat "$dotest/sign")" = t
 then
-	SIGNOFF=`git-var GIT_COMMITTER_IDENT | sed -e '
+	SIGNOFF=`git var GIT_COMMITTER_IDENT | sed -e '
 			s/>.*/>/
 			s/^/Signed-off-by: /'
 		`
@@ -283,7 +298,6 @@ last=`cat "$dotest/last"`
 this=`cat "$dotest/next"`
 if test "$skip" = t
 then
-	git rerere clear
 	this=`expr "$this" + 1`
 	resume=
 fi
@@ -324,7 +338,7 @@ do
 			<"$dotest"/info >/dev/null &&
 			go_next && continue
 
-		test -s $dotest/patch || {
+		test -s "$dotest/patch" || {
 			echo "Patch is empty.  Was it split wrong?"
 			stop_here $this
 		}
@@ -436,11 +450,11 @@ do
 		stop_here $this
 	fi
 
-	printf 'Applying %s\n' "$FIRSTLINE"
+	printf 'Applying: %s\n' "$FIRSTLINE"
 
 	case "$resolved" in
 	'')
-		git apply $git_apply_opt $binary --index "$dotest/patch"
+		git apply $git_apply_opt --index "$dotest/patch"
 		apply_status=$?
 		;;
 	t)

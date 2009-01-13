@@ -320,9 +320,7 @@ static const char *find_wholine(const char *who, int wholen, const char *buf, un
 
 static const char *copy_line(const char *buf)
 {
-	const char *eol = strchr(buf, '\n');
-	if (!eol)
-		return "";
+	const char *eol = strchrnul(buf, '\n');
 	return xmemdupz(buf, eol - buf);
 }
 
@@ -459,8 +457,10 @@ static void find_subpos(const char *buf, unsigned long sz, const char **sub, con
 		return;
 	*sub = buf; /* first non-empty line */
 	buf = strchr(buf, '\n');
-	if (!buf)
+	if (!buf) {
+		*body = "";
 		return; /* no body */
+	}
 	while (*buf == '\n')
 		buf++; /* skip blank between subject and body */
 	*body = buf;
@@ -650,7 +650,8 @@ static int grab_single_ref(const char *refname, const unsigned char *sha1, int f
 			if ((plen <= namelen) &&
 			    !strncmp(refname, p, plen) &&
 			    (refname[plen] == '\0' ||
-			     refname[plen] == '/'))
+			     refname[plen] == '/' ||
+			     p[plen-1] == '/'))
 				break;
 			if (!fnmatch(p, refname, FNM_PATHNAME))
 				break;
@@ -809,7 +810,7 @@ static struct ref_sort *default_sort(void)
 	return sort;
 }
 
-int opt_parse_sort(const struct option *opt, const char *arg, int unset)
+static int opt_parse_sort(const struct option *opt, const char *arg, int unset)
 {
 	struct ref_sort **sort_tail = opt->value;
 	struct ref_sort *s;
@@ -831,7 +832,7 @@ int opt_parse_sort(const struct option *opt, const char *arg, int unset)
 }
 
 static char const * const for_each_ref_usage[] = {
-	"git-for-each-ref [options] [<pattern>]",
+	"git for-each-ref [options] [<pattern>]",
 	NULL
 };
 

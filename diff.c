@@ -94,32 +94,37 @@ static int parse_lldiff_command(const char *var, const char *ep, const char *val
  * to define a customized regexp to find the beginning of a function to
  * be used for hunk header lines of "diff -p" style output.
  */
-static struct funcname_pattern {
+struct funcname_pattern_entry {
 	char *name;
 	char *pattern;
-	struct funcname_pattern *next;
+	int cflags;
+};
+static struct funcname_pattern_list {
+	struct funcname_pattern_list *next;
+	struct funcname_pattern_entry e;
 } *funcname_pattern_list;
 
-static int parse_funcname_pattern(const char *var, const char *ep, const char *value)
+static int parse_funcname_pattern(const char *var, const char *ep, const char *value, int cflags)
 {
 	const char *name;
 	int namelen;
-	struct funcname_pattern *pp;
+	struct funcname_pattern_list *pp;
 
 	name = var + 5; /* "diff." */
 	namelen = ep - name;
 
 	for (pp = funcname_pattern_list; pp; pp = pp->next)
-		if (!strncmp(pp->name, name, namelen) && !pp->name[namelen])
+		if (!strncmp(pp->e.name, name, namelen) && !pp->e.name[namelen])
 			break;
 	if (!pp) {
 		pp = xcalloc(1, sizeof(*pp));
-		pp->name = xmemdupz(name, namelen);
+		pp->e.name = xmemdupz(name, namelen);
 		pp->next = funcname_pattern_list;
 		funcname_pattern_list = pp;
 	}
-	free(pp->pattern);
-	pp->pattern = xstrdup(value);
+	free(pp->e.pattern);
+	pp->e.pattern = xstrdup(value);
+	pp->e.cflags = cflags;
 	return 0;
 }
 
@@ -182,7 +187,13 @@ int git_diff_basic_config(const char *var, const char *value, void *cb)
 			if (!strcmp(ep, ".funcname")) {
 				if (!value)
 					return config_error_nonbool(var);
-				return parse_funcname_pattern(var, ep, value);
+				return parse_funcname_pattern(var, ep, value,
+					0);
+			} else if (!strcmp(ep, ".xfuncname")) {
+				if (!value)
+					return config_error_nonbool(var);
+				return parse_funcname_pattern(var, ep, value,
+					REG_EXTENDED);
 			}
 		}
 	}
@@ -511,13 +522,20 @@ const char *diff_get_color(int diff_use_color, enum color_diff ix)
 
 static void emit_line(FILE *file, const char *set, const char *reset, const char *line, int len)
 {
-	int has_trailing_newline = (len > 0 && line[len-1] == '\n');
+	int has_trailing_newline, has_trailing_carriage_return;
+
+	has_trailing_newline = (len > 0 && line[len-1] == '\n');
 	if (has_trailing_newline)
+		len--;
+	has_trailing_carriage_return = (len > 0 && line[len-1] == '\r');
+	if (has_trailing_carriage_return)
 		len--;
 
 	fputs(set, file);
 	fwrite(line, len, 1, file);
 	fputs(reset, file);
+	if (has_trailing_carriage_return)
+		fputc('\r', file);
 	if (has_trailing_newline)
 		fputc('\n', file);
 }
@@ -532,9 +550,9 @@ static void emit_add_line(const char *reset, struct emit_callback *ecbdata, cons
 	else {
 		/* Emit just the prefix, then the rest. */
 		emit_line(ecbdata->file, set, reset, line, ecbdata->nparents);
-		(void)check_and_emit_line(line + ecbdata->nparents,
-		    len - ecbdata->nparents, ecbdata->ws_rule,
-		    ecbdata->file, set, reset, ws);
+		ws_check_emit(line + ecbdata->nparents,
+			      len - ecbdata->nparents, ecbdata->ws_rule,
+			      ecbdata->file, set, reset, ws);
 	}
 }
 
@@ -827,12 +845,12 @@ static void show_stats(struct diffstat_t* data, struct diff_options *options)
 	/* Sanity: give at least 5 columns to the graph,
 	 * but leave at least 10 columns for the name.
 	 */
-	if (width < name_width + 15) {
-		if (name_width <= 25)
-			width = name_width + 15;
-		else
-			name_width = width - 15;
-	}
+	if (width < 25)
+		width = 25;
+	if (name_width < 10)
+		name_width = 10;
+	else if (width < name_width + 15)
+		name_width = width - 15;
 
 	/* Find the longest filename and max number of changes */
 	reset = diff_get_color_opt(options, DIFF_RESET);
@@ -925,7 +943,8 @@ static void show_stats(struct diffstat_t* data, struct diff_options *options)
 			total = add + del;
 		}
 		show_name(options->file, prefix, name, len, reset, set);
-		fprintf(options->file, "%5d ", added + deleted);
+		fprintf(options->file, "%5d%s", added + deleted,
+				added + deleted ? " " : "");
 		show_graph(options->file, '+', add, add_c, reset);
 		show_graph(options->file, '-', del, del_c, reset);
 		fprintf(options->file, "\n");
@@ -1053,6 +1072,13 @@ static long gather_dirstat(FILE *file, struct dirstat_dir *dir, unsigned long ch
 	return this_dir;
 }
 
+static int dirstat_compare(const void *_a, const void *_b)
+{
+	const struct dirstat_file *a = _a;
+	const struct dirstat_file *b = _b;
+	return strcmp(a->name, b->name);
+}
+
 static void show_dirstat(struct diff_options *options)
 {
 	int i;
@@ -1064,7 +1090,7 @@ static void show_dirstat(struct diff_options *options)
 	dir.alloc = 0;
 	dir.nr = 0;
 	dir.percent = options->dirstat_percent;
-	dir.cumulative = options->output_format & DIFF_FORMAT_CUMULATIVE;
+	dir.cumulative = DIFF_OPT_TST(options, DIRSTAT_CUMULATIVE);
 
 	changed = 0;
 	for (i = 0; i < q->nr; i++) {
@@ -1112,6 +1138,7 @@ static void show_dirstat(struct diff_options *options)
 		return;
 
 	/* Show all directories with more than x% of the changes */
+	qsort(dir.files, dir.nr, sizeof(dir.files[0]), dirstat_compare);
 	gather_dirstat(options->file, &dir, changed, "", 0);
 }
 
@@ -1132,42 +1159,85 @@ static void free_diffstat_info(struct diffstat_t *diffstat)
 struct checkdiff_t {
 	struct xdiff_emit_state xm;
 	const char *filename;
-	int lineno, color_diff;
+	int lineno;
+	struct diff_options *o;
 	unsigned ws_rule;
 	unsigned status;
-	FILE *file;
+	int trailing_blanks_start;
 };
+
+static int is_conflict_marker(const char *line, unsigned long len)
+{
+	char firstchar;
+	int cnt;
+
+	if (len < 8)
+		return 0;
+	firstchar = line[0];
+	switch (firstchar) {
+	case '=': case '>': case '<':
+		break;
+	default:
+		return 0;
+	}
+	for (cnt = 1; cnt < 7; cnt++)
+		if (line[cnt] != firstchar)
+			return 0;
+	/* line[0] thru line[6] are same as firstchar */
+	if (firstchar == '=') {
+		/* divider between ours and theirs? */
+		if (len != 8 || line[7] != '\n')
+			return 0;
+	} else if (len < 8 || !isspace(line[7])) {
+		/* not divider before ours nor after theirs */
+		return 0;
+	}
+	return 1;
+}
 
 static void checkdiff_consume(void *priv, char *line, unsigned long len)
 {
 	struct checkdiff_t *data = priv;
-	const char *ws = diff_get_color(data->color_diff, DIFF_WHITESPACE);
-	const char *reset = diff_get_color(data->color_diff, DIFF_RESET);
-	const char *set = diff_get_color(data->color_diff, DIFF_FILE_NEW);
+	int color_diff = DIFF_OPT_TST(data->o, COLOR_DIFF);
+	const char *ws = diff_get_color(color_diff, DIFF_WHITESPACE);
+	const char *reset = diff_get_color(color_diff, DIFF_RESET);
+	const char *set = diff_get_color(color_diff, DIFF_FILE_NEW);
 	char *err;
 
 	if (line[0] == '+') {
 		unsigned bad;
 		data->lineno++;
-		bad = check_and_emit_line(line + 1, len - 1,
-		    data->ws_rule, NULL, NULL, NULL, NULL);
+		if (!ws_blank_line(line + 1, len - 1, data->ws_rule))
+			data->trailing_blanks_start = 0;
+		else if (!data->trailing_blanks_start)
+			data->trailing_blanks_start = data->lineno;
+		if (is_conflict_marker(line + 1, len - 1)) {
+			data->status |= 1;
+			fprintf(data->o->file,
+				"%s:%d: leftover conflict marker\n",
+				data->filename, data->lineno);
+		}
+		bad = ws_check(line + 1, len - 1, data->ws_rule);
 		if (!bad)
 			return;
 		data->status |= bad;
 		err = whitespace_error_string(bad);
-		fprintf(data->file, "%s:%d: %s.\n", data->filename, data->lineno, err);
+		fprintf(data->o->file, "%s:%d: %s.\n",
+			data->filename, data->lineno, err);
 		free(err);
-		emit_line(data->file, set, reset, line, 1);
-		(void)check_and_emit_line(line + 1, len - 1, data->ws_rule,
-		    data->file, set, reset, ws);
-	} else if (line[0] == ' ')
+		emit_line(data->o->file, set, reset, line, 1);
+		ws_check_emit(line + 1, len - 1, data->ws_rule,
+			      data->o->file, set, reset, ws);
+	} else if (line[0] == ' ') {
 		data->lineno++;
-	else if (line[0] == '@') {
+		data->trailing_blanks_start = 0;
+	} else if (line[0] == '@') {
 		char *plus = strchr(line, '+');
 		if (plus)
 			data->lineno = strtol(plus, NULL, 10) - 1;
 		else
 			die("invalid diff");
+		data->trailing_blanks_start = 0;
 	}
 }
 
@@ -1318,31 +1388,40 @@ int diff_filespec_is_binary(struct diff_filespec *one)
 	return one->is_binary;
 }
 
-static const char *funcname_pattern(const char *ident)
+static const struct funcname_pattern_entry *funcname_pattern(const char *ident)
 {
-	struct funcname_pattern *pp;
+	struct funcname_pattern_list *pp;
 
 	for (pp = funcname_pattern_list; pp; pp = pp->next)
-		if (!strcmp(ident, pp->name))
-			return pp->pattern;
+		if (!strcmp(ident, pp->e.name))
+			return &pp->e;
 	return NULL;
 }
 
-static struct builtin_funcname_pattern {
-	const char *name;
-	const char *pattern;
-} builtin_funcname_pattern[] = {
-	{ "java", "!^[ 	]*\\(catch\\|do\\|for\\|if\\|instanceof\\|"
-			"new\\|return\\|switch\\|throw\\|while\\)\n"
-			"^[ 	]*\\(\\([ 	]*"
-			"[A-Za-z_][A-Za-z_0-9]*\\)\\{2,\\}"
-			"[ 	]*([^;]*\\)$" },
-	{ "tex", "^\\(\\\\\\(sub\\)*section{.*\\)$" },
+static const struct funcname_pattern_entry builtin_funcname_pattern[] = {
+	{ "java",
+	  "!^[ \t]*(catch|do|for|if|instanceof|new|return|switch|throw|while)\n"
+	  "^[ \t]*(([ \t]*[A-Za-z_][A-Za-z_0-9]*){2,}[ \t]*\\([^;]*)$",
+	  REG_EXTENDED },
+	{ "pascal",
+	  "^((procedure|function|constructor|destructor|interface|"
+		"implementation|initialization|finalization)[ \t]*.*)$"
+	  "|"
+	  "^(.*=[ \t]*(class|record).*)$",
+	  REG_EXTENDED },
+	{ "bibtex", "(@[a-zA-Z]{1,}[ \t]*\\{{0,1}[ \t]*[^ \t\"@',\\#}{~%]*).*$",
+	  REG_EXTENDED },
+	{ "tex",
+	  "^(\\\\((sub)*section|chapter|part)\\*{0,1}\\{.*)$",
+	  REG_EXTENDED },
+	{ "ruby", "^[ \t]*((class|module|def)[ \t].*)$",
+	  REG_EXTENDED },
 };
 
-static const char *diff_funcname_pattern(struct diff_filespec *one)
+static const struct funcname_pattern_entry *diff_funcname_pattern(struct diff_filespec *one)
 {
-	const char *ident, *pattern;
+	const char *ident;
+	const struct funcname_pattern_entry *pe;
 	int i;
 
 	diff_filespec_check_attr(one);
@@ -1357,9 +1436,9 @@ static const char *diff_funcname_pattern(struct diff_filespec *one)
 		return funcname_pattern("default");
 
 	/* Look up custom "funcname.$ident" regexp from config. */
-	pattern = funcname_pattern(ident);
-	if (pattern)
-		return pattern;
+	pe = funcname_pattern(ident);
+	if (pe)
+		return pe;
 
 	/*
 	 * And define built-in fallback patterns here.  Note that
@@ -1367,7 +1446,7 @@ static const char *diff_funcname_pattern(struct diff_filespec *one)
 	 */
 	for (i = 0; i < ARRAY_SIZE(builtin_funcname_pattern); i++)
 		if (!strcmp(ident, builtin_funcname_pattern[i].name))
-			return builtin_funcname_pattern[i].pattern;
+			return &builtin_funcname_pattern[i];
 
 	return NULL;
 }
@@ -1385,6 +1464,10 @@ static void builtin_diff(const char *name_a,
 	char *a_one, *b_two;
 	const char *set = diff_get_color_opt(o, DIFF_METAINFO);
 	const char *reset = diff_get_color_opt(o, DIFF_RESET);
+
+	/* Never use a non-valid filename anywhere if at all possible */
+	name_a = DIFF_FILE_VALID(one) ? name_a : name_b;
+	name_b = DIFF_FILE_VALID(two) ? name_b : name_a;
 
 	a_one = quote_two(o->a_prefix, name_a + (*name_a == '/'));
 	b_two = quote_two(o->b_prefix, name_b + (*name_b == '/'));
@@ -1445,11 +1528,11 @@ static void builtin_diff(const char *name_a,
 		xdemitconf_t xecfg;
 		xdemitcb_t ecb;
 		struct emit_callback ecbdata;
-		const char *funcname_pattern;
+		const struct funcname_pattern_entry *pe;
 
-		funcname_pattern = diff_funcname_pattern(one);
-		if (!funcname_pattern)
-			funcname_pattern = diff_funcname_pattern(two);
+		pe = diff_funcname_pattern(one);
+		if (!pe)
+			pe = diff_funcname_pattern(two);
 
 		memset(&xecfg, 0, sizeof(xecfg));
 		memset(&ecbdata, 0, sizeof(ecbdata));
@@ -1461,8 +1544,8 @@ static void builtin_diff(const char *name_a,
 		xpp.flags = XDF_NEED_MINIMAL | o->xdl_opts;
 		xecfg.ctxlen = o->context;
 		xecfg.flags = XDL_EMIT_FUNCNAMES;
-		if (funcname_pattern)
-			xdiff_set_find_func(&xecfg, funcname_pattern);
+		if (pe)
+			xdiff_set_find_func(&xecfg, pe->pattern, pe->cflags);
 		if (!diffopts)
 			;
 		else if (!prefixcmp(diffopts, "--unified="))
@@ -1540,8 +1623,9 @@ static void builtin_diffstat(const char *name_a, const char *name_b,
 
 static void builtin_checkdiff(const char *name_a, const char *name_b,
 			      const char *attr_path,
-			     struct diff_filespec *one,
-			     struct diff_filespec *two, struct diff_options *o)
+			      struct diff_filespec *one,
+			      struct diff_filespec *two,
+			      struct diff_options *o)
 {
 	mmfile_t mf1, mf2;
 	struct checkdiff_t data;
@@ -1553,13 +1637,18 @@ static void builtin_checkdiff(const char *name_a, const char *name_b,
 	data.xm.consume = checkdiff_consume;
 	data.filename = name_b ? name_b : name_a;
 	data.lineno = 0;
-	data.color_diff = DIFF_OPT_TST(o, COLOR_DIFF);
+	data.o = o;
 	data.ws_rule = whitespace_rule(attr_path);
-	data.file = o->file;
 
 	if (fill_mmfile(&mf1, one) < 0 || fill_mmfile(&mf2, two) < 0)
 		die("unable to read files to diff");
 
+	/*
+	 * All the other codepaths check both sides, but not checking
+	 * the "old" side here is deliberate.  We are checking the newly
+	 * introduced changes, and as long as the "new" side is text, we
+	 * can and should check what it introduces.
+	 */
 	if (diff_filespec_is_binary(two))
 		goto free_and_return;
 	else {
@@ -1569,10 +1658,18 @@ static void builtin_checkdiff(const char *name_a, const char *name_b,
 		xdemitcb_t ecb;
 
 		memset(&xecfg, 0, sizeof(xecfg));
+		xecfg.ctxlen = 1; /* at least one context line */
 		xpp.flags = XDF_NEED_MINIMAL;
 		ecb.outf = xdiff_outf;
 		ecb.priv = &data;
 		xdi_diff(&mf1, &mf2, &xpp, &xecfg, &ecb);
+
+		if ((data.ws_rule & WS_TRAILING_SPACE) &&
+		    data.trailing_blanks_start) {
+			fprintf(o->file, "%s:%d: ends with blank lines.\n",
+				data.filename, data.trailing_blanks_start);
+			data.status = 1; /* report errors */
+		}
 	}
  free_and_return:
 	diff_free_filespec_data(one);
@@ -2224,6 +2321,7 @@ void diff_setup(struct diff_options *options)
 	options->break_opt = -1;
 	options->rename_limit = -1;
 	options->dirstat_percent = 3;
+	DIFF_OPT_CLR(options, DIRSTAT_CUMULATIVE);
 	options->context = 3;
 
 	options->change = diff_change;
@@ -2318,13 +2416,6 @@ int diff_setup_done(struct diff_options *options)
 		DIFF_OPT_SET(options, EXIT_WITH_STATUS);
 	}
 
-	/*
-	 * If we postprocess in diffcore, we cannot simply return
-	 * upon the first hit.  We need to run diff as usual.
-	 */
-	if (options->pickaxe || options->filter)
-		DIFF_OPT_CLR(options, QUIET);
-
 	return 0;
 }
 
@@ -2396,8 +2487,10 @@ int diff_opt_parse(struct diff_options *options, const char **av, int ac)
 		options->output_format |= DIFF_FORMAT_SHORTSTAT;
 	else if (opt_arg(arg, 'X', "dirstat", &options->dirstat_percent))
 		options->output_format |= DIFF_FORMAT_DIRSTAT;
-	else if (!strcmp(arg, "--cumulative"))
-		options->output_format |= DIFF_FORMAT_CUMULATIVE;
+	else if (!strcmp(arg, "--cumulative")) {
+		options->output_format |= DIFF_FORMAT_DIRSTAT;
+		DIFF_OPT_SET(options, DIRSTAT_CUMULATIVE);
+	}
 	else if (!strcmp(arg, "--check"))
 		options->output_format |= DIFF_FORMAT_CHECKDIFF;
 	else if (!strcmp(arg, "--summary"))
@@ -3168,11 +3261,10 @@ void diff_flush(struct diff_options *options)
 
 	if (output_format & DIFF_FORMAT_PATCH) {
 		if (separator) {
+			putc(options->line_termination, options->file);
 			if (options->stat_sep) {
 				/* attach patch instead of inline */
 				fputs(options->stat_sep, options->file);
-			} else {
-				putc(options->line_termination, options->file);
 			}
 		}
 
@@ -3315,10 +3407,7 @@ static void diffcore_skip_stat_unmatch(struct diff_options *diffopt)
 
 void diffcore_std(struct diff_options *options)
 {
-	if (DIFF_OPT_TST(options, QUIET))
-		return;
-
-	if (options->skip_stat_unmatch && !DIFF_OPT_TST(options, FIND_COPIES_HARDER))
+	if (options->skip_stat_unmatch)
 		diffcore_skip_stat_unmatch(options);
 	if (options->break_opt != -1)
 		diffcore_break(options->break_opt);

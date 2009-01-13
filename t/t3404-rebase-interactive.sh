@@ -96,6 +96,7 @@ chmod a+x fake-editor.sh
 
 test_expect_success 'no changes are a nop' '
 	git rebase -i F &&
+	test "$(git symbolic-ref -q HEAD)" = "refs/heads/branch2" &&
 	test $(git rev-parse I) = $(git rev-parse HEAD)
 '
 
@@ -104,7 +105,17 @@ test_expect_success 'test the [branch] option' '
 	git rm file6 &&
 	git commit -m "stop here" &&
 	git rebase -i F branch2 &&
+	test "$(git symbolic-ref -q HEAD)" = "refs/heads/branch2" &&
+	test $(git rev-parse I) = $(git rev-parse branch2) &&
 	test $(git rev-parse I) = $(git rev-parse HEAD)
+'
+
+test_expect_success 'test --onto <branch>' '
+	git checkout -b test-onto branch2 &&
+	git rebase -i --onto branch1 F &&
+	test "$(git symbolic-ref -q HEAD)" = "refs/heads/test-onto" &&
+	test $(git rev-parse HEAD^) = $(git rev-parse branch1) &&
+	test $(git rev-parse I) = $(git rev-parse branch2)
 '
 
 test_expect_success 'rebase on top of a non-conflicting commit' '
@@ -112,6 +123,8 @@ test_expect_success 'rebase on top of a non-conflicting commit' '
 	git tag original-branch1 &&
 	git rebase -i branch2 &&
 	test file6 = $(git diff --name-only original-branch1) &&
+	test "$(git symbolic-ref -q HEAD)" = "refs/heads/branch1" &&
+	test $(git rev-parse I) = $(git rev-parse branch2) &&
 	test $(git rev-parse I) = $(git rev-parse HEAD~2)
 '
 
@@ -144,17 +157,21 @@ EOF
 
 test_expect_success 'stop on conflicting pick' '
 	git tag new-branch1 &&
-	! git rebase -i master &&
-	test_cmp expect .git/.dotest-merge/patch &&
+	test_must_fail git rebase -i master &&
+	test "$(git rev-parse HEAD~3)" = "$(git rev-parse master)" &&
+	test_cmp expect .git/rebase-merge/patch &&
 	test_cmp expect2 file1 &&
-	test 4 = $(grep -v "^#" < .git/.dotest-merge/done | wc -l) &&
-	test 0 = $(grep -c "^[^#]" < .git/.dotest-merge/git-rebase-todo)
+	test "$(git diff --name-status |
+		sed -n -e "/^U/s/^U[^a-z]*//p")" = file1 &&
+	test 4 = $(grep -v "^#" < .git/rebase-merge/done | wc -l) &&
+	test 0 = $(grep -c "^[^#]" < .git/rebase-merge/git-rebase-todo)
 '
 
 test_expect_success 'abort' '
 	git rebase --abort &&
 	test $(git rev-parse new-branch1) = $(git rev-parse HEAD) &&
-	! test -d .git/.dotest-merge
+	test "$(git symbolic-ref -q HEAD)" = "refs/heads/branch1" &&
+	! test -d .git/rebase-merge
 '
 
 test_expect_success 'retain authorship' '
@@ -185,6 +202,9 @@ test_expect_success 'retain authorship when squashing' '
 test_expect_success '-p handles "no changes" gracefully' '
 	HEAD=$(git rev-parse HEAD) &&
 	git rebase -i -p HEAD^ &&
+	git update-index --refresh &&
+	git diff-files --quiet &&
+	git diff-index --quiet --cached HEAD -- &&
 	test $HEAD = $(git rev-parse HEAD)
 '
 
@@ -194,7 +214,7 @@ test_expect_success 'preserve merges with -p' '
 	git add unrelated-file &&
 	test_tick &&
 	git commit -m "unrelated" &&
-	git checkout -b to-be-rebased master &&
+	git checkout -b another-branch master &&
 	echo B > file1 &&
 	test_tick &&
 	git commit -m J file1 &&
@@ -203,17 +223,48 @@ test_expect_success 'preserve merges with -p' '
 	echo C > file1 &&
 	test_tick &&
 	git commit -m K file1 &&
+	echo D > file1 &&
+	test_tick &&
+	git commit -m L1 file1 &&
+	git checkout HEAD^ &&
+	echo 1 > unrelated-file &&
+	test_tick &&
+	git commit -m L2 unrelated-file &&
+	test_tick &&
+	git merge another-branch &&
+	echo E > file1 &&
+	test_tick &&
+	git commit -m M file1 &&
+	git checkout -b to-be-rebased &&
 	test_tick &&
 	git rebase -i -p --onto branch1 master &&
-	test $(git rev-parse HEAD^^2) = $(git rev-parse to-be-preserved) &&
-	test $(git rev-parse HEAD~3) = $(git rev-parse branch1) &&
-	test $(git show HEAD:file1) = C &&
-	test $(git show HEAD~2:file1) = B
+	git update-index --refresh &&
+	git diff-files --quiet &&
+	git diff-index --quiet --cached HEAD -- &&
+	test $(git rev-parse HEAD~6) = $(git rev-parse branch1) &&
+	test $(git rev-parse HEAD~4^2) = $(git rev-parse to-be-preserved) &&
+	test $(git rev-parse HEAD^^2^) = $(git rev-parse HEAD^^^) &&
+	test $(git show HEAD~5:file1) = B &&
+	test $(git show HEAD~3:file1) = C &&
+	test $(git show HEAD:file1) = E &&
+	test $(git show HEAD:unrelated-file) = 1
+'
+
+test_expect_success 'edit ancestor with -p' '
+	FAKE_LINES="1 edit 2 3 4" git rebase -i -p HEAD~3 &&
+	echo 2 > unrelated-file &&
+	test_tick &&
+	git commit -m L2-modified --amend unrelated-file &&
+	git rebase --continue &&
+	git update-index --refresh &&
+	git diff-files --quiet &&
+	git diff-index --quiet --cached HEAD -- &&
+	test $(git show HEAD:unrelated-file) = 2
 '
 
 test_expect_success '--continue tries to commit' '
 	test_tick &&
-	! git rebase -i --onto new-branch1 HEAD^ &&
+	test_must_fail git rebase -i --onto new-branch1 HEAD^ &&
 	echo resolved > file1 &&
 	git add file1 &&
 	FAKE_COMMIT_MESSAGE="chouette!" git rebase --continue &&
@@ -224,7 +275,7 @@ test_expect_success '--continue tries to commit' '
 test_expect_success 'verbose flag is heeded, even after --continue' '
 	git reset --hard HEAD@{1} &&
 	test_tick &&
-	! git rebase -v -i --onto new-branch1 HEAD^ &&
+	test_must_fail git rebase -v -i --onto new-branch1 HEAD^ &&
 	echo resolved > file1 &&
 	git add file1 &&
 	git rebase --continue > output &&
@@ -259,10 +310,14 @@ test_expect_success 'interrupted squash works as expected' '
 		git commit -m $n
 	done &&
 	one=$(git rev-parse HEAD~3) &&
-	! FAKE_LINES="1 squash 3 2" git rebase -i HEAD~3 &&
+	(
+		FAKE_LINES="1 squash 3 2" &&
+		export FAKE_LINES &&
+		test_must_fail git rebase -i HEAD~3
+	) &&
 	(echo one; echo two; echo four) > conflict &&
 	git add conflict &&
-	! git rebase --continue &&
+	test_must_fail git rebase --continue &&
 	echo resolved > conflict &&
 	git add conflict &&
 	git rebase --continue &&
@@ -277,13 +332,17 @@ test_expect_success 'interrupted squash works as expected (case 2)' '
 		git commit -m $n
 	done &&
 	one=$(git rev-parse HEAD~3) &&
-	! FAKE_LINES="3 squash 1 2" git rebase -i HEAD~3 &&
+	(
+		FAKE_LINES="3 squash 1 2" &&
+		export FAKE_LINES &&
+		test_must_fail git rebase -i HEAD~3
+	) &&
 	(echo one; echo four) > conflict &&
 	git add conflict &&
-	! git rebase --continue &&
+	test_must_fail git rebase --continue &&
 	(echo one; echo two; echo four) > conflict &&
 	git add conflict &&
-	! git rebase --continue &&
+	test_must_fail git rebase --continue &&
 	echo resolved > conflict &&
 	git add conflict &&
 	git rebase --continue &&
@@ -331,7 +390,7 @@ test_expect_success 'rebase a commit violating pre-commit' '
 	chmod a+x $PRE_COMMIT &&
 	echo "monde! " >> file1 &&
 	test_tick &&
-	! git commit -m doesnt-verify file1 &&
+	test_must_fail git commit -m doesnt-verify file1 &&
 	git commit -m doesnt-verify --no-verify file1 &&
 	test_tick &&
 	FAKE_LINES=2 git rebase -i HEAD~2
@@ -357,6 +416,17 @@ test_expect_success 'rebase with a file named HEAD in worktree' '
 
 	FAKE_LINES="1 squash 2" git rebase -i to-be-rebased &&
 	test "$(git show -s --pretty=format:%an)" = "Squashed Away"
+
+'
+
+test_expect_success 'do "noop" when there is nothing to cherry-pick' '
+
+	git checkout -b branch4 HEAD &&
+	GIT_EDITOR=: git commit --amend \
+		--author="Somebody else <somebody@else.com>" 
+	test $(git rev-parse branch3) != $(git rev-parse branch4) &&
+	git rebase -i branch3 &&
+	test $(git rev-parse branch3) = $(git rev-parse branch4)
 
 '
 

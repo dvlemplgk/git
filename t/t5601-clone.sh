@@ -31,6 +31,12 @@ test_expect_success 'clone with excess parameters (2)' '
 
 '
 
+test_expect_success 'output from clone' '
+	rm -fr dst &&
+	git clone -n "file://$(pwd)/src" dst >output &&
+	test $(grep Initialized output | wc -l) = 1
+'
+
 test_expect_success 'clone does not keep pack' '
 
 	rm -fr dst &&
@@ -67,6 +73,55 @@ test_expect_success 'clone creates intermediate directories for bare repo' '
 
 	git clone --bare src long/path/to/bare/dst &&
 	test -f long/path/to/bare/dst/config
+
+'
+
+test_expect_success 'clone --mirror' '
+
+	git clone --mirror src mirror &&
+	test -f mirror/HEAD &&
+	test ! -f mirror/file &&
+	FETCH="$(cd mirror && git config remote.origin.fetch)" &&
+	test "+refs/*:refs/*" = "$FETCH" &&
+	MIRROR="$(cd mirror && git config --bool remote.origin.mirror)" &&
+	test "$MIRROR" = true
+
+'
+
+test_expect_success 'clone --bare names the local repository <name>.git' '
+
+	git clone --bare src &&
+	test -d src.git
+
+'
+
+test_expect_success 'clone --mirror does not repeat tags' '
+
+	(cd src &&
+	 git tag some-tag HEAD) &&
+	git clone --mirror src mirror2 &&
+	(cd mirror2 &&
+	 git show-ref 2> clone.err > clone.out) &&
+	test_must_fail grep Duplicate mirror2/clone.err &&
+	grep some-tag mirror2/clone.out
+
+'
+
+test_expect_success 'clone to destination with trailing /' '
+
+	git clone src target-1/ &&
+	T=$( cd target-1 && git rev-parse HEAD ) &&
+	S=$( cd src && git rev-parse HEAD ) &&
+	test "$T" = "$S"
+
+'
+
+test_expect_success 'clone to destination with extra trailing /' '
+
+	git clone src target-2/// &&
+	T=$( cd target-2 && git rev-parse HEAD ) &&
+	S=$( cd src && git rev-parse HEAD ) &&
+	test "$T" = "$S"
 
 '
 

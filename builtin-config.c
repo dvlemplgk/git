@@ -3,7 +3,7 @@
 #include "color.h"
 
 static const char git_config_set_usage[] =
-"git-config [ --global | --system | [ -f | --file ] config-file ] [ --bool | --int | --bool-or-int ] [ -z | --null ] [--get | --get-all | --get-regexp | --replace-all | --add | --unset | --unset-all] name [value [value_regex]] | --rename-section old_name new_name | --remove-section name | --list | --get-color var [default] | --get-colorbool name [stdout-is-tty]";
+"git config [ --global | --system | [ -f | --file ] config-file ] [ --bool | --int | --bool-or-int ] [ -z | --null ] [--get | --get-all | --get-regexp | --replace-all | --add | --unset | --unset-all] name [value [value_regex]] | --rename-section old_name new_name | --remove-section name | --list | --get-color var [default] | --get-colorbool name [stdout-is-tty]";
 
 static char *key;
 static regex_t *key_regexp;
@@ -81,12 +81,10 @@ static int get_value(const char* key_, const char* regex_)
 	char *global = NULL, *repo_config = NULL;
 	const char *system_wide = NULL, *local;
 
-	local = getenv(CONFIG_ENVIRONMENT);
+	local = config_exclusive_filename;
 	if (!local) {
 		const char *home = getenv("HOME");
-		local = getenv(CONFIG_LOCAL_ENVIRONMENT);
-		if (!local)
-			local = repo_config = xstrdup(git_path("config"));
+		local = repo_config = git_pathdup("config");
 		if (git_config_global() && home)
 			global = xstrdup(mkpath("%s/.gitconfig", home));
 		if (git_config_system())
@@ -147,7 +145,7 @@ free_strings:
 	return ret;
 }
 
-char *normalize_value(const char *key, const char *value)
+static char *normalize_value(const char *key, const char *value)
 {
 	char *normalized;
 
@@ -289,6 +287,8 @@ int cmd_config(int argc, const char **argv, const char *prefix)
 	char* value;
 	const char *file = setup_git_directory_gently(&nongit);
 
+	config_exclusive_filename = getenv(CONFIG_ENVIRONMENT);
+
 	while (1 < argc) {
 		if (!strcmp(argv[1], "--int"))
 			type = T_INT;
@@ -309,14 +309,13 @@ int cmd_config(int argc, const char **argv, const char *prefix)
 			char *home = getenv("HOME");
 			if (home) {
 				char *user_config = xstrdup(mkpath("%s/.gitconfig", home));
-				setenv(CONFIG_ENVIRONMENT, user_config, 1);
-				free(user_config);
+				config_exclusive_filename = user_config;
 			} else {
 				die("$HOME not set");
 			}
 		}
 		else if (!strcmp(argv[1], "--system"))
-			setenv(CONFIG_ENVIRONMENT, git_etc_gitconfig(), 1);
+			config_exclusive_filename = git_etc_gitconfig();
 		else if (!strcmp(argv[1], "--file") || !strcmp(argv[1], "-f")) {
 			if (argc < 3)
 				usage(git_config_set_usage);
@@ -325,7 +324,7 @@ int cmd_config(int argc, const char **argv, const char *prefix)
 						       argv[2]);
 			else
 				file = argv[2];
-			setenv(CONFIG_ENVIRONMENT, file, 1);
+			config_exclusive_filename = file;
 			argc--;
 			argv++;
 		}

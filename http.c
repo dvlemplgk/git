@@ -24,7 +24,7 @@ static const char *ssl_cainfo = NULL;
 static long curl_low_speed_limit = -1;
 static long curl_low_speed_time = -1;
 static int curl_ftp_no_epsv = 0;
-static char *curl_http_proxy = NULL;
+static const char *curl_http_proxy = NULL;
 
 static struct curl_slist *pragma_header;
 
@@ -149,11 +149,8 @@ static int http_options(const char *var, const char *value, void *cb)
 		return 0;
 	}
 	if (!strcmp("http.proxy", var)) {
-		if (curl_http_proxy == NULL) {
-			if (!value)
-				return config_error_nonbool(var);
-			curl_http_proxy = xstrdup(value);
-		}
+		if (curl_http_proxy == NULL)
+			return git_config_string(&curl_http_proxy, var, value);
 		return 0;
 	}
 
@@ -165,7 +162,16 @@ static CURL* get_curl_handle(void)
 {
 	CURL* result = curl_easy_init();
 
-	curl_easy_setopt(result, CURLOPT_SSL_VERIFYPEER, curl_ssl_verify);
+	if (!curl_ssl_verify) {
+		curl_easy_setopt(result, CURLOPT_SSL_VERIFYPEER, 0);
+		curl_easy_setopt(result, CURLOPT_SSL_VERIFYHOST, 0);
+	} else {
+		/* Verify authenticity of the peer's certificate */
+		curl_easy_setopt(result, CURLOPT_SSL_VERIFYPEER, 1);
+		/* The name in the cert must match whom we tried to connect */
+		curl_easy_setopt(result, CURLOPT_SSL_VERIFYHOST, 2);
+	}
+
 #if LIBCURL_VERSION_NUM >= 0x070907
 	curl_easy_setopt(result, CURLOPT_NETRC, CURL_NETRC_OPTIONAL);
 #endif
@@ -300,7 +306,7 @@ void http_cleanup(void)
 	pragma_header = NULL;
 
 	if (curl_http_proxy) {
-		free(curl_http_proxy);
+		free((void *)curl_http_proxy);
 		curl_http_proxy = NULL;
 	}
 }

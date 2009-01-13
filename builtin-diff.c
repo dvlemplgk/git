@@ -21,7 +21,7 @@ struct blobinfo {
 };
 
 static const char builtin_diff_usage[] =
-"git-diff <options> <rev>{0,2} -- <path>*";
+"git diff <options> <rev>{0,2} -- <path>*";
 
 static void stuff_change(struct diff_options *opt,
 			 unsigned old_mode, unsigned new_mode,
@@ -122,6 +122,8 @@ static int builtin_diff_index(struct rev_info *revs,
 			usage(builtin_diff_usage);
 		argv++; argc--;
 	}
+	if (!cached)
+		setup_work_tree();
 	/*
 	 * Make sure there is one revision (i.e. pending object),
 	 * and there is no revision filtering parameters.
@@ -173,10 +175,8 @@ static int builtin_diff_combined(struct rev_info *revs,
 	if (!revs->dense_combined_merges && !revs->combine_merges)
 		revs->dense_combined_merges = revs->combine_merges = 1;
 	parent = xmalloc(ents * sizeof(*parent));
-	/* Again, the revs are all reverse */
 	for (i = 0; i < ents; i++)
-		hashcpy((unsigned char *)(parent + i),
-			ent[ents - 1 - i].item->sha1);
+		hashcpy((unsigned char *)(parent + i), ent[i].item->sha1);
 	diff_tree_combined(parent[0], parent + 1, ents - 1,
 			   revs->dense_combined_merges, revs);
 	return 0;
@@ -221,10 +221,17 @@ static int builtin_diff_files(struct rev_info *revs, int argc, const char **argv
 		argv++; argc--;
 	}
 
-	if (revs->max_count == -1 &&
+	/*
+	 * "diff --base" should not combine merges because it was not
+	 * asked to.  "diff -c" should not densify (if the user wants
+	 * dense one, --cc can be explicitly asked for, or just rely
+	 * on the default).
+	 */
+	if (revs->max_count == -1 && !revs->combine_merges &&
 	    (revs->diffopt.output_format & DIFF_FORMAT_PATCH))
 		revs->combine_merges = revs->dense_combined_merges = 1;
 
+	setup_work_tree();
 	if (read_cache() < 0) {
 		perror("read_cache");
 		return -1;
@@ -281,6 +288,9 @@ int cmd_diff(int argc, const char **argv, const char *prefix)
 	/* Otherwise, we are doing the usual "git" diff */
 	rev.diffopt.skip_stat_unmatch = !!diff_auto_refresh_index;
 
+	/* Default to let external be used */
+	DIFF_OPT_SET(&rev.diffopt, ALLOW_EXTERNAL);
+
 	if (nongit)
 		die("Not a git repository");
 	argc = setup_revisions(argc, argv, &rev, NULL);
@@ -289,14 +299,15 @@ int cmd_diff(int argc, const char **argv, const char *prefix)
 		if (diff_setup_done(&rev.diffopt) < 0)
 			die("diff_setup_done failed");
 	}
-	DIFF_OPT_SET(&rev.diffopt, ALLOW_EXTERNAL);
+
 	DIFF_OPT_SET(&rev.diffopt, RECURSIVE);
 
 	/*
 	 * If the user asked for our exit code then don't start a
 	 * pager or we would end up reporting its exit code instead.
 	 */
-	if (!DIFF_OPT_TST(&rev.diffopt, EXIT_WITH_STATUS))
+	if (!DIFF_OPT_TST(&rev.diffopt, EXIT_WITH_STATUS) &&
+	    check_pager_config("diff") != 0)
 		setup_pager();
 
 	/*

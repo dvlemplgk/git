@@ -102,7 +102,7 @@ test_expect_success 'am applies patch correctly' '
 	git checkout first &&
 	test_tick &&
 	git am <patch1 &&
-	! test -d .dotest &&
+	! test -d .git/rebase-apply &&
 	test -z "$(git diff second)" &&
 	test "$(git rev-parse second)" = "$(git rev-parse HEAD)" &&
 	test "$(git rev-parse second^)" = "$(git rev-parse HEAD^)"
@@ -110,7 +110,7 @@ test_expect_success 'am applies patch correctly' '
 
 GIT_AUTHOR_NAME="Another Thor"
 GIT_AUTHOR_EMAIL="a.thor@example.com"
-GIT_COMMITTER_NAME="Co M Miter" 
+GIT_COMMITTER_NAME="Co M Miter"
 GIT_COMMITTER_EMAIL="c.miter@example.com"
 export GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
 
@@ -123,7 +123,7 @@ test_expect_success 'am changes committer and keeps author' '
 	test_tick &&
 	git checkout first &&
 	git am patch2 &&
-	! test -d .dotest &&
+	! test -d .git/rebase-apply &&
 	test "$(git rev-parse master^^)" = "$(git rev-parse HEAD^^)" &&
 	test -z "$(git diff master..HEAD)" &&
 	test -z "$(git diff master^..HEAD^)" &&
@@ -163,8 +163,8 @@ test_expect_success 'am without --keep removes Re: and [PATCH] stuff' '
 test_expect_success 'am --keep really keeps the subject' '
 	git checkout HEAD^ &&
 	git am --keep patch4 &&
-	! test -d .dotest &&
-	git-cat-file commit HEAD |
+	! test -d .git/rebase-apply &&
+	git cat-file commit HEAD |
 		grep -q -F "Re: Re: Re: [PATCH 1/5 v2] third"
 '
 
@@ -176,51 +176,51 @@ test_expect_success 'am -3 falls back to 3-way merge' '
 	test_tick &&
 	git commit -m "copied stuff" &&
 	git am -3 lorem-move.patch &&
-	! test -d .dotest &&
+	! test -d .git/rebase-apply &&
 	test -z "$(git diff lorem)"
 '
 
 test_expect_success 'am pauses on conflict' '
 	git checkout lorem2^^ &&
-	! git am lorem-move.patch &&
-	test -d .dotest
+	test_must_fail git am lorem-move.patch &&
+	test -d .git/rebase-apply
 '
 
 test_expect_success 'am --skip works' '
 	git am --skip &&
-	! test -d .dotest &&
+	! test -d .git/rebase-apply &&
 	test -z "$(git diff lorem2^^ -- file)" &&
 	test goodbye = "$(cat another)"
 '
 
 test_expect_success 'am --resolved works' '
 	git checkout lorem2^^ &&
-	! git am lorem-move.patch &&
-	test -d .dotest &&
+	test_must_fail git am lorem-move.patch &&
+	test -d .git/rebase-apply &&
 	echo resolved >>file &&
 	git add file &&
 	git am --resolved &&
-	! test -d .dotest &&
+	! test -d .git/rebase-apply &&
 	test goodbye = "$(cat another)"
 '
 
 test_expect_success 'am takes patches from a Pine mailbox' '
 	git checkout first &&
 	cat pine patch1 | git am &&
-	! test -d .dotest &&
+	! test -d .git/rebase-apply &&
 	test -z "$(git diff master^..HEAD)"
 '
 
 test_expect_success 'am fails on mail without patch' '
-	! git am <failmail &&
-	rm -r .dotest/
+	test_must_fail git am <failmail &&
+	rm -r .git/rebase-apply/
 '
 
 test_expect_success 'am fails on empty patch' '
 	echo "---" >>failmail &&
-	! git am <failmail &&
+	test_must_fail git am <failmail &&
 	git am --skip &&
-	! test -d .dotest
+	! test -d .git/rebase-apply
 '
 
 test_expect_success 'am works from stdin in subdirectory' '

@@ -129,10 +129,7 @@ sub update_ls_remote {
 	return if (($harder == 0) ||
 		   (($harder == 1) && exists $info->{'LS_REMOTE'}));
 
-	my @ref = map {
-		s|^[0-9a-f]{40}\s+refs/heads/||;
-		$_;
-	} $git->command(qw(ls-remote --heads), $info->{'URL'});
+	my @ref = map { s|refs/heads/||; $_; } keys %{$git->remote_refs($info->{'URL'}, [ 'heads' ])};
 	$info->{'LS_REMOTE'} = \@ref;
 }
 
@@ -312,7 +309,7 @@ sub update_remote {
 			}
 		}
 	} else {
-		print STDERR "Remote group $name does not exists.\n";
+		print STDERR "Remote group $name does not exist.\n";
 		exit(1);
 	}
 	for (@remotes) {

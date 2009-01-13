@@ -43,7 +43,7 @@ test_expect_success "detection of case insensitive filesystem during repo init" 
 else
 test_expect_success "detection of case insensitive filesystem during repo init" '
 
-	! git config --bool core.ignorecase >/dev/null ||
+	test_must_fail git config --bool core.ignorecase >/dev/null ||
 	test $(git config --bool core.ignorecase) = false
 '
 fi
@@ -85,7 +85,7 @@ $test_case 'add (with different case)' '
 	rm camelcase &&
 	echo 1 >CamelCase &&
 	git add CamelCase &&
-	test $(git-ls-files | grep -i camelcase | wc -l) = 1
+	test $(git ls-files | grep -i camelcase | wc -l) = 1
 
 '
 

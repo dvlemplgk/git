@@ -17,6 +17,9 @@
 #define TEST_FILEMODE 1
 #endif
 
+static int init_is_bare_repository = 0;
+static int init_shared_repository = -1;
+
 static void safe_create_dir(const char *dir, int share)
 {
 	if (mkdir(dir, 0777) < 0) {
@@ -37,7 +40,7 @@ static void copy_templates_1(char *path, int baselen,
 
 	/* Note: if ".git/hooks" file exists in the repository being
 	 * re-initialized, /etc/core-git/templates/hooks/update would
-	 * cause git-init to fail here.  I think this is sane but
+	 * cause "git init" to fail here.  I think this is sane but
 	 * it means that the set of templates we ship by default, along
 	 * with the way the namespace under .git/ is organized, should
 	 * be really carefully chosen.
@@ -115,18 +118,8 @@ static void copy_templates(const char *template_dir)
 
 	if (!template_dir)
 		template_dir = getenv(TEMPLATE_DIR_ENVIRONMENT);
-	if (!template_dir) {
-		/*
-		 * if the hard-coded template is relative, it is
-		 * interpreted relative to the exec_dir
-		 */
-		template_dir = DEFAULT_GIT_TEMPLATE_DIR;
-		if (!is_absolute_path(template_dir)) {
-			struct strbuf d = STRBUF_INIT;
-			strbuf_addf(&d, "%s/%s", git_exec_path(), template_dir);
-			template_dir = strbuf_detach(&d, NULL);
-		}
-	}
+	if (!template_dir)
+		template_dir = system_path(DEFAULT_GIT_TEMPLATE_DIR);
 	if (!template_dir[0])
 		return;
 	strcpy(template_path, template_dir);
@@ -201,6 +194,9 @@ static int create_default_files(const char *template_path)
 	copy_templates(template_path);
 
 	git_config(git_default_config, NULL);
+	is_bare_repository_cfg = init_is_bare_repository;
+	if (init_shared_repository != -1)
+		shared_repository = init_shared_repository;
 
 	/*
 	 * We would have created the above under user's umask -- under
@@ -287,6 +283,8 @@ int init_db(const char *template_dir, unsigned int flags)
 
 	safe_create_dir(get_git_dir(), 0);
 
+	init_is_bare_repository = is_bare_repository();
+
 	/* Check to see if the repository version is right.
 	 * Note that a newly created repository does not have
 	 * config file, so this will not fail.  What we are catching
@@ -366,7 +364,7 @@ static int guess_repository_type(const char *git_dir)
 }
 
 static const char init_db_usage[] =
-"git-init [-q | --quiet] [--bare] [--template=<template-directory>] [--shared[=<permissions>]]";
+"git init [-q | --quiet] [--bare] [--template=<template-directory>] [--shared[=<permissions>]]";
 
 /*
  * If you want to, you can share the DB area with any number of branches.
@@ -391,9 +389,9 @@ int cmd_init_db(int argc, const char **argv, const char *prefix)
 			setenv(GIT_DIR_ENVIRONMENT, getcwd(git_dir,
 						sizeof(git_dir)), 0);
 		} else if (!strcmp(arg, "--shared"))
-			shared_repository = PERM_GROUP;
+			init_shared_repository = PERM_GROUP;
 		else if (!prefixcmp(arg, "--shared="))
-			shared_repository = git_config_perm("arg", arg+9);
+			init_shared_repository = git_config_perm("arg", arg+9);
 		else if (!strcmp(arg, "-q") || !strcmp(arg, "--quiet"))
 			flags |= INIT_DB_QUIET;
 		else

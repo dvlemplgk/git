@@ -10,14 +10,28 @@
 # The original idea comes from Eric W. Biederman, in
 # http://article.gmane.org/gmane.comp.version-control.git/22407
 
-USAGE='(--continue | --abort | --skip | [--preserve-merges] [--verbose]
-	[--onto <branch>] <upstream> [<branch>])'
+OPTIONS_KEEPDASHDASH=
+OPTIONS_SPEC="\
+git-rebase [-i] [options] [--] <upstream> [<branch>]
+git-rebase [-i] (--continue | --abort | --skip)
+--
+ Available options are
+v,verbose          display a diffstat of what changed upstream
+onto=              rebase onto given branch instead of upstream
+p,preserve-merges  try to recreate merges instead of ignoring them
+s,strategy=        use the given merge strategy
+m,merge            always used (no-op)
+i,interactive      always used (no-op)
+ Actions:
+continue           continue rebasing process
+abort              abort rebasing process and restore original branch
+skip               skip current patch and continue rebasing process
+"
 
-OPTIONS_SPEC=
 . git-sh-setup
 require_work_tree
 
-DOTEST="$GIT_DIR/.dotest-merge"
+DOTEST="$GIT_DIR/rebase-merge"
 TODO="$DOTEST"/git-rebase-todo
 DONE="$DOTEST"/done
 MSG="$DOTEST"/message
@@ -25,10 +39,8 @@ SQUASH_MSG="$DOTEST"/message-squash
 REWRITTEN="$DOTEST"/rewritten
 PRESERVE_MERGES=
 STRATEGY=
+ONTO=
 VERBOSE=
-test -d "$REWRITTEN" && PRESERVE_MERGES=t
-test -f "$DOTEST"/strategy && STRATEGY="$(cat "$DOTEST"/strategy)"
-test -f "$DOTEST"/verbose && VERBOSE=t
 
 GIT_CHERRY_PICK_HELP="  After resolving the conflicts,
 mark the corrected paths with 'git add <paths>', and
@@ -51,6 +63,16 @@ output () {
 		"$@"
 		;;
 	esac
+}
+
+run_pre_rebase_hook () {
+	if test -x "$GIT_DIR/hooks/pre-rebase"
+	then
+		"$GIT_DIR/hooks/pre-rebase" ${1+"$@"} || {
+			echo >&2 "The pre-rebase hook refused to rebase."
+			exit 1
+		}
+	fi
 }
 
 require_clean_work_tree () {
@@ -133,7 +155,16 @@ pick_one () {
 }
 
 pick_one_preserving_merges () {
-	case "$1" in -n) sha1=$2 ;; *) sha1=$1 ;; esac
+	fast_forward=t
+	case "$1" in
+	-n)
+		fast_forward=f
+		sha1=$2
+		;;
+	*)
+		sha1=$1
+		;;
+	esac
 	sha1=$(git rev-parse $sha1)
 
 	if test -f "$DOTEST"/current-commit
@@ -144,15 +175,14 @@ pick_one_preserving_merges () {
 		die "Cannot write current commit's replacement sha1"
 	fi
 
+	echo $sha1 > "$DOTEST"/current-commit
+
 	# rewrite parents; if none were rewritten, we can fast-forward.
-	fast_forward=t
-	preserve=t
 	new_parents=
 	for p in $(git rev-list --parents -1 $sha1 | cut -d' ' -f2-)
 	do
 		if test -f "$REWRITTEN"/$p
 		then
-			preserve=f
 			new_p=$(cat "$REWRITTEN"/$p)
 			test $p != $new_p && fast_forward=f
 			case "$new_parents" in
@@ -169,7 +199,8 @@ pick_one_preserving_merges () {
 	case $fast_forward in
 	t)
 		output warn "Fast forward to $sha1"
-		test $preserve = f || echo $sha1 > "$REWRITTEN"/$sha1
+		output git reset --hard $sha1 ||
+			die "Cannot fast forward to $sha1"
 		;;
 	f)
 		test "a$1" = a-n && die "Refusing to squash a merge: $sha1"
@@ -179,7 +210,6 @@ pick_one_preserving_merges () {
 		output git checkout $first_parent 2> /dev/null ||
 			die "Cannot move HEAD to $first_parent"
 
-		echo $sha1 > "$DOTEST"/current-commit
 		case "$new_parents" in
 		' '*' '*)
 			# redo merge
@@ -247,7 +277,7 @@ do_next () {
 		"$DOTEST"/amend || exit
 	read command sha1 rest < "$TODO"
 	case "$command" in
-	'#'*|'')
+	'#'*|''|noop)
 		mark_action_done
 		;;
 	pick|p)
@@ -264,8 +294,8 @@ do_next () {
 		pick_one $sha1 ||
 			die_with_patch $sha1 "Could not apply $sha1... $rest"
 		make_patch $sha1
-		: > "$DOTEST"/amend
-		warn
+		git rev-parse --verify HEAD > "$DOTEST"/amend
+		warn "Stopped at $sha1... $rest"
 		warn "You can amend the commit now, with"
 		warn
 		warn "	git commit --amend"
@@ -284,23 +314,28 @@ do_next () {
 
 		mark_action_done
 		make_squash_message $sha1 > "$MSG"
+		failed=f
+		author_script=$(get_author_ident_from_commit HEAD)
+		output git reset --soft HEAD^
+		pick_one -n $sha1 || failed=t
 		case "$(peek_next_command)" in
 		squash|s)
 			EDIT_COMMIT=
 			USE_OUTPUT=output
+			MSG_OPT=-F
+			MSG_FILE="$MSG"
 			cp "$MSG" "$SQUASH_MSG"
 			;;
 		*)
 			EDIT_COMMIT=-e
 			USE_OUTPUT=
+			MSG_OPT=
+			MSG_FILE=
 			rm -f "$SQUASH_MSG" || exit
+			cp "$MSG" "$GIT_DIR"/SQUASH_MSG
+			rm -f "$GIT_DIR"/MERGE_MSG || exit
 			;;
 		esac
-
-		failed=f
-		author_script=$(get_author_ident_from_commit HEAD)
-		output git reset --soft HEAD^
-		pick_one -n $sha1 || failed=t
 		echo "$author_script" > "$DOTEST"/author-script
 		if test $failed = f
 		then
@@ -309,7 +344,7 @@ do_next () {
 			GIT_AUTHOR_NAME="$GIT_AUTHOR_NAME" \
 			GIT_AUTHOR_EMAIL="$GIT_AUTHOR_EMAIL" \
 			GIT_AUTHOR_DATE="$GIT_AUTHOR_DATE" \
-			$USE_OUTPUT git commit --no-verify -F "$MSG" $EDIT_COMMIT || failed=t
+			$USE_OUTPUT git commit --no-verify $MSG_OPT "$MSG_FILE" $EDIT_COMMIT || failed=t
 		fi
 		if test $failed = t
 		then
@@ -368,10 +403,27 @@ do_rest () {
 	done
 }
 
+# check if no other options are set
+is_standalone () {
+	test $# -eq 2 -a "$2" = '--' &&
+	test -z "$ONTO" &&
+	test -z "$PRESERVE_MERGES" &&
+	test -z "$STRATEGY" &&
+	test -z "$VERBOSE"
+}
+
+get_saved_options () {
+	test -d "$REWRITTEN" && PRESERVE_MERGES=t
+	test -f "$DOTEST"/strategy && STRATEGY="$(cat "$DOTEST"/strategy)"
+	test -f "$DOTEST"/verbose && VERBOSE=t
+}
+
 while test $# != 0
 do
 	case "$1" in
 	--continue)
+		is_standalone "$@" || usage
+		get_saved_options
 		comment_for_reflog continue
 
 		test -d "$DOTEST" || die "No interactive rebase running"
@@ -390,20 +442,30 @@ do
 		else
 			. "$DOTEST"/author-script ||
 				die "Cannot find the author identity"
+			amend=
 			if test -f "$DOTEST"/amend
 			then
+				amend=$(git rev-parse --verify HEAD)
+				test "$amend" = $(cat "$DOTEST"/amend) ||
+				die "\
+You have uncommitted changes in your working tree. Please, commit them
+first and then run 'git rebase --continue' again."
 				git reset --soft HEAD^ ||
 				die "Cannot rewind the HEAD"
 			fi
 			export GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_AUTHOR_DATE &&
-			git commit --no-verify -F "$DOTEST"/message -e ||
-			die "Could not commit staged changes."
+			git commit --no-verify -F "$DOTEST"/message -e || {
+				test -n "$amend" && git reset --soft $amend
+				die "Could not commit staged changes."
+			}
 		fi
 
 		require_clean_work_tree
 		do_rest
 		;;
 	--abort)
+		is_standalone "$@" || usage
+		get_saved_options
 		comment_for_reflog abort
 
 		git rerere clear
@@ -421,6 +483,8 @@ do
 		exit
 		;;
 	--skip)
+		is_standalone "$@" || usage
+		get_saved_options
 		comment_for_reflog skip
 
 		git rerere clear
@@ -428,7 +492,7 @@ do
 
 		output git reset --hard && do_rest
 		;;
-	-s|--strategy)
+	-s)
 		case "$#,$1" in
 		*,*=*)
 			STRATEGY="-s "$(expr "z$1" : 'z-[^=]*=\(.*\)') ;;
@@ -439,25 +503,27 @@ do
 			shift ;;
 		esac
 		;;
-	-m|--merge)
+	-m)
 		# we use merge anyway
 		;;
-	-C*)
-		die "Interactive rebase uses merge, so $1 does not make sense"
-		;;
-	-v|--verbose)
+	-v)
 		VERBOSE=t
 		;;
-	-p|--preserve-merges)
+	-p)
 		PRESERVE_MERGES=t
 		;;
-	-i|--interactive)
+	-i)
 		# yeah, we know
 		;;
-	''|-h)
-		usage
+	--onto)
+		shift
+		ONTO=$(git rev-parse --verify "$1") ||
+			die "Does not point to a valid commit: $1"
 		;;
-	*)
+	--)
+		shift
+		run_pre_rebase_hook ${1+"$@"}
+		test $# -eq 1 -o $# -eq 2 || usage
 		test -d "$DOTEST" &&
 			die "Interactive rebase already started"
 
@@ -465,15 +531,6 @@ do
 			die "You need to set your committer info first"
 
 		comment_for_reflog start
-
-		ONTO=
-		case "$1" in
-		--onto)
-			ONTO=$(git rev-parse --verify "$2") ||
-				die "Does not point to a valid commit: $2"
-			shift; shift
-			;;
-		esac
 
 		require_clean_work_tree
 
@@ -527,6 +584,7 @@ do
 			--abbrev=7 --reverse --left-right --cherry-pick \
 			$UPSTREAM...$HEAD | \
 			sed -n "s/^>/pick /p" > "$TODO"
+		test -s "$TODO" || echo noop >> "$TODO"
 		cat >> "$TODO" << EOF
 
 # Rebase $SHORTUPSTREAM..$SHORTHEAD onto $SHORTONTO
@@ -551,6 +609,7 @@ EOF
 		has_action "$TODO" ||
 			die_abort "Nothing to do"
 
+		git update-ref ORIG_HEAD $HEAD
 		output git checkout $ONTO && do_rest
 		;;
 	esac

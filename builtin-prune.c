@@ -7,11 +7,27 @@
 #include "parse-options.h"
 
 static const char * const prune_usage[] = {
-	"git-prune [-n] [--expire <time>] [--] [<head>...]",
+	"git prune [-n] [--expire <time>] [--] [<head>...]",
 	NULL
 };
 static int show_only;
 static unsigned long expire;
+
+static int prune_tmp_object(const char *path, const char *filename)
+{
+	const char *fullpath = mkpath("%s/%s", path, filename);
+	if (expire) {
+		struct stat st;
+		if (lstat(fullpath, &st))
+			return error("Could not stat '%s'", fullpath);
+		if (st.st_mtime > expire)
+			return 0;
+	}
+	printf("Removing stale temporary file %s\n", fullpath);
+	if (!show_only)
+		unlink(fullpath);
+	return 0;
+}
 
 static int prune_object(char *path, const char *filename, const unsigned char *sha1)
 {
@@ -69,6 +85,10 @@ static int prune_dir(int i, char *path)
 			prune_object(path, de->d_name, sha1);
 			continue;
 		}
+		if (!prefixcmp(de->d_name, "tmp_obj_")) {
+			prune_tmp_object(path, de->d_name);
+			continue;
+		}
 		fprintf(stderr, "bad sha1 file: %s/%s\n", path, de->d_name);
 	}
 	if (!show_only)
@@ -90,38 +110,22 @@ static void prune_object_dir(const char *path)
 /*
  * Write errors (particularly out of space) can result in
  * failed temporary packs (and more rarely indexes and other
- * files begining with "tmp_") accumulating in the
- * object directory.
+ * files begining with "tmp_") accumulating in the object
+ * and the pack directories.
  */
-static void remove_temporary_files(void)
+static void remove_temporary_files(const char *path)
 {
 	DIR *dir;
 	struct dirent *de;
-	char* dirname=get_object_directory();
 
-	dir = opendir(dirname);
+	dir = opendir(path);
 	if (!dir) {
-		fprintf(stderr, "Unable to open object directory %s\n",
-			dirname);
+		fprintf(stderr, "Unable to open directory %s\n", path);
 		return;
 	}
-	while ((de = readdir(dir)) != NULL) {
-		if (!prefixcmp(de->d_name, "tmp_")) {
-			char name[PATH_MAX];
-			int c = snprintf(name, PATH_MAX, "%s/%s",
-					 dirname, de->d_name);
-			if (c < 0 || c >= PATH_MAX)
-				continue;
-			if (expire) {
-				struct stat st;
-				if (stat(name, &st) != 0 || st.st_mtime >= expire)
-					continue;
-			}
-			printf("Removing stale temporary file %s\n", name);
-			if (!show_only)
-				unlink(name);
-		}
-	}
+	while ((de = readdir(dir)) != NULL)
+		if (!prefixcmp(de->d_name, "tmp_"))
+			prune_tmp_object(path, de->d_name);
 	closedir(dir);
 }
 
@@ -135,6 +139,7 @@ int cmd_prune(int argc, const char **argv, const char *prefix)
 			 "expire objects older than <time>"),
 		OPT_END()
 	};
+	char *s;
 
 	save_commit_buffer = 0;
 	init_revisions(&revs, prefix);
@@ -157,6 +162,9 @@ int cmd_prune(int argc, const char **argv, const char *prefix)
 	prune_object_dir(get_object_directory());
 
 	prune_packed_objects(show_only);
-	remove_temporary_files();
+	remove_temporary_files(get_object_directory());
+	s = xstrdup(mkpath("%s/pack", get_object_directory()));
+	remove_temporary_files(s);
+	free(s);
 	return 0;
 }

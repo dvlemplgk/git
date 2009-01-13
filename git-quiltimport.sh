@@ -1,7 +1,7 @@
 #!/bin/sh
 OPTIONS_KEEPDASHDASH=
 OPTIONS_SPEC="\
-git-quiltimport [options]
+git quiltimport [options]
 --
 n,dry-run     dry run
 author=       author name and email address for patches without any
@@ -53,7 +53,7 @@ if ! [ -d "$QUILT_PATCHES" ] ; then
 fi
 
 # Temporary directories
-tmp_dir=.dotest
+tmp_dir="$GIT_DIR"/rebase-apply
 tmp_msg="$tmp_dir/msg"
 tmp_patch="$tmp_dir/patch"
 tmp_info="$tmp_dir/info"

@@ -10,7 +10,7 @@
 #include "fsck.h"
 
 static const char index_pack_usage[] =
-"git-index-pack [-v] [-o <index-file>] [{ ---keep | --keep=<msg> }] [--strict] { <pack-file> | --stdin [--fix-thin] [<pack-file>] }";
+"git index-pack [-v] [-o <index-file>] [{ ---keep | --keep=<msg> }] [--strict] { <pack-file> | --stdin [--fix-thin] [<pack-file>] }";
 
 struct object_entry
 {
@@ -172,7 +172,7 @@ static char *open_pack_file(char *pack_name)
 		if (!pack_name) {
 			static char tmpfile[PATH_MAX];
 			snprintf(tmpfile, sizeof(tmpfile),
-				 "%s/tmp_pack_XXXXXX", get_object_directory());
+				 "%s/pack/tmp_pack_XXXXXX", get_object_directory());
 			output_fd = xmkstemp(tmpfile);
 			pack_name = xstrdup(tmpfile);
 		} else
@@ -200,7 +200,8 @@ static void parse_pack_header(void)
 	if (hdr->hdr_signature != htonl(PACK_SIGNATURE))
 		die("pack signature mismatch");
 	if (!pack_version_ok(hdr->hdr_version))
-		die("pack version %d unsupported", ntohl(hdr->hdr_version));
+		die("pack version %"PRIu32" unsupported",
+			ntohl(hdr->hdr_version));
 
 	nr_objects = ntohl(hdr->hdr_entries);
 	use(sizeof(struct pack_header));
@@ -364,8 +365,11 @@ static void *get_data_from_pack(struct object_entry *obj)
 	data = src;
 	do {
 		ssize_t n = pread(pack_fd, data + rdy, len - rdy, from + rdy);
-		if (n <= 0)
+		if (n < 0)
 			die("cannot pread pack file: %s", strerror(errno));
+		if (!n)
+			die("premature end of pack file, %lu bytes missing",
+			    len - rdy);
 		rdy += n;
 	} while (rdy < len);
 	data = xmalloc(obj->size);
@@ -653,7 +657,7 @@ static void parse_pack_objects(unsigned char *sha1)
 	}
 }
 
-static int write_compressed(int fd, void *in, unsigned int size, uint32_t *obj_crc)
+static int write_compressed(struct sha1file *f, void *in, unsigned int size)
 {
 	z_stream stream;
 	unsigned long maxsize;
@@ -673,13 +677,12 @@ static int write_compressed(int fd, void *in, unsigned int size, uint32_t *obj_c
 	deflateEnd(&stream);
 
 	size = stream.total_out;
-	write_or_die(fd, out, size);
-	*obj_crc = crc32(*obj_crc, out, size);
+	sha1write(f, out, size);
 	free(out);
 	return size;
 }
 
-static struct object_entry *append_obj_to_pack(
+static struct object_entry *append_obj_to_pack(struct sha1file *f,
 			       const unsigned char *sha1, void *buf,
 			       unsigned long size, enum object_type type)
 {
@@ -695,15 +698,16 @@ static struct object_entry *append_obj_to_pack(
 		s >>= 7;
 	}
 	header[n++] = c;
-	write_or_die(output_fd, header, n);
-	obj[0].idx.crc32 = crc32(0, Z_NULL, 0);
-	obj[0].idx.crc32 = crc32(obj[0].idx.crc32, header, n);
+	crc32_begin(f);
+	sha1write(f, header, n);
 	obj[0].size = size;
 	obj[0].hdr_size = n;
 	obj[0].type = type;
 	obj[0].real_type = type;
 	obj[1].idx.offset = obj[0].idx.offset + n;
-	obj[1].idx.offset += write_compressed(output_fd, buf, size, &obj[0].idx.crc32);
+	obj[1].idx.offset += write_compressed(f, buf, size);
+	obj[0].idx.crc32 = crc32_end(f);
+	sha1flush(f);
 	hashcpy(obj->idx.sha1, sha1);
 	return obj;
 }
@@ -715,7 +719,7 @@ static int delta_pos_compare(const void *_a, const void *_b)
 	return a->obj_no - b->obj_no;
 }
 
-static void fix_unresolved_deltas(int nr_unresolved)
+static void fix_unresolved_deltas(struct sha1file *f, int nr_unresolved)
 {
 	struct delta_entry **sorted_by_pos;
 	int i, n = 0;
@@ -753,8 +757,8 @@ static void fix_unresolved_deltas(int nr_unresolved)
 		if (check_sha1_signature(d->base.sha1, base_obj.data,
 				base_obj.size, typename(type)))
 			die("local object %s is corrupt", sha1_to_hex(d->base.sha1));
-		base_obj.obj = append_obj_to_pack(d->base.sha1, base_obj.data,
-			base_obj.size, type);
+		base_obj.obj = append_obj_to_pack(f, d->base.sha1,
+					base_obj.data, base_obj.size, type);
 		link_base_data(NULL, &base_obj);
 
 		find_delta_children(&d->base, &first, &last);
@@ -859,7 +863,8 @@ static int git_index_pack_config(const char *k, const char *v, void *cb)
 	if (!strcmp(k, "pack.indexversion")) {
 		pack_idx_default_version = git_config_int(k, v);
 		if (pack_idx_default_version > 2)
-			die("bad pack.indexversion=%d", pack_idx_default_version);
+			die("bad pack.indexversion=%"PRIu32,
+				pack_idx_default_version);
 		return 0;
 	}
 	return git_default_config(k, v, cb);
@@ -873,9 +878,27 @@ int main(int argc, char **argv)
 	const char *keep_name = NULL, *keep_msg = NULL;
 	char *index_name_buf = NULL, *keep_name_buf = NULL;
 	struct pack_idx_entry **idx_objects;
-	unsigned char sha1[20];
+	unsigned char pack_sha1[20];
 
-	git_config(git_index_pack_config, NULL);
+	/*
+	 * We wish to read the repository's config file if any, and
+	 * for that it is necessary to call setup_git_directory_gently().
+	 * However if the cwd was inside .git/objects/pack/ then we need
+	 * to go back there or all the pack name arguments will be wrong.
+	 * And in that case we cannot rely on any prefix returned by
+	 * setup_git_directory_gently() either.
+	 */
+	{
+		char cwd[PATH_MAX+1];
+		int nongit;
+
+		if (!getcwd(cwd, sizeof(cwd)-1))
+			die("Unable to get current working directory");
+		setup_git_directory_gently(&nongit);
+		git_config(git_index_pack_config, NULL);
+		if (chdir(cwd))
+			die("Cannot come back to cwd");
+	}
 
 	for (i = 1; i < argc; i++) {
 		char *arg = argv[i];
@@ -958,13 +981,15 @@ int main(int argc, char **argv)
 	parse_pack_header();
 	objects = xmalloc((nr_objects + 1) * sizeof(struct object_entry));
 	deltas = xmalloc(nr_objects * sizeof(struct delta_entry));
-	parse_pack_objects(sha1);
+	parse_pack_objects(pack_sha1);
 	if (nr_deltas == nr_resolved_deltas) {
 		stop_progress(&progress);
 		/* Flush remaining pack final 20-byte SHA1. */
 		flush();
 	} else {
 		if (fix_thin_pack) {
+			struct sha1file *f;
+			unsigned char read_sha1[20], tail_sha1[20];
 			char msg[48];
 			int nr_unresolved = nr_deltas - nr_resolved_deltas;
 			int nr_objects_initial = nr_objects;
@@ -973,12 +998,19 @@ int main(int argc, char **argv)
 			objects = xrealloc(objects,
 					   (nr_objects + nr_unresolved + 1)
 					   * sizeof(*objects));
-			fix_unresolved_deltas(nr_unresolved);
+			f = sha1fd(output_fd, curr_pack);
+			fix_unresolved_deltas(f, nr_unresolved);
 			sprintf(msg, "completed with %d local objects",
 				nr_objects - nr_objects_initial);
 			stop_progress_msg(&progress, msg);
-			fixup_pack_header_footer(output_fd, sha1,
-						 curr_pack, nr_objects);
+			sha1close(f, tail_sha1, 0);
+			hashcpy(read_sha1, pack_sha1);
+			fixup_pack_header_footer(output_fd, pack_sha1,
+						 curr_pack, nr_objects,
+						 read_sha1, consumed_bytes-20);
+			if (hashcmp(read_sha1, tail_sha1) != 0)
+				die("Unexpected tail checksum for %s "
+				    "(disk corruption?)", curr_pack);
 		}
 		if (nr_deltas != nr_resolved_deltas)
 			die("pack has %d unresolved deltas",
@@ -991,13 +1023,13 @@ int main(int argc, char **argv)
 	idx_objects = xmalloc((nr_objects) * sizeof(struct pack_idx_entry *));
 	for (i = 0; i < nr_objects; i++)
 		idx_objects[i] = &objects[i].idx;
-	curr_index = write_idx_file(index_name, idx_objects, nr_objects, sha1);
+	curr_index = write_idx_file(index_name, idx_objects, nr_objects, pack_sha1);
 	free(idx_objects);
 
 	final(pack_name, curr_pack,
 		index_name, curr_index,
 		keep_name, keep_msg,
-		sha1);
+		pack_sha1);
 	free(objects);
 	free(index_name_buf);
 	free(keep_name_buf);

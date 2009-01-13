@@ -41,6 +41,7 @@ int parse_commit_buffer(struct commit *item, void *buffer, unsigned long size);
 int parse_commit(struct commit *item);
 
 struct commit_list * commit_list_insert(struct commit *item, struct commit_list **list_p);
+unsigned commit_list_count(const struct commit_list *l);
 struct commit_list * insert_by_date(struct commit *item, struct commit_list **list);
 
 void free_commit_list(struct commit_list *list);
@@ -66,7 +67,8 @@ extern int non_ascii(int);
 struct rev_info; /* in revision.h, it circularly uses enum cmit_fmt */
 extern void get_commit_format(const char *arg, struct rev_info *);
 extern void format_commit_message(const struct commit *commit,
-                                  const void *format, struct strbuf *sb);
+				  const void *format, struct strbuf *sb,
+				  enum date_mode dmode);
 extern void pretty_print_commit(enum cmit_fmt fmt, const struct commit*,
                                 struct strbuf *,
                                 int abbrev, const char *subject,
@@ -120,6 +122,7 @@ int read_graft_file(const char *graft_file);
 struct commit_graft *lookup_commit_graft(const unsigned char *sha1);
 
 extern struct commit_list *get_merge_bases(struct commit *rev1, struct commit *rev2, int cleanup);
+extern struct commit_list *get_octopus_merge_bases(struct commit_list *in);
 
 extern int register_shallow(const unsigned char *sha1);
 extern int unregister_shallow(const unsigned char *sha1);
@@ -131,11 +134,12 @@ extern struct commit_list *get_shallow_commits(struct object_array *heads,
 int in_merge_bases(struct commit *, struct commit **, int);
 
 extern int interactive_add(int argc, const char **argv, const char *prefix);
-extern int rerere(void);
 
 static inline int single_parent(struct commit *commit)
 {
 	return commit->parents && !commit->parents->next;
 }
+
+struct commit_list *reduce_heads(struct commit_list *heads);
 
 #endif /* COMMIT_H */

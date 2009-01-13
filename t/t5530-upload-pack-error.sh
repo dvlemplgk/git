@@ -27,14 +27,14 @@ test_expect_success 'setup and corrupt repository' '
 '
 
 test_expect_success 'fsck fails' '
-	! git fsck
+	test_must_fail git fsck
 '
 
 test_expect_success 'upload-pack fails due to error in pack-objects' '
 
 	! echo "0032want $(git rev-parse HEAD)
 00000009done
-0000" | git-upload-pack . > /dev/null 2> output.err &&
+0000" | git upload-pack . > /dev/null 2> output.err &&
 	grep "pack-objects died" output.err
 '
 
@@ -46,13 +46,13 @@ test_expect_success 'corrupt repo differently' '
 '
 
 test_expect_success 'fsck fails' '
-	! git fsck
+	test_must_fail git fsck
 '
 test_expect_success 'upload-pack fails due to error in rev-list' '
 
 	! echo "0032want $(git rev-parse HEAD)
 00000009done
-0000" | git-upload-pack . > /dev/null 2> output.err &&
+0000" | git upload-pack . > /dev/null 2> output.err &&
 	grep "waitpid (async) failed" output.err
 '
 
@@ -66,7 +66,7 @@ test_expect_success 'create empty repository' '
 
 test_expect_success 'fetch fails' '
 
-	! git fetch .. master
+	test_must_fail git fetch .. master
 
 '
 
