@@ -624,7 +624,6 @@ static int prepare_to_commit(const char *index_file, const char *prefix)
 	if (!commitable && !in_merge && !allow_empty &&
 	    !(amend && is_a_merge(head_sha1))) {
 		run_status(stdout, index_file, prefix, 0);
-		unlink(commit_editmsg);
 		return 0;
 	}
 
@@ -866,6 +865,9 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 	if (wt_status_use_color == -1)
 		wt_status_use_color = git_use_color_default;
 
+	if (diff_use_color_default == -1)
+		diff_use_color_default = git_use_color_default;
+
 	argc = parse_and_validate_options(argc, argv, builtin_status_usage, prefix);
 
 	index_file = prepare_index(argc, argv, prefix);
@@ -944,6 +946,9 @@ int cmd_commit(int argc, const char **argv, const char *prefix)
 	int allow_fast_forward = 1;
 
 	git_config(git_commit_config, NULL);
+
+	if (wt_status_use_color == -1)
+		wt_status_use_color = git_use_color_default;
 
 	argc = parse_and_validate_options(argc, argv, builtin_commit_usage, prefix);
 
