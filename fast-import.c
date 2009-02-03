@@ -376,7 +376,7 @@ static void dump_marks_helper(FILE *, uintmax_t, struct mark_set *);
 
 static void write_crash_report(const char *err)
 {
-	char *loc = git_path("fast_import_crash_%d", getpid());
+	char *loc = git_path("fast_import_crash_%"PRIuMAX, (uintmax_t) getpid());
 	FILE *rpt = fopen(loc, "w");
 	struct branch *b;
 	unsigned long lu;
@@ -390,8 +390,8 @@ static void write_crash_report(const char *err)
 	fprintf(stderr, "fast-import: dumping crash report to %s\n", loc);
 
 	fprintf(rpt, "fast-import crash report:\n");
-	fprintf(rpt, "    fast-import process: %d\n", getpid());
-	fprintf(rpt, "    parent process     : %d\n", getppid());
+	fprintf(rpt, "    fast-import process: %"PRIuMAX"\n", (uintmax_t) getpid());
+	fprintf(rpt, "    parent process     : %"PRIuMAX"\n", (uintmax_t) getppid());
 	fprintf(rpt, "    at %s\n", show_date(time(NULL), 0, DATE_LOCAL));
 	fputc('\n', rpt);
 
@@ -554,6 +554,10 @@ static void *pool_alloc(size_t len)
 	struct mem_pool *p;
 	void *r;
 
+	/* round up to a 'uintmax_t' alignment */
+	if (len & (sizeof(uintmax_t) - 1))
+		len += sizeof(uintmax_t) - (len & (sizeof(uintmax_t) - 1));
+
 	for (p = mem_pool; p; p = p->next_pool)
 		if ((p->end - p->next_free >= len))
 			break;
@@ -572,9 +576,6 @@ static void *pool_alloc(size_t len)
 	}
 
 	r = p->next_free;
-	/* round out to a 'uintmax_t' alignment */
-	if (len & (sizeof(uintmax_t) - 1))
-		len += sizeof(uintmax_t) - (len & (sizeof(uintmax_t) - 1));
 	p->next_free += len;
 	return r;
 }
@@ -845,7 +846,7 @@ static int oecmp (const void *a_, const void *b_)
 static char *create_index(void)
 {
 	static char tmpfile[PATH_MAX];
-	SHA_CTX ctx;
+	git_SHA_CTX ctx;
 	struct sha1file *f;
 	struct object_entry **idx, **c, **last, *e;
 	struct object_entry_pool *o;
@@ -882,17 +883,17 @@ static char *create_index(void)
 	idx_fd = xmkstemp(tmpfile);
 	f = sha1fd(idx_fd, tmpfile);
 	sha1write(f, array, 256 * sizeof(int));
-	SHA1_Init(&ctx);
+	git_SHA1_Init(&ctx);
 	for (c = idx; c != last; c++) {
 		uint32_t offset = htonl((*c)->offset);
 		sha1write(f, &offset, 4);
 		sha1write(f, (*c)->sha1, sizeof((*c)->sha1));
-		SHA1_Update(&ctx, (*c)->sha1, 20);
+		git_SHA1_Update(&ctx, (*c)->sha1, 20);
 	}
 	sha1write(f, pack_data->sha1, sizeof(pack_data->sha1));
 	sha1close(f, NULL, CSUM_FSYNC);
 	free(idx);
-	SHA1_Final(pack_data->sha1, &ctx);
+	git_SHA1_Final(pack_data->sha1, &ctx);
 	return tmpfile;
 }
 
@@ -1035,15 +1036,15 @@ static int store_object(
 	unsigned char hdr[96];
 	unsigned char sha1[20];
 	unsigned long hdrlen, deltalen;
-	SHA_CTX c;
+	git_SHA_CTX c;
 	z_stream s;
 
 	hdrlen = sprintf((char*)hdr,"%s %lu", typename(type),
 		(unsigned long)dat->len) + 1;
-	SHA1_Init(&c);
-	SHA1_Update(&c, hdr, hdrlen);
-	SHA1_Update(&c, dat->buf, dat->len);
-	SHA1_Final(sha1, &c);
+	git_SHA1_Init(&c);
+	git_SHA1_Update(&c, hdr, hdrlen);
+	git_SHA1_Update(&c, dat->buf, dat->len);
+	git_SHA1_Final(sha1, &c);
 	if (sha1out)
 		hashcpy(sha1out, sha1);
 
@@ -1747,9 +1748,12 @@ static int validate_raw_date(const char *src, char *result, int maxlen)
 {
 	const char *orig_src = src;
 	char *endp, sign;
+	unsigned long date;
 
-	strtoul(src, &endp, 10);
-	if (endp == src || *endp != ' ')
+	errno = 0;
+
+	date = strtoul(src, &endp, 10);
+	if (errno || endp == src || *endp != ' ')
 		return -1;
 
 	src = endp + 1;
@@ -1757,8 +1761,8 @@ static int validate_raw_date(const char *src, char *result, int maxlen)
 		return -1;
 	sign = *src;
 
-	strtoul(src + 1, &endp, 10);
-	if (endp == src || *endp || (endp - orig_src) >= maxlen)
+	date = strtoul(src + 1, &endp, 10);
+	if (errno || endp == src || *endp || (endp - orig_src) >= maxlen)
 		return -1;
 
 	strcpy(result, orig_src);

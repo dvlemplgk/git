@@ -26,6 +26,7 @@ i,interactive      always used (no-op)
 continue           continue rebasing process
 abort              abort rebasing process and restore original branch
 skip               skip current patch and continue rebasing process
+no-verify          override pre-rebase hook from stopping the operation
 "
 
 . git-sh-setup
@@ -37,10 +38,12 @@ DONE="$DOTEST"/done
 MSG="$DOTEST"/message
 SQUASH_MSG="$DOTEST"/message-squash
 REWRITTEN="$DOTEST"/rewritten
+DROPPED="$DOTEST"/dropped
 PRESERVE_MERGES=
 STRATEGY=
 ONTO=
 VERBOSE=
+OK_TO_SKIP_PRE_REBASE=
 
 GIT_CHERRY_PICK_HELP="  After resolving the conflicts,
 mark the corrected paths with 'git add <paths>', and
@@ -66,7 +69,8 @@ output () {
 }
 
 run_pre_rebase_hook () {
-	if test -x "$GIT_DIR/hooks/pre-rebase"
+	if test -z "$OK_TO_SKIP_PRE_REBASE" &&
+	   test -x "$GIT_DIR/hooks/pre-rebase"
 	then
 		"$GIT_DIR/hooks/pre-rebase" ${1+"$@"} || {
 			echo >&2 "The pre-rebase hook refused to rebase."
@@ -111,9 +115,18 @@ mark_action_done () {
 }
 
 make_patch () {
-	parent_sha1=$(git rev-parse --verify "$1"^) ||
-		die "Cannot get patch for $1^"
-	git diff-tree -p "$parent_sha1".."$1" > "$DOTEST"/patch
+	sha1_and_parents="$(git rev-list --parents -1 "$1")"
+	case "$sha1_and_parents" in
+	?*' '?*' '?*)
+		git diff --cc $sha1_and_parents
+		;;
+	?*' '?*)
+		git diff-tree -p "$1^!"
+		;;
+	*)
+		echo "Root commit"
+		;;
+	esac > "$DOTEST"/patch
 	test -f "$DOTEST"/message ||
 		git cat-file commit "$1" | sed "1,/^$/d" > "$DOTEST"/message
 	test -f "$DOTEST"/author-script ||
@@ -169,21 +182,39 @@ pick_one_preserving_merges () {
 
 	if test -f "$DOTEST"/current-commit
 	then
-		current_commit=$(cat "$DOTEST"/current-commit) &&
-		git rev-parse HEAD > "$REWRITTEN"/$current_commit &&
-		rm "$DOTEST"/current-commit ||
-		die "Cannot write current commit's replacement sha1"
+		if test "$fast_forward" = t
+		then
+			cat "$DOTEST"/current-commit | while read current_commit
+			do
+				git rev-parse HEAD > "$REWRITTEN"/$current_commit
+			done
+			rm "$DOTEST"/current-commit ||
+			die "Cannot write current commit's replacement sha1"
+		fi
 	fi
 
-	echo $sha1 > "$DOTEST"/current-commit
+	echo $sha1 >> "$DOTEST"/current-commit
 
 	# rewrite parents; if none were rewritten, we can fast-forward.
 	new_parents=
-	for p in $(git rev-list --parents -1 $sha1 | cut -d' ' -f2-)
+	pend=" $(git rev-list --parents -1 $sha1 | cut -d' ' -f2-)"
+	while [ "$pend" != "" ]
 	do
+		p=$(expr "$pend" : ' \([^ ]*\)')
+		pend="${pend# $p}"
+
 		if test -f "$REWRITTEN"/$p
 		then
 			new_p=$(cat "$REWRITTEN"/$p)
+
+			# If the todo reordered commits, and our parent is marked for
+			# rewriting, but hasn't been gotten to yet, assume the user meant to
+			# drop it on top of the current HEAD
+			if test -z "$new_p"
+			then
+				new_p=$(git rev-parse HEAD)
+			fi
+
 			test $p != $new_p && fast_forward=f
 			case "$new_parents" in
 			*$new_p*)
@@ -193,7 +224,13 @@ pick_one_preserving_merges () {
 				;;
 			esac
 		else
-			new_parents="$new_parents $p"
+			if test -f "$DROPPED"/$p
+			then
+				fast_forward=f
+				pend=" $(cat "$DROPPED"/$p)$pend"
+			else
+				new_parents="$new_parents $p"
+			fi
 		fi
 	done
 	case $fast_forward in
@@ -203,15 +240,19 @@ pick_one_preserving_merges () {
 			die "Cannot fast forward to $sha1"
 		;;
 	f)
-		test "a$1" = a-n && die "Refusing to squash a merge: $sha1"
-
 		first_parent=$(expr "$new_parents" : ' \([^ ]*\)')
-		# detach HEAD to current parent
-		output git checkout $first_parent 2> /dev/null ||
-			die "Cannot move HEAD to $first_parent"
+
+		if [ "$1" != "-n" ]
+		then
+			# detach HEAD to current parent
+			output git checkout $first_parent 2> /dev/null ||
+				die "Cannot move HEAD to $first_parent"
+		fi
 
 		case "$new_parents" in
 		' '*' '*)
+			test "a$1" = a-n && die "Refusing to squash a merge: $sha1"
+
 			# redo merge
 			author_script=$(get_author_ident_from_commit $sha1)
 			eval "$author_script"
@@ -224,9 +265,8 @@ pick_one_preserving_merges () {
 				output git merge $STRATEGY -m "$msg" \
 					$new_parents
 			then
-				git rerere
 				printf "%s\n" "$msg" > "$GIT_DIR"/MERGE_MSG
-				die Error redoing merge $sha1
+				die_with_patch $sha1 "Error redoing merge $sha1"
 			fi
 			;;
 		*)
@@ -365,20 +405,7 @@ do_next () {
 	HEADNAME=$(cat "$DOTEST"/head-name) &&
 	OLDHEAD=$(cat "$DOTEST"/head) &&
 	SHORTONTO=$(git rev-parse --short $(cat "$DOTEST"/onto)) &&
-	if test -d "$REWRITTEN"
-	then
-		test -f "$DOTEST"/current-commit &&
-			current_commit=$(cat "$DOTEST"/current-commit) &&
-			git rev-parse HEAD > "$REWRITTEN"/$current_commit
-		if test -f "$REWRITTEN"/$OLDHEAD
-		then
-			NEWHEAD=$(cat "$REWRITTEN"/$OLDHEAD)
-		else
-			NEWHEAD=$OLDHEAD
-		fi
-	else
-		NEWHEAD=$(git rev-parse HEAD)
-	fi &&
+	NEWHEAD=$(git rev-parse HEAD) &&
 	case $HEADNAME in
 	refs/*)
 		message="$GIT_REFLOG_ACTION: $HEADNAME onto $SHORTONTO)" &&
@@ -421,6 +448,11 @@ get_saved_options () {
 while test $# != 0
 do
 	case "$1" in
+	--no-verify)
+		OK_TO_SKIP_PRE_REBASE=yes
+		;;
+	--verify)
+		;;
 	--continue)
 		is_standalone "$@" || usage
 		get_saved_options
@@ -572,18 +604,69 @@ first and then run 'git rebase --continue' again."
 				echo $ONTO > "$REWRITTEN"/$c ||
 					die "Could not init rewritten commits"
 			done
+			# No cherry-pick because our first pass is to determine
+			# parents to rewrite and skipping dropped commits would
+			# prematurely end our probe
 			MERGES_OPTION=
+			first_after_upstream="$(git rev-list --reverse --first-parent $UPSTREAM..$HEAD | head -n 1)"
 		else
-			MERGES_OPTION=--no-merges
+			MERGES_OPTION="--no-merges --cherry-pick"
 		fi
 
 		SHORTUPSTREAM=$(git rev-parse --short $UPSTREAM)
 		SHORTHEAD=$(git rev-parse --short $HEAD)
 		SHORTONTO=$(git rev-parse --short $ONTO)
 		git rev-list $MERGES_OPTION --pretty=oneline --abbrev-commit \
-			--abbrev=7 --reverse --left-right --cherry-pick \
+			--abbrev=7 --reverse --left-right --topo-order \
 			$UPSTREAM...$HEAD | \
-			sed -n "s/^>/pick /p" > "$TODO"
+			sed -n "s/^>//p" | while read shortsha1 rest
+		do
+			if test t != "$PRESERVE_MERGES"
+			then
+				echo "pick $shortsha1 $rest" >> "$TODO"
+			else
+				sha1=$(git rev-parse $shortsha1)
+				preserve=t
+				for p in $(git rev-list --parents -1 $sha1 | cut -d' ' -f2-)
+				do
+					if test -f "$REWRITTEN"/$p -a \( $p != $UPSTREAM -o $sha1 = $first_after_upstream \)
+					then
+						preserve=f
+					fi
+				done
+				if test f = "$preserve"
+				then
+					touch "$REWRITTEN"/$sha1
+					echo "pick $shortsha1 $rest" >> "$TODO"
+				fi
+			fi
+		done
+
+		# Watch for commits that been dropped by --cherry-pick
+		if test t = "$PRESERVE_MERGES"
+		then
+			mkdir "$DROPPED"
+			# Save all non-cherry-picked changes
+			git rev-list $UPSTREAM...$HEAD --left-right --cherry-pick | \
+				sed -n "s/^>//p" > "$DOTEST"/not-cherry-picks
+			# Now all commits and note which ones are missing in
+			# not-cherry-picks and hence being dropped
+			git rev-list $UPSTREAM..$HEAD |
+			while read rev
+			do
+				if test -f "$REWRITTEN"/$rev -a "$(grep "$rev" "$DOTEST"/not-cherry-picks)" = ""
+				then
+					# Use -f2 because if rev-list is telling us this commit is
+					# not worthwhile, we don't want to track its multiple heads,
+					# just the history of its first-parent for others that will
+					# be rebasing on top of it
+					git rev-list --parents -1 $rev | cut -d' ' -f2 > "$DROPPED"/$rev
+					short=$(git rev-list -1 --abbrev-commit --abbrev=7 $rev)
+					grep -v "^[a-z][a-z]* $short" <"$TODO" > "${TODO}2" ; mv "${TODO}2" "$TODO"
+					rm "$REWRITTEN"/$rev
+				fi
+			done
+		fi
 		test -s "$TODO" || echo noop >> "$TODO"
 		cat >> "$TODO" << EOF
 

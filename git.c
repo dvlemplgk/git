@@ -195,8 +195,8 @@ static int handle_alias(int *argcp, const char ***argv)
 		ret = 1;
 	}
 
-	if (subdir)
-		chdir(subdir);
+	if (subdir && chdir(subdir))
+		die("Cannot change to %s: %s", subdir, strerror(errno));
 
 	errno = saved_errno;
 
@@ -266,6 +266,7 @@ static void handle_internal_command(int argc, const char **argv)
 	const char *cmd = argv[0];
 	static struct cmd_struct commands[] = {
 		{ "add", cmd_add, RUN_SETUP | NEED_WORK_TREE },
+		{ "stage", cmd_add, RUN_SETUP | NEED_WORK_TREE },
 		{ "annotate", cmd_annotate, RUN_SETUP },
 		{ "apply", cmd_apply },
 		{ "archive", cmd_archive },
@@ -330,6 +331,7 @@ static void handle_internal_command(int argc, const char **argv)
 		{ "prune-packed", cmd_prune_packed, RUN_SETUP },
 		{ "push", cmd_push, RUN_SETUP },
 		{ "read-tree", cmd_read_tree, RUN_SETUP },
+		{ "receive-pack", cmd_receive_pack },
 		{ "reflog", cmd_reflog, RUN_SETUP },
 		{ "remote", cmd_remote, RUN_SETUP },
 		{ "repo-config", cmd_config },
@@ -366,7 +368,7 @@ static void handle_internal_command(int argc, const char **argv)
 	if (sizeof(ext) > 1) {
 		i = strlen(argv[0]) - strlen(ext);
 		if (i > 0 && !strcmp(argv[0] + i, ext)) {
-			char *argv0 = strdup(argv[0]);
+			char *argv0 = xstrdup(argv[0]);
 			argv[0] = cmd = argv0;
 			argv0[i] = '\0';
 		}
@@ -388,10 +390,9 @@ static void handle_internal_command(int argc, const char **argv)
 
 static void execv_dashed_external(const char **argv)
 {
-	struct strbuf cmd;
+	struct strbuf cmd = STRBUF_INIT;
 	const char *tmp;
 
-	strbuf_init(&cmd, 0);
 	strbuf_addf(&cmd, "git-%s", argv[0]);
 
 	/*
@@ -501,7 +502,9 @@ int main(int argc, const char **argv)
 				cmd, argv[0]);
 			exit(1);
 		}
-		help_unknown_cmd(cmd);
+		argv[0] = help_unknown_cmd(cmd);
+		handle_internal_command(argc, argv);
+		execv_dashed_external(argv);
 	}
 
 	fprintf(stderr, "Failed to run command '%s': %s\n",

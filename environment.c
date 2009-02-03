@@ -43,6 +43,9 @@ unsigned whitespace_rule_cfg = WS_DEFAULT_RULE;
 enum branch_track git_branch_track = BRANCH_TRACK_REMOTE;
 enum rebase_setup_type autorebase = AUTOREBASE_NEVER;
 
+/* Parallel index stat data preload? */
+int core_preload_index = 0;
+
 /* This is set by setup_git_dir_gently() and/or git_default_config() */
 char *git_work_tree_cfg;
 static char *work_tree;
@@ -78,6 +81,11 @@ int is_bare_repository(void)
 {
 	/* if core.bare is not 'false', let's see if there is a work tree */
 	return is_bare_repository_cfg && !get_git_work_tree();
+}
+
+int have_git_dir(void)
+{
+	return !!git_dir;
 }
 
 const char *get_git_dir(void)

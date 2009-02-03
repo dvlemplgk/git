@@ -540,7 +540,7 @@ static int get_pack(int xd[2], char **pack_lockfile)
 			*av++ = "--fix-thin";
 		if (args.lock_pack || unpack_limit) {
 			int s = sprintf(keep_arg,
-					"--keep=fetch-pack %d on ", getpid());
+					"--keep=fetch-pack %"PRIuMAX " on ", (uintmax_t) getpid());
 			if (gethostname(keep_arg + s, sizeof(keep_arg) - s))
 				strcpy(keep_arg + s, "localhost");
 			*av++ = keep_arg;
@@ -735,7 +735,7 @@ int cmd_fetch_pack(int argc, const char **argv, const char *prefix)
 	conn = git_connect(fd, (char *)dest, args.uploadpack,
 			   args.verbose ? CONNECT_VERBOSE : 0);
 	if (conn) {
-		get_remote_heads(fd[0], &ref, 0, NULL, 0);
+		get_remote_heads(fd[0], &ref, 0, NULL, 0, NULL);
 
 		ref = fetch_pack(&args, fd, conn, ref, dest, nr_heads, heads, NULL);
 		close(fd[0]);
