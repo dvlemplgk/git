@@ -1253,8 +1253,9 @@ static char *inflate_it(const void *data, unsigned long size,
 	stream.avail_in = size;
 	stream.next_out = out = xmalloc(inflated_size);
 	stream.avail_out = inflated_size;
-	inflateInit(&stream);
-	st = inflate(&stream, Z_FINISH);
+	git_inflate_init(&stream);
+	st = git_inflate(&stream, Z_FINISH);
+	git_inflate_end(&stream);
 	if ((st != Z_STREAM_END) || stream.total_out != inflated_size) {
 		free(out);
 		return NULL;
@@ -2435,7 +2436,7 @@ static int check_preimage(struct patch *patch, struct cache_entry **ce, struct s
 		return error("%s: %s", old_name, strerror(errno));
 	}
 
-	if (!cached)
+	if (!cached && !tpatch)
 		st_mode = ce_mode_from_stat(*ce, st->st_mode);
 
 	if (patch->is_new < 0)
@@ -2447,7 +2448,7 @@ static int check_preimage(struct patch *patch, struct cache_entry **ce, struct s
 	if (st_mode != patch->old_mode)
 		fprintf(stderr, "warning: %s has type %o, expected %o\n",
 			old_name, st_mode, patch->old_mode);
-	if (!patch->new_mode)
+	if (!patch->new_mode && !patch->is_delete)
 		patch->new_mode = st_mode;
 	return 0;
 
