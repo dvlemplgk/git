@@ -50,7 +50,16 @@ static void cmd_log_init(int argc, const char **argv, const char *prefix,
 	if (default_date_mode)
 		rev->date_mode = parse_date_format(default_date_mode);
 
+	/*
+	 * Check for -h before setup_revisions(), or "git log -h" will
+	 * fail when run without a git directory.
+	 */
+	if (argc == 2 && !strcmp(argv[1], "-h"))
+		usage(builtin_log_usage);
 	argc = setup_revisions(argc, argv, rev, "HEAD");
+
+	if (!rev->show_notes_given && !rev->pretty_given)
+		rev->show_notes = 1;
 
 	if (rev->diffopt.pickaxe || rev->diffopt.filter)
 		rev->always_show_header = 0;
@@ -921,10 +930,11 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 			    PARSE_OPT_NOARG | PARSE_OPT_NONEG, keep_callback },
 		OPT_BOOLEAN(0, "no-binary", &no_binary_diff,
 			    "don't output binary diffs"),
-		OPT_BOOLEAN('p', NULL, &use_patch_format,
-			"show patch format instead of default (patch + stat)"),
 		OPT_BOOLEAN(0, "ignore-if-in-upstream", &ignore_if_in_upstream,
 			    "don't include a patch matching a commit upstream"),
+		{ OPTION_BOOLEAN, 'p', "no-stat", &use_patch_format, NULL,
+		  "show patch format instead of default (patch + stat)",
+		  PARSE_OPT_NONEG | PARSE_OPT_NOARG },
 		OPT_GROUP("Messaging"),
 		{ OPTION_CALLBACK, 0, "add-header", NULL, "header",
 			    "add email header", PARSE_OPT_NONEG,
@@ -1031,11 +1041,20 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 	if (argc > 1)
 		die ("unrecognized argument: %s", argv[1]);
 
-	if (use_patch_format)
-		rev.diffopt.output_format |= DIFF_FORMAT_PATCH;
-	else if (!rev.diffopt.output_format ||
-		  rev.diffopt.output_format == DIFF_FORMAT_PATCH)
-		rev.diffopt.output_format = DIFF_FORMAT_DIFFSTAT | DIFF_FORMAT_SUMMARY | DIFF_FORMAT_PATCH;
+	if (rev.diffopt.output_format & DIFF_FORMAT_NAME)
+		die("--name-only does not make sense");
+	if (rev.diffopt.output_format & DIFF_FORMAT_NAME_STATUS)
+		die("--name-status does not make sense");
+	if (rev.diffopt.output_format & DIFF_FORMAT_CHECKDIFF)
+		die("--check does not make sense");
+
+	if (!use_patch_format &&
+		(!rev.diffopt.output_format ||
+		 rev.diffopt.output_format == DIFF_FORMAT_PATCH))
+		rev.diffopt.output_format = DIFF_FORMAT_DIFFSTAT | DIFF_FORMAT_SUMMARY;
+
+	/* Always generate a patch */
+	rev.diffopt.output_format |= DIFF_FORMAT_PATCH;
 
 	if (!DIFF_OPT_TST(&rev.diffopt, TEXT) && !no_binary_diff)
 		DIFF_OPT_SET(&rev.diffopt, BINARY);
@@ -1243,6 +1262,9 @@ int cmd_cherry(int argc, const char **argv, const char *prefix)
 		argv++;
 	}
 
+	if (argc > 1 && !strcmp(argv[1], "-h"))
+		usage(cherry_usage);
+
 	switch (argc) {
 	case 4:
 		limit = argv[3];
@@ -1310,8 +1332,9 @@ int cmd_cherry(int argc, const char **argv, const char *prefix)
 
 		if (verbose) {
 			struct strbuf buf = STRBUF_INIT;
+			struct pretty_print_context ctx = {0};
 			pretty_print_commit(CMIT_FMT_ONELINE, commit,
-			                    &buf, 0, NULL, NULL, 0, 0);
+					    &buf, &ctx);
 			printf("%c %s %s\n", sign,
 			       sha1_to_hex(commit->object.sha1), buf.buf);
 			strbuf_release(&buf);

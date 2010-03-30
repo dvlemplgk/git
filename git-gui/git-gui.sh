@@ -745,6 +745,8 @@ set default_config(gui.newbranchtemplate) {}
 set default_config(gui.spellingdictionary) {}
 set default_config(gui.fontui) [font configure font_ui]
 set default_config(gui.fontdiff) [font configure font_diff]
+# TODO: this option should be added to the git-config documentation
+set default_config(gui.maxfilesdisplayed) 5000
 set font_descs {
 	{fontui   font_ui   {mc "Main Font"}}
 	{fontdiff font_diff {mc "Diff/Console Font"}}
@@ -1072,6 +1074,8 @@ if {[catch {
 		set _prefix {}
 		}]
 	&& [catch {
+		# beware that from the .git dir this sets _gitdir to .
+		# and _prefix to the empty string
 		set _gitdir [git rev-parse --git-dir]
 		set _prefix [git rev-parse --show-prefix]
 	} err]} {
@@ -1080,6 +1084,14 @@ if {[catch {
 	choose_repository::pick
 	set picked 1
 }
+
+# we expand the _gitdir when it's just a single dot (i.e. when we're being
+# run from the .git dir itself) lest the routines to find the worktree
+# get confused
+if {$_gitdir eq "."} {
+	set _gitdir [pwd]
+}
+
 if {![file isdirectory $_gitdir] && [is_Cygwin]} {
 	catch {set _gitdir [exec cygpath --windows $_gitdir]}
 }
@@ -1132,6 +1144,7 @@ set current_branch {}
 set is_detached 0
 set current_diff_path {}
 set is_3way_diff 0
+set is_submodule_diff 0
 set is_conflict_diff 0
 set selected_commit_type new
 set diff_empty_count 0
@@ -1610,6 +1623,9 @@ proc merge_state {path new_state {head_info {}} {index_info {}}} {
 	} elseif {$s0 ne {_} && [string index $state 0] eq {_}
 		&& $head_info eq {}} {
 		set head_info $index_info
+	} elseif {$s0 eq {_} && [string index $state 0] ne {_}} {
+		set index_info $head_info
+		set head_info {}
 	}
 
 	set file_states($path) [list $s0$s1 $icon \
@@ -1698,10 +1714,12 @@ proc display_all_files_helper {w path icon_name m} {
 	$w insert end "[escape_path $path]\n"
 }
 
+set files_warning 0
 proc display_all_files {} {
 	global ui_index ui_workdir
 	global file_states file_lists
 	global last_clicked
+	global files_warning
 
 	$ui_index conf -state normal
 	$ui_workdir conf -state normal
@@ -1713,7 +1731,18 @@ proc display_all_files {} {
 	set file_lists($ui_index) [list]
 	set file_lists($ui_workdir) [list]
 
-	foreach path [lsort [array names file_states]] {
+	set to_display [lsort [array names file_states]]
+	set display_limit [get_config gui.maxfilesdisplayed]
+	if {[llength $to_display] > $display_limit} {
+		if {!$files_warning} {
+			# do not repeatedly warn:
+			set files_warning 1
+			info_popup [mc "Displaying only %s of %s files." \
+				$display_limit [llength $to_display]]
+		}
+		set to_display [lrange $to_display 0 [expr {$display_limit-1}]]
+	}
+	foreach path $to_display {
 		set s $file_states($path)
 		set m [lindex $s 0]
 		set icon_name [lindex $s 1]
@@ -1925,7 +1954,7 @@ proc do_gitk {revs} {
 		cd [file dirname [gitdir]]
 		set env(GIT_DIR) [file tail [gitdir]]
 
-		eval exec $cmd $revs &
+		eval exec $cmd $revs "--" "--" &
 
 		if {$old_GIT_DIR eq {}} {
 			unset env(GIT_DIR)
@@ -2010,6 +2039,19 @@ proc do_quit {{rc {1}}} {
 
 		# -- Stash our current window geometry into this repository.
 		#
+		set cfg_wmstate [wm state .]
+		if {[catch {set rc_wmstate $repo_config(gui.wmstate)}]} {
+			set rc_wmstate {}
+		}
+		if {$cfg_wmstate ne $rc_wmstate} {
+			catch {git config gui.wmstate $cfg_wmstate}
+		}
+		if {$cfg_wmstate eq {zoomed}} {
+			# on Windows wm geometry will lie about window
+			# position (but not size) when window is zoomed
+			# restore the window before querying wm geometry
+			wm state . normal
+		}
 		set cfg_geometry [list]
 		lappend cfg_geometry [wm geometry .]
 		lappend cfg_geometry [lindex [.vpane sash coord 0] 0]
@@ -2023,6 +2065,11 @@ proc do_quit {{rc {1}}} {
 	}
 
 	set ret_code $rc
+
+	# Briefly enable send again, working around Tk bug
+	# http://sourceforge.net/tracker/?func=detail&atid=112997&aid=1821174&group_id=12997
+	tk appname [appname]
+
 	destroy .
 }
 
@@ -2509,12 +2556,14 @@ if {[is_enabled multicommit] || [is_enabled singlecommit]} {
 		[list .mbar.commit entryconf [.mbar.commit index last] -state]
 
 	.mbar.commit add command -label [mc "Unstage From Commit"] \
-		-command do_unstage_selection
+		-command do_unstage_selection \
+		-accelerator $M1T-U
 	lappend disable_on_lock \
 		[list .mbar.commit entryconf [.mbar.commit index last] -state]
 
 	.mbar.commit add command -label [mc "Revert Changes"] \
-		-command do_revert_selection
+		-command do_revert_selection \
+		-accelerator $M1T-J
 	lappend disable_on_lock \
 		[list .mbar.commit entryconf [.mbar.commit index last] -state]
 
@@ -3054,7 +3103,7 @@ frame .vpane.lower.diff.body
 set ui_diff .vpane.lower.diff.body.t
 text $ui_diff -background white -foreground black \
 	-borderwidth 0 \
-	-width 80 -height 15 -wrap none \
+	-width 80 -height 5 -wrap none \
 	-font font_diff \
 	-xscrollcommand {.vpane.lower.diff.body.sbx set} \
 	-yscrollcommand {.vpane.lower.diff.body.sby set} \
@@ -3212,7 +3261,7 @@ proc popup_diff_menu {ctxm ctxmmg x y X Y} {
 			set l [mc "Stage Hunk For Commit"]
 			set t [mc "Stage Line For Commit"]
 		}
-		if {$::is_3way_diff
+		if {$::is_3way_diff || $::is_submodule_diff
 			|| $current_diff_path eq {}
 			|| {__} eq $state
 			|| {_O} eq $state
@@ -3249,11 +3298,23 @@ wm geometry . [lindex $gm 0]
 unset gm
 }
 
+# -- Load window state
+#
+catch {
+set gws $repo_config(gui.wmstate)
+wm state . $gws
+unset gws
+}
+
 # -- Key Bindings
 #
 bind $ui_comm <$M1B-Key-Return> {do_commit;break}
 bind $ui_comm <$M1B-Key-t> {do_add_selection;break}
 bind $ui_comm <$M1B-Key-T> {do_add_selection;break}
+bind $ui_comm <$M1B-Key-u> {do_unstage_selection;break}
+bind $ui_comm <$M1B-Key-U> {do_unstage_selection;break}
+bind $ui_comm <$M1B-Key-j> {do_revert_selection;break}
+bind $ui_comm <$M1B-Key-J> {do_revert_selection;break}
 bind $ui_comm <$M1B-Key-i> {do_add_all;break}
 bind $ui_comm <$M1B-Key-I> {do_add_all;break}
 bind $ui_comm <$M1B-Key-x> {tk_textCut %W;break}

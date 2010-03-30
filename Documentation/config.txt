@@ -135,7 +135,11 @@ advice.*::
 core.fileMode::
 	If false, the executable bit differences between the index and
 	the working copy are ignored; useful on broken filesystems like FAT.
-	See linkgit:git-update-index[1]. True by default.
+	See linkgit:git-update-index[1].
++
+The default is true, except linkgit:git-clone[1] or linkgit:git-init[1]
+will probe and set core.fileMode false if appropriate when the
+repository is created.
 
 core.ignoreCygwinFSTricks::
 	This option is only used by Cygwin implementation of Git. If false,
@@ -147,6 +151,18 @@ core.ignoreCygwinFSTricks::
 	normal Cygwin l/stat() functions. True by default, unless core.filemode
 	is true, in which case ignoreCygwinFSTricks is ignored as Cygwin's
 	POSIX emulation is required to support core.filemode.
+
+core.ignorecase::
+	If true, this option enables various workarounds to enable
+	git to work better on filesystems that are not case sensitive,
+	like FAT. For example, if a directory listing finds
+	"makefile" when git expects "Makefile", git will assume
+	it is really the same file, and continue to remember it as
+	"Makefile".
++
+The default is false, except linkgit:git-clone[1] or linkgit:git-init[1]
+will probe and set core.ignorecase true if appropriate when the repository
+is created.
 
 core.trustctime::
 	If false, the ctime differences between the index and the
@@ -228,7 +244,11 @@ core.symlinks::
 	contain the link text. linkgit:git-update-index[1] and
 	linkgit:git-add[1] will not change the recorded type to regular
 	file. Useful on filesystems like FAT that do not support
-	symbolic links. True by default.
+	symbolic links.
++
+The default is true, except linkgit:git-clone[1] or linkgit:git-init[1]
+will probe and set core.symlinks false if appropriate when the repository
+is created.
 
 core.gitProxy::
 	A "proxy command" to execute (as 'command host port') instead
@@ -277,17 +297,24 @@ false), while all other repositories are assumed to be bare (bare
 = true).
 
 core.worktree::
-	Set the path to the working tree.  The value will not be
-	used in combination with repositories found automatically in
-	a .git directory (i.e. $GIT_DIR is not set).
+	Set the path to the root of the work tree.
 	This can be overridden by the GIT_WORK_TREE environment
 	variable and the '--work-tree' command line option. It can be
-	a absolute path or relative path to the directory specified by
-	--git-dir or GIT_DIR.
-	Note: If --git-dir or GIT_DIR are specified but none of
+	an absolute path or a relative path to the .git directory,
+	either specified by --git-dir or GIT_DIR, or automatically
+	discovered.
+	If --git-dir or GIT_DIR are specified but none of
 	--work-tree, GIT_WORK_TREE and core.worktree is specified,
-	the current working directory is regarded as the top directory
-	of your working tree.
+	the current working directory is regarded as the root of the
+	work tree.
++
+Note that this variable is honored even when set in a configuration
+file in a ".git" subdirectory of a directory, and its value differs
+from the latter directory (e.g. "/path/to/.git/config" has
+core.worktree set to "/different/path"), which is most likely a
+misconfiguration.  Running git commands in "/path/to" directory will
+still use "/different/path" as the root of the work tree and can cause
+great confusion to the users.
 
 core.logAllRefUpdates::
 	Enable the reflog. Updates to a ref <ref> is logged to the file
@@ -382,6 +409,20 @@ You probably do not need to adjust this value.
 +
 Common unit suffixes of 'k', 'm', or 'g' are supported.
 
+core.bigFileThreshold::
+	Files larger than this size are stored deflated, without
+	attempting delta compression.  Storing large files without
+	delta compression avoids excessive memory usage, at the
+	slight expense of increased disk usage.
++
+Default is 512 MiB on all platforms.  This should be reasonable
+for most projects as source code and other text files can still
+be delta compressed, but larger binary media files won't be.
++
+Common unit suffixes of 'k', 'm', or 'g' are supported.
++
+Currently only linkgit:git-fast-import[1] honors this setting.
+
 core.excludesfile::
 	In addition to '.gitignore' (per-directory) and
 	'.git/info/exclude', git looks into this file for patterns
@@ -393,9 +434,7 @@ core.editor::
 	Commands such as `commit` and `tag` that lets you edit
 	messages by launching an editor uses the value of this
 	variable when it is set, and the environment variable
-	`GIT_EDITOR` is not set.  The order of preference is
-	`GIT_EDITOR` environment, `core.editor`, `VISUAL` and
-	`EDITOR` environment variables and then finally `vi`.
+	`GIT_EDITOR` is not set.  See linkgit:git-var[1].
 
 core.pager::
 	The command that git will use to paginate output.  Can
@@ -464,6 +503,19 @@ On some file system/operating system combinations, this is unreliable.
 Set this config setting to 'rename' there; However, This will remove the
 check that makes sure that existing object files will not get overwritten.
 
+core.notesRef::
+	When showing commit messages, also show notes which are stored in
+	the given ref.  This ref is expected to contain files named
+	after the full SHA-1 of the commit they annotate.
++
+If such a file exists in the given ref, the referenced blob is read, and
+appended to the commit message, separated by a "Notes:" line.  If the
+given ref itself does not exist, it is not an error, but means that no
+notes should be printed.
++
+This setting defaults to "refs/notes/commits", and can be overridden by
+the `GIT_NOTES_REF` environment variable.
+
 add.ignore-errors::
 	Tells 'git-add' to continue adding files when some files cannot be
 	added due to indexing errors. Equivalent to the '--ignore-errors'
@@ -499,7 +551,7 @@ apply.whitespace::
 	as the '--whitespace' option. See linkgit:git-apply[1].
 
 branch.autosetupmerge::
-	Tells 'git-branch' and 'git-checkout' to setup new branches
+	Tells 'git-branch' and 'git-checkout' to set up new branches
 	so that linkgit:git-pull[1] will appropriately merge from the
 	starting point branch. Note that even if this option is not set,
 	this behavior can be chosen per-branch using the `--track`
@@ -604,10 +656,10 @@ color.diff.<slot>::
 	Use customized color for diff colorization.  `<slot>` specifies
 	which part of the patch to use the specified color, and is one
 	of `plain` (context text), `meta` (metainformation), `frag`
-	(hunk header), `old` (removed lines), `new` (added lines),
-	`commit` (commit headers), or `whitespace` (highlighting
-	whitespace errors). The values of these variables may be specified as
-	in color.branch.<slot>.
+	(hunk header), 'func' (function in hunk header), `old` (removed lines),
+	`new` (added lines), `commit` (commit headers), or `whitespace`
+	(highlighting whitespace errors). The values of these variables may be
+	specified as in color.branch.<slot>.
 
 color.grep::
 	When set to `always`, always highlight matches.  When `false` (or
@@ -687,7 +739,7 @@ diff.autorefreshindex::
 	contents in the work tree match the contents in the
 	index.  This option defaults to true.  Note that this
 	affects only 'git-diff' Porcelain, and not lower level
-	'diff' commands, such as 'git-diff-files'.
+	'diff' commands such as 'git-diff-files'.
 
 diff.external::
 	If this config variable is set, diff generation is not
@@ -803,8 +855,8 @@ format.pretty::
 
 format.thread::
 	The default threading style for 'git-format-patch'.  Can be
-	either a boolean value, `shallow` or `deep`.  `shallow`
-	threading makes every mail a reply to the head of the series,
+	a boolean value, or `shallow` or `deep`.  `shallow` threading
+	makes every mail a reply to the head of the series,
 	where the head is chosen from the cover letter, the
 	`\--in-reply-to`, and the first patch mail, in this order.
 	`deep` threading makes every mail a reply to the previous one.
@@ -837,15 +889,12 @@ gc.autopacklimit::
 	default	value is 50.  Setting this to 0 disables it.
 
 gc.packrefs::
-	'git-gc' does not run `git pack-refs` in a bare repository by
-	default so that older dumb-transport clients can still fetch
-	from the repository.  Setting this to `true` lets 'git-gc'
-	to run `git pack-refs`.  Setting this to `false` tells
-	'git-gc' never to run `git pack-refs`. The default setting is
-	`notbare`. Enable it only when you know you do not have to
-	support such clients.  The default setting will change to `true`
-	at some stage, and setting this to `false` will continue to
-	prevent `git pack-refs` from being run from 'git-gc'.
+	Running `git pack-refs` in a repository renders it
+	unclonable by Git versions prior to 1.5.1.2 over dumb
+	transports such as HTTP.  This variable determines whether
+	'git gc' runs `git pack-refs`. This can be set to "nobare"
+	to enable it within all non-bare repos or it can be set to a
+	boolean value.  The default is `true`.
 
 gc.pruneexpire::
 	When 'git-gc' is run, it will call 'prune --expire 2.weeks.ago'.
@@ -1100,6 +1149,14 @@ http.sslCAPath::
 http.maxRequests::
 	How many HTTP requests to launch in parallel. Can be overridden
 	by the 'GIT_HTTP_MAX_REQUESTS' environment variable. Default is 5.
+
+http.postBuffer::
+	Maximum size in bytes of the buffer used by smart HTTP
+	transports when POSTing data to the remote system.
+	For requests larger than this buffer size, HTTP/1.1 and
+	Transfer-Encoding: chunked is used to avoid creating a
+	massive pack file locally.  Default is 1 MiB, which is
+	sufficient for most requests.
 
 http.lowSpeedLimit, http.lowSpeedTime::
 	If the HTTP transfer speed is less than 'http.lowSpeedLimit'
@@ -1368,7 +1425,7 @@ receive.denyCurrentBranch::
 
 receive.denyNonFastForwards::
 	If set to true, git-receive-pack will deny a ref update which is
-	not a fast forward. Use this to prevent such an update via a push,
+	not a fast-forward. Use this to prevent such an update via a push,
 	even if that push is forced. This configuration variable is
 	set when initializing a shared repository.
 
@@ -1402,7 +1459,13 @@ remote.<name>.mirror::
 
 remote.<name>.skipDefaultUpdate::
 	If true, this remote will be skipped by default when updating
-	using the update subcommand of linkgit:git-remote[1].
+	using linkgit:git-fetch[1] or the `update` subcommand of
+	linkgit:git-remote[1].
+
+remote.<name>.skipFetchAll::
+	If true, this remote will be skipped by default when updating
+	using linkgit:git-fetch[1] or the `update` subcommand of
+	linkgit:git-remote[1].
 
 remote.<name>.receivepack::
 	The default program to execute on the remote side when pushing.  See

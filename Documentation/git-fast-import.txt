@@ -50,6 +50,12 @@ OPTIONS
 	importers may wish to lower this, such as to ensure the
 	resulting packfiles fit on CDs.
 
+--big-file-threshold=<n>::
+	Maximum size of a blob that fast-import will attempt to
+	create a delta for, expressed in bytes.  The default is 512m
+	(512 MiB).  Some importers may wish to lower this on systems
+	with constrained memory.
+
 --depth=<n>::
 	Maximum delta depth, for blob and tree deltification.
 	Default is 10.
@@ -311,12 +317,12 @@ change to the project.
 ....
 	'commit' SP <ref> LF
 	mark?
-	('author' SP <name> SP LT <email> GT SP <when> LF)?
-	'committer' SP <name> SP LT <email> GT SP <when> LF
+	('author' (SP <name>)? SP LT <email> GT SP <when> LF)?
+	'committer' (SP <name>)? SP LT <email> GT SP <when> LF
 	data
 	('from' SP <committish> LF)?
 	('merge' SP <committish> LF)?
-	(filemodify | filedelete | filecopy | filerename | filedeleteall)*
+	(filemodify | filedelete | filecopy | filerename | filedeleteall | notemodify)*
 	LF?
 ....
 
@@ -339,14 +345,13 @@ commit message use a 0 length data.  Commit messages are free-form
 and are not interpreted by Git.  Currently they must be encoded in
 UTF-8, as fast-import does not permit other encodings to be specified.
 
-Zero or more `filemodify`, `filedelete`, `filecopy`, `filerename`
-and `filedeleteall` commands
+Zero or more `filemodify`, `filedelete`, `filecopy`, `filerename`,
+`filedeleteall` and `notemodify` commands
 may be included to update the contents of the branch prior to
 creating the commit.  These commands may be supplied in any order.
 However it is recommended that a `filedeleteall` command precede
-all `filemodify`, `filecopy` and `filerename` commands in the same
-commit, as `filedeleteall`
-wipes the branch clean (see below).
+all `filemodify`, `filecopy`, `filerename` and `notemodify` commands in
+the same commit, as `filedeleteall` wipes the branch clean (see below).
 
 The `LF` after the command is optional (it used to be required).
 
@@ -595,6 +600,40 @@ more memory per active branch (less than 1 MiB for even most large
 projects); so frontends that can easily obtain only the affected
 paths for a commit are encouraged to do so.
 
+`notemodify`
+^^^^^^^^^^^^
+Included in a `commit` command to add a new note (annotating a given
+commit) or change the content of an existing note.  This command has
+two different means of specifying the content of the note.
+
+External data format::
+	The data content for the note was already supplied by a prior
+	`blob` command.  The frontend just needs to connect it to the
+	commit that is to be annotated.
++
+....
+	'N' SP <dataref> SP <committish> LF
+....
++
+Here `<dataref>` can be either a mark reference (`:<idnum>`)
+set by a prior `blob` command, or a full 40-byte SHA-1 of an
+existing Git blob object.
+
+Inline data format::
+	The data content for the note has not been supplied yet.
+	The frontend wants to supply it as part of this modify
+	command.
++
+....
+	'N' SP 'inline' SP <committish> LF
+	data
+....
++
+See below for a detailed description of the `data` command.
+
+In both formats `<committish>` is any of the commit specification
+expressions also accepted by `from` (see above).
+
 `mark`
 ~~~~~~
 Arranges for fast-import to save a reference to the current object, allowing
@@ -624,7 +663,7 @@ lightweight (non-annotated) tags see the `reset` command below.
 ....
 	'tag' SP <name> LF
 	'from' SP <committish> LF
-	'tagger' SP <name> SP LT <email> GT SP <when> LF
+	'tagger' (SP <name>)? SP LT <email> GT SP <when> LF
 	data
 ....
 

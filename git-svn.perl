@@ -168,6 +168,9 @@ my %cmd = (
 			     'Create a .gitignore per svn:ignore',
 			     { 'revision|r=i' => \$_revision
 			     } ],
+	'mkdirs' => [ \&cmd_mkdirs ,
+	              "recreate empty directories after a checkout",
+	              { 'revision|r=i' => \$_revision } ],
         'propget' => [ \&cmd_propget,
 		       'Print the value of a property on a file or directory',
 		       { 'revision|r=i' => \$_revision } ],
@@ -274,7 +277,7 @@ unless ($cmd && $cmd =~ /(?:clone|init|multi-init)$/) {
 
 my %opts = %{$cmd{$cmd}->[2]} if (defined $cmd);
 
-read_repo_config(\%opts);
+read_git_config(\%opts);
 if ($cmd && ($cmd eq 'log' || $cmd eq 'blame')) {
 	Getopt::Long::Configure('pass_through');
 }
@@ -389,9 +392,11 @@ sub cmd_clone {
 		$path = $url;
 	}
 	$path = basename($url) if !defined $path || !length $path;
+	my $authors_absolute = $_authors ? File::Spec->rel2abs($_authors) : "";
 	cmd_init($url, $path);
+	command_oneline('config', 'svn.authorsfile', $authors_absolute)
+	    if $_authors;
 	Git::SVN::fetch_all($Git::SVN::default_repo_id);
-	command_oneline('config', 'svn.authorsfile', $_authors) if $_authors;
 }
 
 sub cmd_init {
@@ -425,6 +430,7 @@ sub cmd_fetch {
 	if (@_ > 1) {
 		die "Usage: $0 fetch [--all] [--parent] [svn-remote]\n";
 	}
+	$Git::SVN::no_reuse_existing = undef;
 	if ($_fetch_parent) {
 		my ($url, $rev, $uuid, $gs) = working_head_info('HEAD');
 		unless ($gs) {
@@ -657,7 +663,8 @@ sub cmd_branch {
 	}
 	$head ||= 'HEAD';
 
-	my ($src, $rev, undef, $gs) = working_head_info($head);
+	my (undef, $rev, undef, $gs) = working_head_info($head);
+	my $src = $gs->full_url;
 
 	my $remote = Git::SVN::read_all_remotes()->{$gs->{repo_id}};
 	my $allglobs = $remote->{ $_tag ? 'tags' : 'branches' };
@@ -769,6 +776,7 @@ sub cmd_rebase {
 		$_fetch_all ? $gs->fetch_all : $gs->fetch;
 	}
 	command_noisy(rebase_cmd(), $gs->refname);
+	$gs->mkemptydirs;
 }
 
 sub cmd_show_ignore {
@@ -828,6 +836,12 @@ sub cmd_create_ignore {
 		  or fatal("Failed to close `$ignore': $!");
 		command_noisy('add', '-f', $ignore);
 	});
+}
+
+sub cmd_mkdirs {
+	my ($url, $rev, $uuid, $gs) = working_head_info('HEAD');
+	$gs ||= Git::SVN->new;
+	$gs->mkemptydirs($_revision);
 }
 
 sub canonicalize_path {
@@ -946,6 +960,7 @@ sub cmd_multi_init {
 }
 
 sub cmd_multi_fetch {
+	$Git::SVN::no_reuse_existing = undef;
 	my $remotes = Git::SVN::read_all_remotes();
 	foreach my $repo_id (sort keys %$remotes) {
 		if ($remotes->{$repo_id}->{url}) {
@@ -1196,6 +1211,7 @@ sub post_fetch_checkout {
 	command_noisy(qw/read-tree -m -u -v HEAD HEAD/);
 	print STDERR "Checked out HEAD:\n  ",
 	             $gs->full_url, " r", $gs->last_rev, "\n";
+	$gs->mkemptydirs($gs->last_rev);
 }
 
 sub complete_svn_url {
@@ -1321,9 +1337,8 @@ sub get_commit_entry {
 	close $log_fh or croak $!;
 
 	if ($_edit || ($type eq 'tree')) {
-		my $editor = $ENV{VISUAL} || $ENV{EDITOR} || 'vi';
-		# TODO: strip out spaces, comments, like git-commit.sh
-		system($editor, $commit_editmsg);
+		chomp(my $editor = command_oneline(qw(var GIT_EDITOR)));
+		system('sh', '-c', $editor.' "$@"', $editor, $commit_editmsg);
 	}
 	rename $commit_editmsg, $commit_msg or croak $!;
 	{
@@ -1390,8 +1405,7 @@ sub load_authors {
 }
 
 # convert GetOpt::Long specs for use by git-config
-sub read_repo_config {
-	return unless -d $ENV{GIT_DIR};
+sub read_git_config {
 	my $opts = shift;
 	my @config_only;
 	foreach my $o (keys %$opts) {
@@ -1621,6 +1635,7 @@ use Carp qw/croak/;
 use File::Path qw/mkpath/;
 use File::Copy qw/copy/;
 use IPC::Open3;
+use Memoize;  # core since 5.8.0, Jul 2002
 
 my ($_gc_nr, $_gc_period);
 
@@ -1728,7 +1743,11 @@ sub fetch_all {
 	my $ra = Git::SVN::Ra->new($url);
 	my $uuid = $ra->get_uuid;
 	my $head = $ra->get_latest_revnum;
-	$ra->get_log("", $head, 0, 1, 0, 1, sub { $head = $_[1] });
+
+	# ignore errors, $head revision may not even exist anymore
+	eval { $ra->get_log("", $head, 0, 1, 0, 1, sub { $head = $_[1] }) };
+	warn "W: $@\n" if $@;
+
 	my $base = defined $fetch ? $head : 0;
 
 	# read the max revs for wildcard expansion (branches/*, tags/*)
@@ -1765,7 +1784,7 @@ sub read_all_remotes {
 	my $use_svm_props = eval { command_oneline(qw/config --bool
 	    svn.useSvmProps/) };
 	$use_svm_props = $use_svm_props eq 'true' if $use_svm_props;
-	my $svn_refspec = qr{\s*/?(.*?)\s*:\s*(.+?)\s*};
+	my $svn_refspec = qr{\s*(.*?)\s*:\s*(.+?)\s*};
 	foreach (grep { s/^svn-remote\.// } command(qw/config -l/)) {
 		if (m!^(.+)\.fetch=$svn_refspec$!) {
 			my ($remote, $local_ref, $remote_ref) = ($1, $2, $3);
@@ -1979,7 +1998,7 @@ sub find_ref {
 	my ($ref_id) = @_;
 	foreach (command(qw/config -l/)) {
 		next unless m!^svn-remote\.(.+)\.fetch=
-		              \s*/?(.*?)\s*:\s*(.+?)\s*$!x;
+		              \s*(.*?)\s*:\s*(.+?)\s*$!x;
 		my ($repo_id, $path, $ref) = ($1, $2, $3);
 		if ($ref eq $ref_id) {
 			$path = '' if ($path =~ m#^\./?#);
@@ -2433,12 +2452,6 @@ sub get_commit_parents {
 		next if $seen{$p};
 		$seen{$p} = 1;
 		push @ret, $p;
-		# MAXPARENT is defined to 16 in commit-tree.c:
-		last if @ret >= 16;
-	}
-	if (@tmp) {
-		die "r$log_entry->{revision}: No room for parents:\n\t",
-		    join("\n\t", @tmp), "\n";
 	}
 	@ret;
 }
@@ -2725,6 +2738,61 @@ sub do_fetch {
 	$self->make_log_entry($rev, \@parents, $ed);
 }
 
+sub mkemptydirs {
+	my ($self, $r) = @_;
+
+	sub scan {
+		my ($r, $empty_dirs, $line) = @_;
+		if (defined $r && $line =~ /^r(\d+)$/) {
+			return 0 if $1 > $r;
+		} elsif ($line =~ /^  \+empty_dir: (.+)$/) {
+			$empty_dirs->{$1} = 1;
+		} elsif ($line =~ /^  \-empty_dir: (.+)$/) {
+			my @d = grep {m[^\Q$1\E(/|$)]} (keys %$empty_dirs);
+			delete @$empty_dirs{@d};
+		}
+		1; # continue
+	};
+
+	my %empty_dirs = ();
+	my $gz_file = "$self->{dir}/unhandled.log.gz";
+	if (-f $gz_file) {
+		if (!$can_compress) {
+			warn "Compress::Zlib could not be found; ",
+			     "empty directories in $gz_file will not be read\n";
+		} else {
+			my $gz = Compress::Zlib::gzopen($gz_file, "rb") or
+				die "Unable to open $gz_file: $!\n";
+			my $line;
+			while ($gz->gzreadline($line) > 0) {
+				scan($r, \%empty_dirs, $line) or last;
+			}
+			$gz->gzclose;
+		}
+	}
+
+	if (open my $fh, '<', "$self->{dir}/unhandled.log") {
+		binmode $fh or croak "binmode: $!";
+		while (<$fh>) {
+			scan($r, \%empty_dirs, $_) or last;
+		}
+		close $fh;
+	}
+
+	my $strip = qr/\A\Q$self->{path}\E(?:\/|$)/;
+	foreach my $d (sort keys %empty_dirs) {
+		$d = uri_decode($d);
+		$d =~ s/$strip//;
+		next if -d $d;
+		if (-e _) {
+			warn "$d exists but is not a directory\n";
+		} else {
+			print "creating empty directory: $d\n";
+			mkpath([$d]);
+		}
+	}
+}
+
 sub get_untracked {
 	my ($self, $ed) = @_;
 	my @out;
@@ -2878,14 +2946,260 @@ sub check_author {
 	$author;
 }
 
+sub find_extra_svk_parents {
+	my ($self, $ed, $tickets, $parents) = @_;
+	# aha!  svk:merge property changed...
+	my @tickets = split "\n", $tickets;
+	my @known_parents;
+	for my $ticket ( @tickets ) {
+		my ($uuid, $path, $rev) = split /:/, $ticket;
+		if ( $uuid eq $self->ra_uuid ) {
+			my $url = $self->rewrite_root || $self->{url};
+			my $repos_root = $url;
+			my $branch_from = $path;
+			$branch_from =~ s{^/}{};
+			my $gs = $self->other_gs($repos_root."/".$branch_from,
+			                         $url,
+			                         $branch_from,
+			                         $rev,
+			                         $self->{ref_id});
+			if ( my $commit = $gs->rev_map_get($rev, $uuid) ) {
+				# wahey!  we found it, but it might be
+				# an old one (!)
+				push @known_parents, [ $rev, $commit ];
+			}
+		}
+	}
+	# Ordering matters; highest-numbered commit merge tickets
+	# first, as they may account for later merge ticket additions
+	# or changes.
+	@known_parents = map {$_->[1]} sort {$b->[0] <=> $a->[0]} @known_parents;
+	for my $parent ( @known_parents ) {
+		my @cmd = ('rev-list', $parent, map { "^$_" } @$parents );
+		my ($msg_fh, $ctx) = command_output_pipe(@cmd);
+		my $new;
+		while ( <$msg_fh> ) {
+			$new=1;last;
+		}
+		command_close_pipe($msg_fh, $ctx);
+		if ( $new ) {
+			print STDERR
+			    "Found merge parent (svk:merge ticket): $parent\n";
+			push @$parents, $parent;
+		}
+	}
+}
+
+sub lookup_svn_merge {
+	my $uuid = shift;
+	my $url = shift;
+	my $merge = shift;
+
+	my ($source, $revs) = split ":", $merge;
+	my $path = $source;
+	$path =~ s{^/}{};
+	my $gs = Git::SVN->find_by_url($url.$source, $url, $path);
+	if ( !$gs ) {
+		warn "Couldn't find revmap for $url$source\n";
+		return;
+	}
+	my @ranges = split ",", $revs;
+	my ($tip, $tip_commit);
+	my @merged_commit_ranges;
+	# find the tip
+	for my $range ( @ranges ) {
+		my ($bottom, $top) = split "-", $range;
+		$top ||= $bottom;
+		my $bottom_commit = $gs->find_rev_after( $bottom, 1, $top );
+		my $top_commit = $gs->find_rev_before( $top, 1, $bottom );
+
+		unless ($top_commit and $bottom_commit) {
+			warn "W:unknown path/rev in svn:mergeinfo "
+				."dirprop: $source:$range\n";
+			next;
+		}
+
+		push @merged_commit_ranges,
+			"$bottom_commit^..$top_commit";
+
+		if ( !defined $tip or $top > $tip ) {
+			$tip = $top;
+			$tip_commit = $top_commit;
+		}
+	}
+	return ($tip_commit, @merged_commit_ranges);
+}
+
+sub _rev_list {
+	my ($msg_fh, $ctx) = command_output_pipe(
+		"rev-list", @_,
+	       );
+	my @rv;
+	while ( <$msg_fh> ) {
+		chomp;
+		push @rv, $_;
+	}
+	command_close_pipe($msg_fh, $ctx);
+	@rv;
+}
+
+sub check_cherry_pick {
+	my $base = shift;
+	my $tip = shift;
+	my @ranges = @_;
+	my %commits = map { $_ => 1 }
+		_rev_list("--no-merges", $tip, "--not", $base);
+	for my $range ( @ranges ) {
+		delete @commits{_rev_list($range)};
+	}
+	return (keys %commits);
+}
+
+BEGIN {
+	memoize 'lookup_svn_merge';
+	memoize 'check_cherry_pick';
+}
+
+sub parents_exclude {
+	my $parents = shift;
+	my @commits = @_;
+	return unless @commits;
+
+	my @excluded;
+	my $excluded;
+	do {
+		my @cmd = ('rev-list', "-1", @commits, "--not", @$parents );
+		$excluded = command_oneline(@cmd);
+		if ( $excluded ) {
+			my @new;
+			my $found;
+			for my $commit ( @commits ) {
+				if ( $commit eq $excluded ) {
+					push @excluded, $commit;
+					$found++;
+					last;
+				}
+				else {
+					push @new, $commit;
+				}
+			}
+			die "saw commit '$excluded' in rev-list output, "
+				."but we didn't ask for that commit (wanted: @commits --not @$parents)"
+					unless $found;
+			@commits = @new;
+		}
+	}
+		while ($excluded and @commits);
+
+	return @excluded;
+}
+
+
+# note: this function should only be called if the various dirprops
+# have actually changed
+sub find_extra_svn_parents {
+	my ($self, $ed, $mergeinfo, $parents) = @_;
+	# aha!  svk:merge property changed...
+
+	# We first search for merged tips which are not in our
+	# history.  Then, we figure out which git revisions are in
+	# that tip, but not this revision.  If all of those revisions
+	# are now marked as merge, we can add the tip as a parent.
+	my @merges = split "\n", $mergeinfo;
+	my @merge_tips;
+	my $url = $self->rewrite_root || $self->{url};
+	my $uuid = $self->ra_uuid;
+	my %ranges;
+	for my $merge ( @merges ) {
+		my ($tip_commit, @ranges) =
+			lookup_svn_merge( $uuid, $url, $merge );
+		unless (!$tip_commit or
+				grep { $_ eq $tip_commit } @$parents ) {
+			push @merge_tips, $tip_commit;
+			$ranges{$tip_commit} = \@ranges;
+		} else {
+			push @merge_tips, undef;
+		}
+	}
+
+	my %excluded = map { $_ => 1 }
+		parents_exclude($parents, grep { defined } @merge_tips);
+
+	# check merge tips for new parents
+	my @new_parents;
+	for my $merge_tip ( @merge_tips ) {
+		my $spec = shift @merges;
+		next unless $merge_tip and $excluded{$merge_tip};
+
+		my $ranges = $ranges{$merge_tip};
+
+		# check out 'new' tips
+		my $merge_base = command_oneline(
+			"merge-base",
+			@$parents, $merge_tip,
+		       );
+
+		# double check that there are no missing non-merge commits
+		my (@incomplete) = check_cherry_pick(
+			$merge_base, $merge_tip,
+			@$ranges,
+		       );
+
+		if ( @incomplete ) {
+			warn "W:svn cherry-pick ignored ($spec) - missing "
+				.@incomplete." commit(s) (eg $incomplete[0])\n";
+		} else {
+			warn
+				"Found merge parent (svn:mergeinfo prop): ",
+					$merge_tip, "\n";
+			push @new_parents, $merge_tip;
+		}
+	}
+
+	# cater for merges which merge commits from multiple branches
+	if ( @new_parents > 1 ) {
+		for ( my $i = 0; $i <= $#new_parents; $i++ ) {
+			for ( my $j = 0; $j <= $#new_parents; $j++ ) {
+				next if $i == $j;
+				next unless $new_parents[$i];
+				next unless $new_parents[$j];
+				my $revs = command_oneline(
+					"rev-list", "-1",
+					"$new_parents[$i]..$new_parents[$j]",
+				       );
+				if ( !$revs ) {
+					undef($new_parents[$i]);
+				}
+			}
+		}
+	}
+	push @$parents, grep { defined } @new_parents;
+}
+
 sub make_log_entry {
 	my ($self, $rev, $parents, $ed) = @_;
 	my $untracked = $self->get_untracked($ed);
 
+	my @parents = @$parents;
+	my $ps = $ed->{path_strip} || "";
+	for my $path ( grep { m/$ps/ } %{$ed->{dir_prop}} ) {
+		my $props = $ed->{dir_prop}{$path};
+		if ( $props->{"svk:merge"} ) {
+			$self->find_extra_svk_parents
+				($ed, $props->{"svk:merge"}, \@parents);
+		}
+		if ( $props->{"svn:mergeinfo"} ) {
+			$self->find_extra_svn_parents
+				($ed,
+				 $props->{"svn:mergeinfo"},
+				 \@parents);
+		}
+	}
+
 	open my $un, '>>', "$self->{dir}/unhandled.log" or croak $!;
 	print $un "r$rev\n" or croak $!;
 	print $un $_, "\n" foreach @$untracked;
-	my %log_entry = ( parents => $parents || [], revision => $rev,
+	my %log_entry = ( parents => \@parents, revision => $rev,
 	                  log => '');
 
 	my $headrev;
@@ -3411,6 +3725,12 @@ sub uri_encode {
 	$f
 }
 
+sub uri_decode {
+	my ($f) = @_;
+	$f =~ s#%([0-9a-fA-F]{2})#chr(hex($1))#eg;
+	$f
+}
+
 sub remove_username {
 	$_[0] =~ s{^([^:]*://)[^@]+@}{$1};
 }
@@ -3692,11 +4012,11 @@ sub delete_entry {
 		}
 		print "\tD\t$gpath/\n" unless $::_q;
 		command_close_pipe($ls, $ctx);
-		$self->{empty}->{$path} = 0
 	} else {
 		$self->{gii}->remove($gpath);
 		print "\tD\t$gpath\n" unless $::_q;
 	}
+	$self->{empty}->{$path} = 0;
 	undef;
 }
 
@@ -5029,10 +5349,8 @@ sub git_svn_log_cmd {
 
 # adapted from pager.c
 sub config_pager {
-	$pager ||= $ENV{GIT_PAGER} || $ENV{PAGER};
-	if (!defined $pager) {
-		$pager = 'less';
-	} elsif (length $pager == 0 || $pager eq 'cat') {
+	chomp(my $pager = command_oneline(qw(var GIT_PAGER)));
+	if ($pager eq 'cat') {
 		$pager = undef;
 	}
 	$ENV{GIT_PAGER_IN_USE} = defined($pager);

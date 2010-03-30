@@ -19,7 +19,7 @@ static int show_root;
 static int show_tags;
 static int show_unreachable;
 static int include_reflogs = 1;
-static int check_full;
+static int check_full = 1;
 static int check_strict;
 static int keep_cache_objects;
 static unsigned char head_sha1[20];
@@ -47,6 +47,7 @@ static void objreport(struct object *obj, const char *severity,
 	fputs("\n", stderr);
 }
 
+__attribute__((format (printf, 2, 3)))
 static int objerror(struct object *obj, const char *err, ...)
 {
 	va_list params;
@@ -57,6 +58,7 @@ static int objerror(struct object *obj, const char *err, ...)
 	return -1;
 }
 
+__attribute__((format (printf, 3, 4)))
 static int fsck_error_func(struct object *obj, int type, const char *err, ...)
 {
 	va_list params;
@@ -576,7 +578,7 @@ static struct option fsck_opts[] = {
 	OPT_BOOLEAN(0, "root", &show_root, "report root nodes"),
 	OPT_BOOLEAN(0, "cache", &keep_cache_objects, "make index objects head nodes"),
 	OPT_BOOLEAN(0, "reflogs", &include_reflogs, "make reflogs head nodes (default)"),
-	OPT_BOOLEAN(0, "full", &check_full, "also consider alternate objects"),
+	OPT_BOOLEAN(0, "full", &check_full, "also consider packs and alternate objects"),
 	OPT_BOOLEAN(0, "strict", &check_strict, "enable more strict checking"),
 	OPT_BOOLEAN(0, "lost-found", &write_lost_and_found,
 				"write dangling objects in .git/lost-found"),

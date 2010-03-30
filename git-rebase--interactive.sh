@@ -168,7 +168,7 @@ pick_one () {
 		output git reset --hard $sha1
 		test "a$1" = a-n && output git reset --soft $current_sha1
 		sha1=$(git rev-parse --short $sha1)
-		output warn Fast forward to $sha1
+		output warn Fast-forward to $sha1
 	else
 		output git cherry-pick "$@"
 	fi
@@ -248,9 +248,9 @@ pick_one_preserving_merges () {
 	done
 	case $fast_forward in
 	t)
-		output warn "Fast forward to $sha1"
+		output warn "Fast-forward to $sha1"
 		output git reset --hard $sha1 ||
-			die "Cannot fast forward to $sha1"
+			die "Cannot fast-forward to $sha1"
 		;;
 	f)
 		first_parent=$(expr "$new_parents" : ' \([^ ]*\)')
@@ -322,7 +322,7 @@ make_squash_message () {
 }
 
 peek_next_command () {
-	sed -n "1s/ .*$//p" < "$TODO"
+	sed -n -e "/^#/d" -e "/^$/d" -e "s/ .*//p" -e "q" < "$TODO"
 }
 
 do_next () {
@@ -339,6 +339,14 @@ do_next () {
 		mark_action_done
 		pick_one $sha1 ||
 			die_with_patch $sha1 "Could not apply $sha1... $rest"
+		;;
+	reword|r)
+		comment_for_reflog reword
+
+		mark_action_done
+		pick_one $sha1 ||
+			die_with_patch $sha1 "Could not apply $sha1... $rest"
+		git commit --amend
 		;;
 	edit|e)
 		comment_for_reflog edit
@@ -757,6 +765,7 @@ first and then run 'git rebase --continue' again."
 #
 # Commands:
 #  p, pick = use commit
+#  r, reword = use commit, but edit the commit message
 #  e, edit = use commit, but stop for amending
 #  s, squash = use commit, but meld into previous commit
 #

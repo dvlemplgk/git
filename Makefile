@@ -204,6 +204,21 @@ all::
 # memory allocators with the nedmalloc allocator written by Niall Douglas.
 #
 # Define NO_REGEX if you have no or inferior regex support in your C library.
+#
+# Define JSMIN to point to JavaScript minifier that functions as
+# a filter to have gitweb.js minified.
+#
+# Define DEFAULT_PAGER to a sensible pager command (defaults to "less") if
+# you want to use something different.  The value will be interpreted by the
+# shell at runtime when it is used.
+#
+# Define DEFAULT_EDITOR to a sensible editor command (defaults to "vi") if you
+# want to use something different.  The value will be interpreted by the shell
+# if necessary when it is used.  Examples:
+#
+#   DEFAULT_EDITOR='~/bin/vi',
+#   DEFAULT_EDITOR='$GIT_FALLBACK_EDITOR',
+#   DEFAULT_EDITOR='"C:\Program Files\Vim\gvim.exe" --nofork'
 
 GIT-VERSION-FILE: .FORCE-GIT-VERSION-FILE
 	@$(SHELL_PATH) ./GIT-VERSION-GEN
@@ -215,6 +230,12 @@ uname_O := $(shell sh -c 'uname -o 2>/dev/null || echo not')
 uname_R := $(shell sh -c 'uname -r 2>/dev/null || echo not')
 uname_P := $(shell sh -c 'uname -p 2>/dev/null || echo not')
 uname_V := $(shell sh -c 'uname -v 2>/dev/null || echo not')
+
+ifdef MSVC
+	# avoid the MingW and Cygwin configuration sections
+	uname_S := Windows
+	uname_O := Windows
+endif
 
 # CFLAGS and LDFLAGS are for the users to override from the command line.
 
@@ -256,6 +277,9 @@ lib = lib
 # DESTDIR=
 pathsep = :
 
+# JavaScript minifier invocation that can function as filter
+JSMIN =
+
 # default configuration for gitweb
 GITWEB_CONFIG = gitweb_config.perl
 GITWEB_CONFIG_SYSTEM = /etc/gitweb.conf
@@ -271,6 +295,11 @@ GITWEB_HOMETEXT = indextext.html
 GITWEB_CSS = gitweb.css
 GITWEB_LOGO = git-logo.png
 GITWEB_FAVICON = git-favicon.png
+ifdef JSMIN
+GITWEB_JS = gitweb.min.js
+else
+GITWEB_JS = gitweb.js
+endif
 GITWEB_SITE_HEADER =
 GITWEB_SITE_FOOTER =
 
@@ -325,6 +354,7 @@ SCRIPT_SH += git-merge-one-file.sh
 SCRIPT_SH += git-merge-resolve.sh
 SCRIPT_SH += git-mergetool.sh
 SCRIPT_SH += git-mergetool--lib.sh
+SCRIPT_SH += git-notes.sh
 SCRIPT_SH += git-parse-remote.sh
 SCRIPT_SH += git-pull.sh
 SCRIPT_SH += git-quiltimport.sh
@@ -358,6 +388,7 @@ EXTRA_PROGRAMS =
 PROGRAMS += $(EXTRA_PROGRAMS)
 PROGRAMS += git-fast-import$X
 PROGRAMS += git-hash-object$X
+PROGRAMS += git-imap-send$X
 PROGRAMS += git-index-pack$X
 PROGRAMS += git-merge-index$X
 PROGRAMS += git-merge-tree$X
@@ -369,6 +400,7 @@ PROGRAMS += git-show-index$X
 PROGRAMS += git-unpack-file$X
 PROGRAMS += git-upload-pack$X
 PROGRAMS += git-var$X
+PROGRAMS += git-http-backend$X
 
 # List built-in command $C whose implementation cmd_$C() is not in
 # builtin-$C.o but is linked in as part of some other command.
@@ -437,6 +469,7 @@ LIB_H += ll-merge.h
 LIB_H += log-tree.h
 LIB_H += mailmap.h
 LIB_H += merge-recursive.h
+LIB_H += notes.h
 LIB_H += object.h
 LIB_H += pack.h
 LIB_H += pack-refs.h
@@ -457,6 +490,7 @@ LIB_H += sideband.h
 LIB_H += sigchain.h
 LIB_H += strbuf.h
 LIB_H += string-list.h
+LIB_H += submodule.h
 LIB_H += tag.h
 LIB_H += transport.h
 LIB_H += tree.h
@@ -521,6 +555,7 @@ LIB_OBJS += match-trees.o
 LIB_OBJS += merge-file.o
 LIB_OBJS += merge-recursive.o
 LIB_OBJS += name-hash.o
+LIB_OBJS += notes.o
 LIB_OBJS += object.o
 LIB_OBJS += pack-check.o
 LIB_OBJS += pack-refs.o
@@ -555,6 +590,7 @@ LIB_OBJS += sideband.o
 LIB_OBJS += sigchain.o
 LIB_OBJS += strbuf.o
 LIB_OBJS += string-list.o
+LIB_OBJS += submodule.o
 LIB_OBJS += symlinks.o
 LIB_OBJS += tag.o
 LIB_OBJS += trace.o
@@ -599,7 +635,6 @@ BUILTIN_OBJS += builtin-diff-index.o
 BUILTIN_OBJS += builtin-diff-tree.o
 BUILTIN_OBJS += builtin-diff.o
 BUILTIN_OBJS += builtin-fast-export.o
-BUILTIN_OBJS += builtin-fetch--tool.o
 BUILTIN_OBJS += builtin-fetch-pack.o
 BUILTIN_OBJS += builtin-fetch.o
 BUILTIN_OBJS += builtin-fmt-merge-msg.o
@@ -793,6 +828,7 @@ ifeq ($(uname_O),Cygwin)
 endif
 ifeq ($(uname_S),FreeBSD)
 	NEEDS_LIBICONV = YesPlease
+	OLD_ICONV = YesPlease
 	NO_MEMMEM = YesPlease
 	BASIC_CFLAGS += -I/usr/local/include
 	BASIC_LDFLAGS += -L/usr/local/lib
@@ -899,11 +935,11 @@ ifeq ($(uname_S),HP-UX)
 	NO_SYS_SELECT_H = YesPlease
 	SNPRINTF_RETURNS_BOGUS = YesPlease
 endif
-ifdef MSVC
+ifeq ($(uname_S),Windows)
 	GIT_VERSION := $(GIT_VERSION).MSVC
 	pathsep = ;
 	NO_PREAD = YesPlease
-	NO_OPENSSL = YesPlease
+	NEEDS_CRYPTO_WITH_SSL = YesPlease
 	NO_LIBGEN_H = YesPlease
 	NO_SYMLINK_HEAD = YesPlease
 	NO_IPV6 = YesPlease
@@ -933,6 +969,7 @@ ifdef MSVC
 	NO_REGEX = YesPlease
 	NO_CURL = YesPlease
 	NO_PTHREADS = YesPlease
+	BLK_SHA1 = YesPlease
 
 	CC = compat/vcbuild/scripts/clink.pl
 	AR = compat/vcbuild/scripts/lib.pl
@@ -951,14 +988,13 @@ else
 	BASIC_CFLAGS += -Zi -MTd
 endif
 	X = .exe
-else
+endif
 ifneq (,$(findstring MINGW,$(uname_S)))
 	pathsep = ;
 	NO_PREAD = YesPlease
-	NO_OPENSSL = YesPlease
+	NEEDS_CRYPTO_WITH_SSL = YesPlease
 	NO_LIBGEN_H = YesPlease
 	NO_SYMLINK_HEAD = YesPlease
-	NO_IPV6 = YesPlease
 	NO_SETENV = YesPlease
 	NO_UNSETENV = YesPlease
 	NO_STRCASESTR = YesPlease
@@ -982,6 +1018,7 @@ ifneq (,$(findstring MINGW,$(uname_S)))
 	UNRELIABLE_FSTAT = UnfortunatelyYes
 	OBJECT_CREATION_USES_RENAMES = UnfortunatelyNeedsTo
 	NO_REGEX = YesPlease
+	BLK_SHA1 = YesPlease
 	COMPAT_CFLAGS += -D__USE_MINGW_ACCESS -DNOGDI -Icompat -Icompat/fnmatch
 	COMPAT_CFLAGS += -DSTRIP_EXTENSION=\".exe\"
 	COMPAT_OBJS += compat/mingw.o compat/fnmatch/fnmatch.o compat/winansi.o
@@ -998,7 +1035,6 @@ ifneq (,$(wildcard ../THIS_IS_MSYSGIT))
 else
 	NO_CURL = YesPlease
 	NO_PTHREADS = YesPlease
-endif
 endif
 endif
 
@@ -1079,7 +1115,6 @@ EXTLIBS += -lz
 
 ifndef NO_POSIX_ONLY_PROGRAMS
 	PROGRAMS += git-daemon$X
-	PROGRAMS += git-imap-send$X
 endif
 ifndef NO_OPENSSL
 	OPENSSL_LIBSSL = -lssl
@@ -1367,6 +1402,22 @@ BASIC_CFLAGS += -DSHA1_HEADER='$(SHA1_HEADER_SQ)' \
 	$(COMPAT_CFLAGS)
 LIB_OBJS += $(COMPAT_OBJS)
 
+# Quote for C
+
+ifdef DEFAULT_EDITOR
+DEFAULT_EDITOR_CQ = "$(subst ",\",$(subst \,\\,$(DEFAULT_EDITOR)))"
+DEFAULT_EDITOR_CQ_SQ = $(subst ','\'',$(DEFAULT_EDITOR_CQ))
+
+BASIC_CFLAGS += -DDEFAULT_EDITOR='$(DEFAULT_EDITOR_CQ_SQ)'
+endif
+
+ifdef DEFAULT_PAGER
+DEFAULT_PAGER_CQ = "$(subst ",\",$(subst \,\\,$(DEFAULT_PAGER)))"
+DEFAULT_PAGER_CQ_SQ = $(subst ','\'',$(DEFAULT_PAGER_CQ))
+
+BASIC_CFLAGS += -DDEFAULT_PAGER='$(DEFAULT_PAGER_CQ_SQ)'
+endif
+
 ALL_CFLAGS += $(BASIC_CFLAGS)
 ALL_LDFLAGS += $(BASIC_LDFLAGS)
 
@@ -1459,8 +1510,13 @@ $(patsubst %.perl,%,$(SCRIPT_PERL)): % : %.perl
 	chmod +x $@+ && \
 	mv $@+ $@
 
+ifdef JSMIN
+OTHER_PROGRAMS += gitweb/gitweb.cgi   gitweb/gitweb.min.js
+gitweb/gitweb.cgi: gitweb/gitweb.perl gitweb/gitweb.min.js
+else
 OTHER_PROGRAMS += gitweb/gitweb.cgi
 gitweb/gitweb.cgi: gitweb/gitweb.perl
+endif
 	$(QUIET_GEN)$(RM) $@ $@+ && \
 	sed -e '1s|#!.*perl|#!$(PERL_PATH_SQ)|' \
 	    -e 's|++GIT_VERSION++|$(GIT_VERSION)|g' \
@@ -1479,13 +1535,14 @@ gitweb/gitweb.cgi: gitweb/gitweb.perl
 	    -e 's|++GITWEB_CSS++|$(GITWEB_CSS)|g' \
 	    -e 's|++GITWEB_LOGO++|$(GITWEB_LOGO)|g' \
 	    -e 's|++GITWEB_FAVICON++|$(GITWEB_FAVICON)|g' \
+	    -e 's|++GITWEB_JS++|$(GITWEB_JS)|g' \
 	    -e 's|++GITWEB_SITE_HEADER++|$(GITWEB_SITE_HEADER)|g' \
 	    -e 's|++GITWEB_SITE_FOOTER++|$(GITWEB_SITE_FOOTER)|g' \
 	    $< >$@+ && \
 	chmod +x $@+ && \
 	mv $@+ $@
 
-git-instaweb: git-instaweb.sh gitweb/gitweb.cgi gitweb/gitweb.css
+git-instaweb: git-instaweb.sh gitweb/gitweb.cgi gitweb/gitweb.css gitweb/gitweb.js
 	$(QUIET_GEN)$(RM) $@ $@+ && \
 	sed -e '1s|#!.*/sh|#!$(SHELL_PATH_SQ)|' \
 	    -e 's/@@GIT_VERSION@@/$(GIT_VERSION)/g' \
@@ -1494,6 +1551,8 @@ git-instaweb: git-instaweb.sh gitweb/gitweb.cgi gitweb/gitweb.css
 	    -e '/@@GITWEB_CGI@@/d' \
 	    -e '/@@GITWEB_CSS@@/r gitweb/gitweb.css' \
 	    -e '/@@GITWEB_CSS@@/d' \
+	    -e '/@@GITWEB_JS@@/r gitweb/gitweb.js' \
+	    -e '/@@GITWEB_JS@@/d' \
 	    -e 's|@@PERL@@|$(PERL_PATH_SQ)|g' \
 	    $@.sh > $@+ && \
 	chmod +x $@+ && \
@@ -1507,6 +1566,11 @@ $(patsubst %.perl,%,$(SCRIPT_PERL)) git-instaweb: % : unimplemented.sh
 	chmod +x $@+ && \
 	mv $@+ $@
 endif # NO_PERL
+
+ifdef JSMIN
+gitweb/gitweb.min.js: gitweb/gitweb.js
+	$(QUIET_GEN)$(JSMIN) <$< >$@
+endif # JSMIN
 
 configure: configure.ac
 	$(QUIET_GEN)$(RM) $@ $<+ && \
@@ -1835,7 +1899,7 @@ distclean: clean
 	$(RM) configure
 
 clean:
-	$(RM) *.o block-sha1/*.o arm/*.o ppc/*.o compat/*.o compat/*/*.o xdiff/*.o \
+	$(RM) *.o block-sha1/*.o ppc/*.o compat/*.o compat/*/*.o xdiff/*.o \
 		$(LIB_FILE) $(XDIFF_LIB)
 	$(RM) $(ALL_PROGRAMS) $(BUILT_INS) git$X
 	$(RM) $(TEST_PROGRAMS)

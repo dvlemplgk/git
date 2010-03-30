@@ -191,8 +191,6 @@ static int grep_file(struct grep_opt *opt, const char *filename)
 			error("'%s': %s", filename, strerror(errno));
 		return 0;
 	}
-	if (!st.st_size)
-		return 0; /* empty file -- no grep hit */
 	if (!S_ISREG(st.st_mode))
 		return 0;
 	sz = xsize_t(st.st_size);
@@ -434,7 +432,11 @@ static int external_grep(struct grep_opt *opt, const char **paths, int cached)
 
 		if (opt->color_external && strlen(opt->color_external) > 0)
 			push_arg(opt->color_external);
+	} else {
+		unsetenv("GREP_COLOR");
+		unsetenv("GREP_COLORS");
 	}
+	unsetenv("GREP_OPTIONS");
 
 	hit = 0;
 	argc = nr;
@@ -788,6 +790,13 @@ int cmd_grep(int argc, const char **argv, const char *prefix)
 		  PARSE_OPT_HIDDEN | PARSE_OPT_NOARG, help_callback },
 		OPT_END()
 	};
+
+	/*
+	 * 'git grep -h', unlike 'git grep -h <pattern>', is a request
+	 * to show usage information and exit.
+	 */
+	if (argc == 2 && !strcmp(argv[1], "-h"))
+		usage_with_options(grep_usage, options);
 
 	memset(&opt, 0, sizeof(opt));
 	opt.prefix = prefix;

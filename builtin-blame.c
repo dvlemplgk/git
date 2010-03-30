@@ -2365,6 +2365,7 @@ parse_done:
 			die_errno("cannot stat path '%s'", path);
 	}
 
+	revs.disable_stdin = 1;
 	setup_revisions(argc, argv, &revs, NULL);
 	memset(&sb, 0, sizeof(sb));
 
@@ -2432,7 +2433,7 @@ parse_done:
 	if (top < 1)
 		top = lno;
 	bottom--;
-	if (lno < top)
+	if (lno < top || lno < bottom)
 		die("file %s has only %lu lines", path, lno);
 
 	ent = xcalloc(1, sizeof(*ent));

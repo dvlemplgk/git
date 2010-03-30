@@ -13,8 +13,8 @@ git bisect skip [(<rev>|<range>)...]
         mark <rev>... untestable revisions.
 git bisect next
         find next bisection to test and check it out.
-git bisect reset [<branch>]
-        finish bisection search and go back to branch.
+git bisect reset [<commit>]
+        finish bisection search and go back to commit.
 git bisect visualize
         show bisect status in gitk.
 git bisect replay <logfile>
@@ -300,8 +300,7 @@ bisect_visualize() {
 		esac
 	fi
 
-	not=$(git for-each-ref --format='%(refname)' "refs/bisect/good-*")
-	eval '"$@"' refs/bisect/bad --not $not -- $(cat "$GIT_DIR/BISECT_NAMES")
+	eval '"$@"' --bisect -- $(cat "$GIT_DIR/BISECT_NAMES")
 }
 
 bisect_reset() {
@@ -311,8 +310,8 @@ bisect_reset() {
 	}
 	case "$#" in
 	0) branch=$(cat "$GIT_DIR/BISECT_START") ;;
-	1) git show-ref --verify --quiet -- "refs/heads/$1" ||
-	       die "$1 does not seem to be a valid branch"
+	1) git rev-parse --quiet --verify "$1^{commit}" > /dev/null ||
+	       die "'$1' is not a valid commit"
 	   branch="$1" ;;
 	*)
 	    usage ;;

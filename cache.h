@@ -369,9 +369,12 @@ static inline enum object_type object_type(unsigned int mode)
 #define CONFIG_ENVIRONMENT "GIT_CONFIG"
 #define EXEC_PATH_ENVIRONMENT "GIT_EXEC_PATH"
 #define CEILING_DIRECTORIES_ENVIRONMENT "GIT_CEILING_DIRECTORIES"
+#define NO_REPLACE_OBJECTS_ENVIRONMENT "GIT_NO_REPLACE_OBJECTS"
 #define GITATTRIBUTES_FILE ".gitattributes"
 #define INFOATTRIBUTES_FILE "info/attributes"
 #define ATTRIBUTE_MACRO_PREFIX "[attr]"
+#define GIT_NOTES_REF_ENVIRONMENT "GIT_NOTES_REF"
+#define GIT_NOTES_DEFAULT_REF "refs/notes/commits"
 
 extern int is_bare_repository_cfg;
 extern int is_bare_repository(void);
@@ -396,6 +399,7 @@ extern const char *setup_git_directory_gently(int *);
 extern const char *setup_git_directory(void);
 extern const char *prefix_path(const char *prefix, int len, const char *path);
 extern const char *prefix_filename(const char *prefix, int len, const char *path);
+extern int check_filename(const char *prefix, const char *name);
 extern void verify_filename(const char *prefix, const char *name);
 extern void verify_non_filename(const char *prefix, const char *name);
 
@@ -567,6 +571,8 @@ enum object_creation_mode {
 
 extern enum object_creation_mode object_creation_mode;
 
+extern char *notes_ref_name;
+
 extern int grafts_replace_parents;
 
 #define GIT_REPO_VERSION 0
@@ -657,6 +663,7 @@ const char *make_relative_path(const char *abs, const char *base);
 int normalize_path_copy(char *dst, const char *src);
 int longest_ancestor_length(const char *path, const char *prefix_list);
 char *strip_path_suffix(const char *path, const char *suffix);
+int daemon_avoid_alias(const char *path);
 
 /* Read and unpack a sha1 file into memory, write memory to a sha1 file */
 extern int sha1_object_info(const unsigned char *, unsigned long *);
@@ -740,7 +747,8 @@ const char *show_date_relative(unsigned long time, int tz,
 			       size_t timebuf_size);
 int parse_date(const char *date, char *buf, int bufsize);
 void datestamp(char *buf, int bufsize);
-unsigned long approxidate(const char *);
+#define approxidate(s) approxidate_careful((s), NULL)
+unsigned long approxidate_careful(const char *, int *);
 unsigned long approxidate_relative(const char *date, const struct timeval *now);
 enum date_mode parse_date_format(const char *format);
 
@@ -751,6 +759,8 @@ extern const char *git_author_info(int);
 extern const char *git_committer_info(int);
 extern const char *fmt_ident(const char *name, const char *email, const char *date_str, int);
 extern const char *fmt_name(const char *name, const char *email);
+extern const char *git_editor(void);
+extern const char *git_pager(void);
 
 struct checkout {
 	const char *base_dir;
@@ -857,7 +867,6 @@ extern struct ref *find_ref_by_name(const struct ref *list, const char *name);
 extern struct child_process *git_connect(int fd[2], const char *url, const char *prog, int flags);
 extern int finish_connect(struct child_process *conn);
 extern int path_match(const char *path, int nr, char **match);
-extern int get_ack(int fd, unsigned char *result_sha1);
 struct extra_have_objects {
 	int nr, alloc;
 	unsigned char (*array)[20];
@@ -962,7 +971,9 @@ extern void *alloc_object_node(void);
 extern void alloc_report(void);
 
 /* trace.c */
+__attribute__((format (printf, 1, 2)))
 extern void trace_printf(const char *format, ...);
+__attribute__((format (printf, 2, 3)))
 extern void trace_argv_printf(const char **argv, const char *format, ...);
 
 /* convert.c */

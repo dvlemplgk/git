@@ -51,7 +51,7 @@ static const char *template_file;
 static char *edit_message, *use_message;
 static char *author_name, *author_email, *author_date;
 static int all, edit_flag, also, interactive, only, amend, signoff;
-static int quiet, verbose, no_verify, allow_empty, dry_run;
+static int quiet, verbose, no_verify, allow_empty, dry_run, renew_authorship;
 static char *untracked_files_arg;
 /*
  * The default commit message cleanup mode will remove the lines
@@ -91,8 +91,9 @@ static struct option builtin_commit_options[] = {
 	OPT_FILENAME('F', "file", &logfile, "read log from file"),
 	OPT_STRING(0, "author", &force_author, "AUTHOR", "override author for commit"),
 	OPT_CALLBACK('m', "message", &message, "MESSAGE", "specify commit message", opt_parse_m),
-	OPT_STRING('c', "reedit-message", &edit_message, "COMMIT", "reuse and edit message from specified commit "),
+	OPT_STRING('c', "reedit-message", &edit_message, "COMMIT", "reuse and edit message from specified commit"),
 	OPT_STRING('C', "reuse-message", &use_message, "COMMIT", "reuse message from specified commit"),
+	OPT_BOOLEAN(0, "reset-author", &renew_authorship, "the commit is authored by me now (used with -C-c/--amend)"),
 	OPT_BOOLEAN('s', "signoff", &signoff, "add Signed-off-by:"),
 	OPT_FILENAME('t', "template", &template_file, "use specified template file"),
 	OPT_BOOLEAN('e', "edit", &edit_flag, "force edit of commit"),
@@ -277,11 +278,13 @@ static char *prepare_index(int argc, const char **argv, const char *prefix, int 
 	 * We still need to refresh the index here.
 	 */
 	if (!pathspec || !*pathspec) {
-		fd = hold_locked_index(&index_lock, 1);
+		fd = hold_locked_index(&index_lock, !is_status);
 		refresh_cache(refresh_flags);
-		if (write_cache(fd, active_cache, active_nr) ||
-		    commit_locked_index(&index_lock))
-			die("unable to write new_index file");
+		if (0 <= fd) {
+			if (write_cache(fd, active_cache, active_nr) ||
+			    commit_locked_index(&index_lock))
+				die("unable to write new_index file");
+		}
 		commit_style = COMMIT_AS_IS;
 		return get_index_file();
 	}
@@ -383,7 +386,7 @@ static void determine_author_info(void)
 	email = getenv("GIT_AUTHOR_EMAIL");
 	date = getenv("GIT_AUTHOR_DATE");
 
-	if (use_message) {
+	if (use_message && !renew_authorship) {
 		const char *a, *lb, *rb, *eol;
 
 		a = strstr(use_message_buffer, "\nauthor ");
@@ -414,6 +417,47 @@ static void determine_author_info(void)
 	author_name = name;
 	author_email = email;
 	author_date = date;
+}
+
+static int ends_rfc2822_footer(struct strbuf *sb)
+{
+	int ch;
+	int hit = 0;
+	int i, j, k;
+	int len = sb->len;
+	int first = 1;
+	const char *buf = sb->buf;
+
+	for (i = len - 1; i > 0; i--) {
+		if (hit && buf[i] == '\n')
+			break;
+		hit = (buf[i] == '\n');
+	}
+
+	while (i < len - 1 && buf[i] == '\n')
+		i++;
+
+	for (; i < len; i = k) {
+		for (k = i; k < len && buf[k] != '\n'; k++)
+			; /* do nothing */
+		k++;
+
+		if ((buf[k] == ' ' || buf[k] == '\t') && !first)
+			continue;
+
+		first = 0;
+
+		for (j = 0; i + j < len; j++) {
+			ch = buf[i + j];
+			if (ch == ':')
+				break;
+			if (isalnum(ch) ||
+			    (ch == '-'))
+				continue;
+			return 0;
+		}
+	}
+	return 1;
 }
 
 static int prepare_to_commit(const char *index_file, const char *prefix,
@@ -491,7 +535,7 @@ static int prepare_to_commit(const char *index_file, const char *prefix,
 		for (i = sb.len - 1; i > 0 && sb.buf[i - 1] != '\n'; i--)
 			; /* do nothing */
 		if (prefixcmp(sb.buf + i, sob.buf)) {
-			if (prefixcmp(sb.buf + i, sign_off_header))
+			if (!i || !ends_rfc2822_footer(&sb))
 				strbuf_addch(&sb, '\n');
 			strbuf_addbuf(&sb, &sob);
 		}
@@ -686,8 +730,10 @@ static const char *find_author_by_nickname(const char *name)
 	prepare_revision_walk(&revs);
 	commit = get_revision(&revs);
 	if (commit) {
+		struct pretty_print_context ctx = {0};
+		ctx.date_mode = DATE_NORMAL;
 		strbuf_release(&buf);
-		format_commit_message(commit, "%an <%ae>", &buf, DATE_NORMAL);
+		format_commit_message(commit, "%an <%ae>", &buf, &ctx);
 		return strbuf_detach(&buf, NULL);
 	}
 	die("No existing author found with '%s'", name);
@@ -705,6 +751,9 @@ static int parse_and_validate_options(int argc, const char *argv[],
 
 	if (force_author && !strchr(force_author, '>'))
 		force_author = find_author_by_nickname(force_author);
+
+	if (force_author && renew_authorship)
+		die("Using both --reset-author and --author does not make sense");
 
 	if (logfile || message.len || use_message)
 		use_editor = 0;
@@ -739,6 +788,8 @@ static int parse_and_validate_options(int argc, const char *argv[],
 		use_message = edit_message;
 	if (amend && !use_message)
 		use_message = "HEAD";
+	if (!use_message && renew_authorship)
+		die("--reset-author can be used only with -C, -c or --amend.");
 	if (use_message) {
 		unsigned char sha1[20];
 		static char utf8[] = "UTF-8";
@@ -946,8 +997,10 @@ static void print_summary(const char *prefix, const unsigned char *sha1)
 		initial_commit ? " (root-commit)" : "");
 
 	if (!log_tree_commit(&rev, commit)) {
+		struct pretty_print_context ctx = {0};
 		struct strbuf buf = STRBUF_INIT;
-		format_commit_message(commit, format + 7, &buf, DATE_NORMAL);
+		ctx.date_mode = DATE_NORMAL;
+		format_commit_message(commit, format + 7, &buf, &ctx);
 		printf("%s\n", buf.buf);
 		strbuf_release(&buf);
 	}
