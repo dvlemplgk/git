@@ -29,7 +29,7 @@ static void safe_create_dir(const char *dir, int share)
 		}
 	}
 	else if (share && adjust_shared_perm(dir))
-		die("Could not make %s writable by group\n", dir);
+		die("Could not make %s writable by group", dir);
 }
 
 static void copy_templates_1(char *path, int baselen,
@@ -197,6 +197,8 @@ static int create_default_files(const char *template_path)
 
 	git_config(git_default_config, NULL);
 	is_bare_repository_cfg = init_is_bare_repository;
+
+	/* reading existing config may have overwrote it */
 	if (init_shared_repository != -1)
 		shared_repository = init_shared_repository;
 
@@ -315,12 +317,15 @@ int init_db(const char *template_dir, unsigned int flags)
 		 * and compatibility values for PERM_GROUP and
 		 * PERM_EVERYBODY.
 		 */
-		if (shared_repository == PERM_GROUP)
+		if (shared_repository < 0)
+			/* force to the mode value */
+			sprintf(buf, "0%o", -shared_repository);
+		else if (shared_repository == PERM_GROUP)
 			sprintf(buf, "%d", OLD_PERM_GROUP);
 		else if (shared_repository == PERM_EVERYBODY)
 			sprintf(buf, "%d", OLD_PERM_EVERYBODY);
 		else
-			sprintf(buf, "0%o", shared_repository);
+			die("oops");
 		git_config_set("core.sharedrepository", buf);
 		git_config_set("receive.denyNonFastforwards", "true");
 	}
@@ -399,6 +404,9 @@ int cmd_init_db(int argc, const char **argv, const char *prefix)
 		else
 			usage(init_db_usage);
 	}
+
+	if (init_shared_repository != -1)
+		shared_repository = init_shared_repository;
 
 	/*
 	 * GIT_WORK_TREE makes sense only in conjunction with GIT_DIR

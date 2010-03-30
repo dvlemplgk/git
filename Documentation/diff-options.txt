@@ -36,6 +36,9 @@ endif::git-format-patch[]
 --patch-with-raw::
 	Synonym for "-p --raw".
 
+--patience::
+	Generate a diff using the "patience diff" algorithm.
+
 --stat[=width[,name-width]]::
 	Generate a diffstat.  You can override the default
 	output width for 80-column terminal by "--stat=width".
@@ -91,8 +94,22 @@ endif::git-format-patch[]
 	Turn off colored diff, even when the configuration file
 	gives the default to color output.
 
---color-words::
-	Show colored word diff, i.e. color words which have changed.
+--color-words[=<regex>]::
+	Show colored word diff, i.e., color words which have changed.
+	By default, words are separated by whitespace.
++
+When a <regex> is specified, every non-overlapping match of the
+<regex> is considered a word.  Anything between these matches is
+considered whitespace and ignored(!) for the purposes of finding
+differences.  You may want to append `|[^[:space:]]` to your regular
+expression to make sure that it matches all non-whitespace characters.
+A match that contains a newline is silently truncated(!) at the
+newline.
++
+The regex can also be set via a diff driver or configuration option, see
+linkgit:gitattributes[1] or linkgit:git-config[1].  Giving it explicitly
+overrides any diff driver or configuration setting.  Diff drivers
+override configuration settings.
 
 --no-renames::
 	Turn off rename detection, even when the configuration
@@ -116,7 +133,7 @@ endif::git-format-patch[]
 --abbrev[=<n>]::
 	Instead of showing the full 40-byte hexadecimal object
 	name in diff-raw format output and diff-tree header
-	lines, show only handful hexdigits prefix.  This is
+	lines, show only a partial prefix.  This is
 	independent of --full-index option above, which controls
 	the diff-patch output format.  Non default number of
 	digits can be specified with --abbrev=<n>.
@@ -159,7 +176,10 @@ endif::git-format-patch[]
 	number.
 
 -S<string>::
-	Look for differences that contain the change in <string>.
+	Look for differences that introduce or remove an instance of
+	<string>. Note that this is different than the string simply
+	appearing in diff output; see the 'pickaxe' entry in
+	linkgit:gitdiffcore[7] for more details.
 
 --pickaxe-all::
 	When -S finds a change, show all the changes in that
@@ -204,6 +224,10 @@ endif::git-format-patch[]
 	Ignore whitespace when comparing lines.  This ignores
 	differences even if one line has whitespace where the other
 	line has none.
+
+--inter-hunk-context=<lines>::
+	Show the context between diff hunks, up to the specified number
+	of lines, thereby fusing hunks that are close to each other.
 
 --exit-code::
 	Make the program exit with codes similar to diff(1).

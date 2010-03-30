@@ -128,6 +128,30 @@ test_expect_success 'force diff with "diff"' '
 	test_cmp "$TEST_DIRECTORY"/t4020/diff.NUL actual
 '
 
+test_expect_success 'GIT_EXTERNAL_DIFF with more than one changed files' '
+	echo anotherfile > file2 &&
+	git add file2 &&
+	git commit -m "added 2nd file" &&
+	echo modified >file2 &&
+	GIT_EXTERNAL_DIFF=echo git diff
+'
+
+echo "#!$SHELL_PATH" >fake-diff.sh
+cat >> fake-diff.sh <<\EOF
+cat $2 >> crlfed.txt
+EOF
+chmod a+x fake-diff.sh
+
+keep_only_cr () {
+	tr -dc '\015'
+}
+
+test_expect_success 'external diff with autocrlf = true' '
+	git config core.autocrlf true &&
+	GIT_EXTERNAL_DIFF=./fake-diff.sh git diff &&
+	test $(wc -l < crlfed.txt) = $(cat crlfed.txt | keep_only_cr | wc -c)
+'
+
 test_expect_success 'diff --cached' '
 	git add file &&
 	git update-index --assume-unchanged file &&

@@ -6,6 +6,7 @@
 #include "cache.h"
 #include "quote.h"
 #include "tree.h"
+#include "exec_cmd.h"
 
 static struct treeent {
 	unsigned mode;
@@ -61,7 +62,7 @@ static void write_tree(unsigned char *sha1)
 	write_sha1_file(buf.buf, buf.len, tree_type, sha1);
 }
 
-static const char mktree_usage[] = "git-mktree [-z]";
+static const char mktree_usage[] = "git mktree [-z]";
 
 int main(int ac, char **av)
 {
@@ -69,6 +70,8 @@ int main(int ac, char **av)
 	struct strbuf p_uq = STRBUF_INIT;
 	unsigned char sha1[20];
 	int line_termination = '\n';
+
+	git_extract_argv0_path(av[0]);
 
 	setup_git_directory();
 

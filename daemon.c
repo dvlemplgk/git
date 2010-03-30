@@ -716,7 +716,7 @@ static int socksetup(char *listen_addr, int listen_port, int **socklist_p)
 
 	gai = getaddrinfo(listen_addr, pbuf, &hints, &ai0);
 	if (gai)
-		die("getaddrinfo() failed: %s\n", gai_strerror(gai));
+		die("getaddrinfo() failed: %s", gai_strerror(gai));
 
 	for (ai = ai0; ai; ai = ai->ai_next) {
 		int sockfd;
@@ -936,6 +936,8 @@ int main(int argc, char **argv)
 	struct group *group;
 	gid_t gid = 0;
 	int i;
+
+	git_extract_argv0_path(argv[0]);
 
 	for (i = 1; i < argc; i++) {
 		char *arg = argv[i];

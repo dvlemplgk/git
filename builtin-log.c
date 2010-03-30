@@ -16,6 +16,7 @@
 #include "patch-ids.h"
 #include "run-command.h"
 #include "shortlog.h"
+#include "remote.h"
 
 /* Set a default date-time format for git log ("log.date" config variable) */
 static const char *default_date_mode = NULL;
@@ -249,22 +250,13 @@ int cmd_whatchanged(int argc, const char **argv, const char *prefix)
 
 static void show_tagger(char *buf, int len, struct rev_info *rev)
 {
-	char *email_end, *p;
-	unsigned long date;
-	int tz;
+	struct strbuf out = STRBUF_INIT;
 
-	email_end = memchr(buf, '>', len);
-	if (!email_end)
-		return;
-	p = ++email_end;
-	while (isspace(*p))
-		p++;
-	date = strtoul(p, &p, 10);
-	while (isspace(*p))
-		p++;
-	tz = (int)strtol(p, NULL, 10);
-	printf("Tagger: %.*s\nDate:   %s\n", (int)(email_end - buf), buf,
-	       show_date(date, tz, rev->date_mode));
+	pp_user_info("Tagger", rev->commit_format, &out, buf, rev->date_mode,
+		git_log_output_encoding ?
+		git_log_output_encoding: git_commit_encoding);
+	printf("%s\n", out.buf);
+	strbuf_release(&out);
 }
 
 static int show_object(const unsigned char *sha1, int show_tag_object,
@@ -846,7 +838,7 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 			committer = git_committer_info(IDENT_ERROR_ON_NO_NAME);
 			endpos = strchr(committer, '>');
 			if (!endpos)
-				die("bogus committer info %s\n", committer);
+				die("bogus committer info %s", committer);
 			add_signoff = xmemdupz(committer, endpos - committer + 1);
 		}
 		else if (!strcmp(argv[i], "--attach")) {
@@ -925,8 +917,6 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 		die ("-n and -k are mutually exclusive.");
 	if (keep_subject && subject_prefix)
 		die ("--subject-prefix and -k are mutually exclusive.");
-	if (numbered_files && use_stdout)
-		die ("--numbered-files and --stdout are mutually exclusive.");
 
 	argc = setup_revisions(argc, argv, &rev, "HEAD");
 	if (argc > 1)
@@ -1099,13 +1089,14 @@ static int add_pending_commit(const char *arg, struct rev_info *revs, int flags)
 }
 
 static const char cherry_usage[] =
-"git cherry [-v] <upstream> [<head>] [<limit>]";
+"git cherry [-v] [<upstream> [<head> [<limit>]]]";
 int cmd_cherry(int argc, const char **argv, const char *prefix)
 {
 	struct rev_info revs;
 	struct patch_ids ids;
 	struct commit *commit;
 	struct commit_list *list = NULL;
+	struct branch *current_branch;
 	const char *upstream;
 	const char *head = "HEAD";
 	const char *limit = NULL;
@@ -1128,7 +1119,17 @@ int cmd_cherry(int argc, const char **argv, const char *prefix)
 		upstream = argv[1];
 		break;
 	default:
-		usage(cherry_usage);
+		current_branch = branch_get(NULL);
+		if (!current_branch || !current_branch->merge
+					|| !current_branch->merge[0]
+					|| !current_branch->merge[0]->dst) {
+			fprintf(stderr, "Could not find a tracked"
+					" remote branch, please"
+					" specify <upstream> manually.\n");
+			usage(cherry_usage);
+		}
+
+		upstream = current_branch->merge[0]->dst;
 	}
 
 	init_revisions(&revs, prefix);

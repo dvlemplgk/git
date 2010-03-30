@@ -10,6 +10,7 @@
 #include "exec_cmd.h"
 #include "remote.h"
 #include "list-objects.h"
+#include "sigchain.h"
 
 #include <expat.h>
 
@@ -152,6 +153,7 @@ struct remote_lock
 	char *url;
 	char *owner;
 	char *token;
+	char tmpfile_suffix[41];
 	time_t start_time;
 	long timeout;
 	int refreshing;
@@ -177,6 +179,47 @@ struct remote_ls_ctx
 	struct remote_ls_ctx *parent;
 };
 
+/* get_dav_token_headers options */
+enum dav_header_flag {
+	DAV_HEADER_IF = (1u << 0),
+	DAV_HEADER_LOCK = (1u << 1),
+	DAV_HEADER_TIMEOUT = (1u << 2)
+};
+
+static struct curl_slist *get_dav_token_headers(struct remote_lock *lock, enum dav_header_flag options)
+{
+	struct strbuf buf = STRBUF_INIT;
+	struct curl_slist *dav_headers = NULL;
+
+	if (options & DAV_HEADER_IF) {
+		strbuf_addf(&buf, "If: (<%s>)", lock->token);
+		dav_headers = curl_slist_append(dav_headers, buf.buf);
+		strbuf_reset(&buf);
+	}
+	if (options & DAV_HEADER_LOCK) {
+		strbuf_addf(&buf, "Lock-Token: <%s>", lock->token);
+		dav_headers = curl_slist_append(dav_headers, buf.buf);
+		strbuf_reset(&buf);
+	}
+	if (options & DAV_HEADER_TIMEOUT) {
+		strbuf_addf(&buf, "Timeout: Second-%ld", lock->timeout);
+		dav_headers = curl_slist_append(dav_headers, buf.buf);
+		strbuf_reset(&buf);
+	}
+	strbuf_release(&buf);
+
+	return dav_headers;
+}
+
+static void append_remote_object_url(struct strbuf *buf, const char *url,
+				     const char *hex,
+				     int only_two_digit_prefix)
+{
+	strbuf_addf(buf, "%sobjects/%.*s/", url, 2, hex);
+	if (!only_two_digit_prefix)
+		strbuf_addf(buf, "%s", hex+2);
+}
+
 static void finish_request(struct transfer_request *request);
 static void release_request(struct transfer_request *request);
 
@@ -189,6 +232,15 @@ static void process_response(void *callback_data)
 }
 
 #ifdef USE_CURL_MULTI
+
+static char *get_remote_object_url(const char *url, const char *hex,
+				   int only_two_digit_prefix)
+{
+	struct strbuf buf = STRBUF_INIT;
+	append_remote_object_url(&buf, url, hex, only_two_digit_prefix);
+	return strbuf_detach(&buf, NULL);
+}
+
 static size_t fwrite_sha1_file(void *ptr, size_t eltsize, size_t nmemb,
 			       void *data)
 {
@@ -223,7 +275,6 @@ static void start_fetch_loose(struct transfer_request *request)
 	char *filename;
 	char prevfile[PATH_MAX];
 	char *url;
-	char *posn;
 	int prevlocal;
 	unsigned char prev_buf[PREV_BUF_SIZE];
 	ssize_t prev_read = 0;
@@ -273,17 +324,8 @@ static void start_fetch_loose(struct transfer_request *request)
 
 	git_SHA1_Init(&request->c);
 
-	url = xmalloc(strlen(remote->url) + 50);
-	request->url = xmalloc(strlen(remote->url) + 50);
-	strcpy(url, remote->url);
-	posn = url + strlen(remote->url);
-	strcpy(posn, "objects/");
-	posn += 8;
-	memcpy(posn, hex, 2);
-	posn += 2;
-	*(posn++) = '/';
-	strcpy(posn, hex + 2);
-	strcpy(request->url, url);
+	url = get_remote_object_url(remote->url, hex, 0);
+	request->url = xstrdup(url);
 
 	/* If a previous temp file is present, process what was already
 	   fetched. */
@@ -356,16 +398,8 @@ static void start_mkcol(struct transfer_request *request)
 {
 	char *hex = sha1_to_hex(request->obj->sha1);
 	struct active_request_slot *slot;
-	char *posn;
 
-	request->url = xmalloc(strlen(remote->url) + 13);
-	strcpy(request->url, remote->url);
-	posn = request->url + strlen(remote->url);
-	strcpy(posn, "objects/");
-	posn += 8;
-	memcpy(posn, hex, 2);
-	posn += 2;
-	strcpy(posn, "/");
+	request->url = get_remote_object_url(remote->url, hex, 1);
 
 	slot = get_active_slot();
 	slot->callback_func = process_response;
@@ -480,7 +514,7 @@ static void start_put(struct transfer_request *request)
 {
 	char *hex = sha1_to_hex(request->obj->sha1);
 	struct active_request_slot *slot;
-	char *posn;
+	struct strbuf buf = STRBUF_INIT;
 	enum object_type type;
 	char hdr[50];
 	void *unpacked;
@@ -519,21 +553,13 @@ static void start_put(struct transfer_request *request)
 
 	request->buffer.buf.len = stream.total_out;
 
-	request->url = xmalloc(strlen(remote->url) +
-			       strlen(request->lock->token) + 51);
-	strcpy(request->url, remote->url);
-	posn = request->url + strlen(remote->url);
-	strcpy(posn, "objects/");
-	posn += 8;
-	memcpy(posn, hex, 2);
-	posn += 2;
-	*(posn++) = '/';
-	strcpy(posn, hex + 2);
-	request->dest = xmalloc(strlen(request->url) + 14);
-	sprintf(request->dest, "Destination: %s", request->url);
-	posn += 38;
-	*(posn++) = '_';
-	strcpy(posn, request->lock->token);
+	strbuf_addstr(&buf, "Destination: ");
+	append_remote_object_url(&buf, remote->url, hex, 0);
+	request->dest = strbuf_detach(&buf, NULL);
+
+	append_remote_object_url(&buf, remote->url, hex, 0);
+	strbuf_add(&buf, request->lock->tmpfile_suffix, 41);
+	request->url = strbuf_detach(&buf, NULL);
 
 	slot = get_active_slot();
 	slot->callback_func = process_response;
@@ -588,18 +614,12 @@ static int refresh_lock(struct remote_lock *lock)
 {
 	struct active_request_slot *slot;
 	struct slot_results results;
-	char *if_header;
-	char timeout_header[25];
-	struct curl_slist *dav_headers = NULL;
+	struct curl_slist *dav_headers;
 	int rc = 0;
 
 	lock->refreshing = 1;
 
-	if_header = xmalloc(strlen(lock->token) + 25);
-	sprintf(if_header, "If: (<%s>)", lock->token);
-	sprintf(timeout_header, "Timeout: Second-%ld", lock->timeout);
-	dav_headers = curl_slist_append(dav_headers, if_header);
-	dav_headers = curl_slist_append(dav_headers, timeout_header);
+	dav_headers = get_dav_token_headers(lock, DAV_HEADER_IF | DAV_HEADER_TIMEOUT);
 
 	slot = get_active_slot();
 	slot->results = &results;
@@ -622,7 +642,6 @@ static int refresh_lock(struct remote_lock *lock)
 
 	lock->refreshing = 0;
 	curl_slist_free_all(dav_headers);
-	free(if_header);
 
 	return rc;
 }
@@ -729,7 +748,6 @@ static void finish_request(struct transfer_request *request)
 			aborted = 1;
 		}
 	} else if (request->state == RUN_FETCH_LOOSE) {
-		fchmod(request->local_fileno, 0444);
 		close(request->local_fileno); request->local_fileno = -1;
 
 		if (request->curl_result != CURLE_OK &&
@@ -1111,6 +1129,8 @@ static void handle_lockprop_ctx(struct xml_ctx *ctx, int tag_closed)
 static void handle_new_lock_ctx(struct xml_ctx *ctx, int tag_closed)
 {
 	struct remote_lock *lock = (struct remote_lock *)ctx->userData;
+	git_SHA_CTX sha_ctx;
+	unsigned char lock_token_sha1[20];
 
 	if (tag_closed && ctx->cdata) {
 		if (!strcmp(ctx->name, DAV_ACTIVELOCK_OWNER)) {
@@ -1123,6 +1143,13 @@ static void handle_new_lock_ctx(struct xml_ctx *ctx, int tag_closed)
 		} else if (!strcmp(ctx->name, DAV_ACTIVELOCK_TOKEN)) {
 			lock->token = xmalloc(strlen(ctx->cdata) + 1);
 			strcpy(lock->token, ctx->cdata);
+
+			git_SHA1_Init(&sha_ctx);
+			git_SHA1_Update(&sha_ctx, lock->token, strlen(lock->token));
+			git_SHA1_Final(lock_token_sha1, &sha_ctx);
+
+			lock->tmpfile_suffix[0] = '_';
+			memcpy(lock->tmpfile_suffix + 1, sha1_to_hex(lock_token_sha1), 40);
 		}
 	}
 }
@@ -1303,14 +1330,10 @@ static int unlock_remote(struct remote_lock *lock)
 	struct active_request_slot *slot;
 	struct slot_results results;
 	struct remote_lock *prev = remote->locks;
-	char *lock_token_header;
-	struct curl_slist *dav_headers = NULL;
+	struct curl_slist *dav_headers;
 	int rc = 0;
 
-	lock_token_header = xmalloc(strlen(lock->token) + 31);
-	sprintf(lock_token_header, "Lock-Token: <%s>",
-		lock->token);
-	dav_headers = curl_slist_append(dav_headers, lock_token_header);
+	dav_headers = get_dav_token_headers(lock, DAV_HEADER_LOCK);
 
 	slot = get_active_slot();
 	slot->results = &results;
@@ -1331,7 +1354,6 @@ static int unlock_remote(struct remote_lock *lock)
 	}
 
 	curl_slist_free_all(dav_headers);
-	free(lock_token_header);
 
 	if (remote->locks == lock) {
 		remote->locks = lock->next;
@@ -1364,7 +1386,7 @@ static void remove_locks(void)
 static void remove_locks_on_signal(int signo)
 {
 	remove_locks();
-	signal(signo, SIG_DFL);
+	sigchain_pop(signo);
 	raise(signo);
 }
 
@@ -1731,13 +1753,10 @@ static int update_remote(unsigned char *sha1, struct remote_lock *lock)
 {
 	struct active_request_slot *slot;
 	struct slot_results results;
-	char *if_header;
 	struct buffer out_buffer = { STRBUF_INIT, 0 };
-	struct curl_slist *dav_headers = NULL;
+	struct curl_slist *dav_headers;
 
-	if_header = xmalloc(strlen(lock->token) + 25);
-	sprintf(if_header, "If: (<%s>)", lock->token);
-	dav_headers = curl_slist_append(dav_headers, if_header);
+	dav_headers = get_dav_token_headers(lock, DAV_HEADER_IF);
 
 	strbuf_addf(&out_buffer.buf, "%s\n", sha1_to_hex(sha1));
 
@@ -1756,7 +1775,6 @@ static int update_remote(unsigned char *sha1, struct remote_lock *lock)
 	if (start_active_slot(slot)) {
 		run_active_slot(slot);
 		strbuf_release(&out_buffer.buf);
-		free(if_header);
 		if (results.curl_result != CURLE_OK) {
 			fprintf(stderr,
 				"PUT error: curl result=%d, HTTP code=%ld\n",
@@ -1766,7 +1784,6 @@ static int update_remote(unsigned char *sha1, struct remote_lock *lock)
 		}
 	} else {
 		strbuf_release(&out_buffer.buf);
-		free(if_header);
 		fprintf(stderr, "Unable to start PUT request\n");
 		return 0;
 	}
@@ -1948,15 +1965,12 @@ static void update_remote_info_refs(struct remote_lock *lock)
 	struct buffer buffer = { STRBUF_INIT, 0 };
 	struct active_request_slot *slot;
 	struct slot_results results;
-	char *if_header;
-	struct curl_slist *dav_headers = NULL;
+	struct curl_slist *dav_headers;
 
 	remote_ls("refs/", (PROCESS_FILES | RECURSIVE),
 		  add_remote_info_ref, &buffer.buf);
 	if (!aborted) {
-		if_header = xmalloc(strlen(lock->token) + 25);
-		sprintf(if_header, "If: (<%s>)", lock->token);
-		dav_headers = curl_slist_append(dav_headers, if_header);
+		dav_headers = get_dav_token_headers(lock, DAV_HEADER_IF);
 
 		slot = get_active_slot();
 		slot->results = &results;
@@ -1978,7 +1992,6 @@ static void update_remote_info_refs(struct remote_lock *lock)
 					results.curl_result, results.http_code);
 			}
 		}
-		free(if_header);
 	}
 	strbuf_release(&buffer.buf);
 }
@@ -2184,6 +2197,8 @@ int main(int argc, char **argv)
 	struct ref *ref;
 	char *rewritten_url = NULL;
 
+	git_extract_argv0_path(argv[0]);
+
 	setup_git_directory();
 
 	remote = xcalloc(sizeof(*remote), 1);
@@ -2266,10 +2281,7 @@ int main(int argc, char **argv)
 		goto cleanup;
 	}
 
-	signal(SIGINT, remove_locks_on_signal);
-	signal(SIGHUP, remove_locks_on_signal);
-	signal(SIGQUIT, remove_locks_on_signal);
-	signal(SIGTERM, remove_locks_on_signal);
+	sigchain_push_common(remove_locks_on_signal);
 
 	/* Check whether the remote has server info files */
 	remote->can_update_info_refs = 0;

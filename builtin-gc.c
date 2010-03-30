@@ -144,34 +144,6 @@ static int too_many_packs(void)
 	return gc_auto_pack_limit <= cnt;
 }
 
-static int run_hook(void)
-{
-	const char *argv[2];
-	struct child_process hook;
-	int ret;
-
-	argv[0] = git_path("hooks/pre-auto-gc");
-	argv[1] = NULL;
-
-	if (access(argv[0], X_OK) < 0)
-		return 0;
-
-	memset(&hook, 0, sizeof(hook));
-	hook.argv = argv;
-	hook.no_stdin = 1;
-	hook.stdout_to_stderr = 1;
-
-	ret = start_command(&hook);
-	if (ret) {
-		warning("Could not spawn %s", argv[0]);
-		return ret;
-	}
-	ret = finish_command(&hook);
-	if (ret == -ERR_RUN_COMMAND_WAITPID_SIGNAL)
-		warning("%s exited due to uncaught signal", argv[0]);
-	return ret;
-}
-
 static int need_to_gc(void)
 {
 	/*
@@ -189,26 +161,28 @@ static int need_to_gc(void)
 	 */
 	if (too_many_packs())
 		append_option(argv_repack,
-			      !strcmp(prune_expire, "now") ? "-a" : "-A",
+			      prune_expire && !strcmp(prune_expire, "now") ?
+			      "-a" : "-A",
 			      MAX_ADD);
 	else if (!too_many_loose_objects())
 		return 0;
 
-	if (run_hook())
+	if (run_hook(NULL, "pre-auto-gc", NULL))
 		return 0;
 	return 1;
 }
 
 int cmd_gc(int argc, const char **argv, const char *prefix)
 {
-	int prune = 0;
 	int aggressive = 0;
 	int auto_gc = 0;
 	int quiet = 0;
 	char buf[80];
 
 	struct option builtin_gc_options[] = {
-		OPT_BOOLEAN(0, "prune", &prune, "prune unreferenced objects (deprecated)"),
+		{ OPTION_STRING, 0, "prune", &prune_expire, "date",
+			"prune unreferenced objects",
+			PARSE_OPT_OPTARG, NULL, (intptr_t)prune_expire },
 		OPT_BOOLEAN(0, "aggressive", &aggressive, "be more thorough (increased runtime)"),
 		OPT_BOOLEAN(0, "auto", &auto_gc, "enable auto-gc mode"),
 		OPT_BOOLEAN('q', "quiet", &quiet, "suppress progress reports"),
@@ -246,7 +220,8 @@ int cmd_gc(int argc, const char **argv, const char *prefix)
 			"\"git help gc\" for more information.\n");
 	} else
 		append_option(argv_repack,
-			      !strcmp(prune_expire, "now") ? "-a" : "-A",
+			      prune_expire && !strcmp(prune_expire, "now")
+			      ? "-a" : "-A",
 			      MAX_ADD);
 
 	if (pack_refs && run_command_v_opt(argv_pack_refs, RUN_GIT_CMD))
@@ -258,9 +233,11 @@ int cmd_gc(int argc, const char **argv, const char *prefix)
 	if (run_command_v_opt(argv_repack, RUN_GIT_CMD))
 		return error(FAILED_RUN, argv_repack[0]);
 
-	argv_prune[2] = prune_expire;
-	if (run_command_v_opt(argv_prune, RUN_GIT_CMD))
-		return error(FAILED_RUN, argv_prune[0]);
+	if (prune_expire) {
+		argv_prune[2] = prune_expire;
+		if (run_command_v_opt(argv_prune, RUN_GIT_CMD))
+			return error(FAILED_RUN, argv_prune[0]);
+	}
 
 	if (run_command_v_opt(argv_rerere, RUN_GIT_CMD))
 		return error(FAILED_RUN, argv_rerere[0]);

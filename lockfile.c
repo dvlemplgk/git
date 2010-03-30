@@ -2,6 +2,7 @@
  * Copyright (c) 2005, Junio C Hamano
  */
 #include "cache.h"
+#include "sigchain.h"
 
 static struct lock_file *lock_file_list;
 static const char *alternate_index_output;
@@ -24,7 +25,7 @@ static void remove_lock_file(void)
 static void remove_lock_file_on_signal(int signo)
 {
 	remove_lock_file();
-	signal(signo, SIG_DFL);
+	sigchain_pop(signo);
 	raise(signo);
 }
 
@@ -136,11 +137,7 @@ static int lock_file(struct lock_file *lk, const char *path, int flags)
 	lk->fd = open(lk->filename, O_RDWR | O_CREAT | O_EXCL, 0666);
 	if (0 <= lk->fd) {
 		if (!lock_file_list) {
-			signal(SIGINT, remove_lock_file_on_signal);
-			signal(SIGHUP, remove_lock_file_on_signal);
-			signal(SIGTERM, remove_lock_file_on_signal);
-			signal(SIGQUIT, remove_lock_file_on_signal);
-			signal(SIGPIPE, remove_lock_file_on_signal);
+			sigchain_push_common(remove_lock_file_on_signal);
 			atexit(remove_lock_file);
 		}
 		lk->owner = getpid();
@@ -161,7 +158,7 @@ static int lock_file(struct lock_file *lk, const char *path, int flags)
 
 NORETURN void unable_to_lock_index_die(const char *path, int err)
 {
-	if (errno == EEXIST) {
+	if (err == EEXIST) {
 		die("Unable to create '%s.lock': %s.\n\n"
 		    "If no other git process is currently running, this probably means a\n"
 		    "git process crashed in this repository earlier. Make sure no other git\n"
@@ -187,7 +184,7 @@ int hold_lock_file_for_append(struct lock_file *lk, const char *path, int flags)
 	fd = lock_file(lk, path, flags);
 	if (fd < 0) {
 		if (flags & LOCK_DIE_ON_ERROR)
-			die("unable to create '%s.lock': %s", path, strerror(errno));
+			unable_to_lock_index_die(path, errno);
 		return fd;
 	}
 

@@ -39,8 +39,8 @@ static void insert_one_record(struct shortlog *log,
 	const char *dot3 = log->common_repo_prefix;
 	char *buffer, *p;
 	struct string_list_item *item;
-	struct string_list *onelines;
 	char namebuf[1024];
+	char emailbuf[1024];
 	size_t len;
 	const char *eol;
 	const char *boemail, *eoemail;
@@ -52,7 +52,19 @@ static void insert_one_record(struct shortlog *log,
 	eoemail = strchr(boemail, '>');
 	if (!eoemail)
 		return;
-	if (!map_email(&log->mailmap, boemail+1, namebuf, sizeof(namebuf))) {
+
+	/* copy author name to namebuf, to support matching on both name and email */
+	memcpy(namebuf, author, boemail - author);
+	len = boemail - author;
+	while(len > 0 && isspace(namebuf[len-1]))
+		len--;
+	namebuf[len] = 0;
+
+	/* copy email name to emailbuf, to allow email replacement as well */
+	memcpy(emailbuf, boemail+1, eoemail - boemail);
+	emailbuf[eoemail - boemail - 1] = 0;
+
+	if (!map_user(&log->mailmap, emailbuf, sizeof(emailbuf), namebuf, sizeof(namebuf))) {
 		while (author < boemail && isspace(*author))
 			author++;
 		for (len = 0;
@@ -68,16 +80,13 @@ static void insert_one_record(struct shortlog *log,
 
 	if (log->email) {
 		size_t room = sizeof(namebuf) - len - 1;
-		int maillen = eoemail - boemail + 1;
-		snprintf(namebuf + len, room, " %.*s", maillen, boemail);
+		int maillen = strlen(emailbuf);
+		snprintf(namebuf + len, room, " <%.*s>", maillen, emailbuf);
 	}
 
-	buffer = xstrdup(namebuf);
-	item = string_list_insert(buffer, &log->list);
+	item = string_list_insert(namebuf, &log->list);
 	if (item->util == NULL)
 		item->util = xcalloc(1, sizeof(struct string_list));
-	else
-		free(buffer);
 
 	/* Skip any leading whitespace, including any blank lines. */
 	while (*oneline && isspace(*oneline))
@@ -107,16 +116,7 @@ static void insert_one_record(struct shortlog *log,
 		}
 	}
 
-	onelines = item->util;
-	if (onelines->nr >= onelines->alloc) {
-		onelines->alloc = alloc_nr(onelines->nr);
-		onelines->items = xrealloc(onelines->items,
-				onelines->alloc
-				* sizeof(struct string_list_item));
-	}
-
-	onelines->items[onelines->nr].util = NULL;
-	onelines->items[onelines->nr++].string = buffer;
+	string_list_append(buffer, item->util);
 }
 
 static void read_from_stdin(struct shortlog *log)
@@ -232,7 +232,7 @@ void shortlog_init(struct shortlog *log)
 {
 	memset(log, 0, sizeof(*log));
 
-	read_mailmap(&log->mailmap, ".mailmap", &log->common_repo_prefix);
+	read_mailmap(&log->mailmap, &log->common_repo_prefix);
 
 	log->list.strdup_strings = 1;
 	log->wrap = DEFAULT_WRAPLEN;
@@ -261,6 +261,7 @@ int cmd_shortlog(int argc, const char **argv, const char *prefix)
 	struct parse_opt_ctx_t ctx;
 
 	prefix = setup_git_directory_gently(&nongit);
+	git_config(git_default_config, NULL);
 	shortlog_init(&log);
 	init_revisions(&rev, prefix);
 	parse_options_start(&ctx, argc, argv, PARSE_OPT_KEEP_DASHDASH |
@@ -326,13 +327,12 @@ void shortlog_output(struct shortlog *log)
 		}
 
 		onelines->strdup_strings = 1;
-		string_list_clear(onelines, 1);
+		string_list_clear(onelines, 0);
 		free(onelines);
 		log->list.items[i].util = NULL;
 	}
 
 	log->list.strdup_strings = 1;
 	string_list_clear(&log->list, 1);
-	log->mailmap.strdup_strings = 1;
-	string_list_clear(&log->mailmap, 1);
+	clear_mailmap(&log->mailmap);
 }

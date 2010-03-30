@@ -150,6 +150,7 @@ Format of STDIN stream:
 #include "refs.h"
 #include "csum-file.h"
 #include "quote.h"
+#include "exec_cmd.h"
 
 #define PACK_ID_BITS 16
 #define MAX_PACK_ID ((1<<PACK_ID_BITS)-1)
@@ -867,7 +868,7 @@ static char *create_index(void)
 	/* Generate the fan-out array. */
 	c = idx;
 	for (i = 0; i < 256; i++) {
-		struct object_entry **next = c;;
+		struct object_entry **next = c;
 		while (next < last) {
 			if ((*next)->sha1[0] != i)
 				break;
@@ -900,9 +901,6 @@ static char *keep_pack(char *curr_index_name)
 	static char name[PATH_MAX];
 	static const char *keep_msg = "fast-import";
 	int keep_fd;
-
-	chmod(pack_data->pack_name, 0444);
-	chmod(curr_index_name, 0444);
 
 	keep_fd = odb_pack_keep(name, sizeof(name), pack_data->sha1);
 	if (keep_fd < 0)
@@ -2402,6 +2400,8 @@ static const char fast_import_usage[] =
 int main(int argc, const char **argv)
 {
 	unsigned int i, show_stats = 1;
+
+	git_extract_argv0_path(argv[0]);
 
 	setup_git_directory();
 	git_config(git_pack_config, NULL);

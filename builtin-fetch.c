@@ -10,6 +10,7 @@
 #include "transport.h"
 #include "run-command.h"
 #include "parse-options.h"
+#include "sigchain.h"
 
 static const char * const builtin_fetch_usage[] = {
 	"git fetch [options] [<repository> <refspec>...]",
@@ -58,7 +59,7 @@ static void unlock_pack(void)
 static void unlock_pack_on_signal(int signo)
 {
 	unlock_pack();
-	signal(SIGINT, SIG_DFL);
+	sigchain_pop(signo);
 	raise(signo);
 }
 
@@ -607,7 +608,7 @@ static void set_option(const char *name, const char *value)
 {
 	int r = transport_set_option(transport, name, value);
 	if (r < 0)
-		die("Option \"%s\" value \"%s\" is not valid for %s\n",
+		die("Option \"%s\" value \"%s\" is not valid for %s",
 			name, value, transport->url);
 	if (r > 0)
 		warning("Option \"%s\" is ignored for %s\n",
@@ -635,6 +636,9 @@ int cmd_fetch(int argc, const char **argv, const char *prefix)
 	else
 		remote = remote_get(argv[0]);
 
+	if (!remote)
+		die("Where do you want to fetch from today?");
+
 	transport = transport_get(remote, remote->url[0]);
 	if (verbosity >= 2)
 		transport->verbose = 1;
@@ -646,9 +650,6 @@ int cmd_fetch(int argc, const char **argv, const char *prefix)
 		set_option(TRANS_OPT_KEEP, "yes");
 	if (depth)
 		set_option(TRANS_OPT_DEPTH, depth);
-
-	if (!transport->url)
-		die("Where do you want to fetch from today?");
 
 	if (argc > 1) {
 		int j = 0;
@@ -672,7 +673,7 @@ int cmd_fetch(int argc, const char **argv, const char *prefix)
 		ref_nr = j;
 	}
 
-	signal(SIGINT, unlock_pack_on_signal);
+	sigchain_push_common(unlock_pack_on_signal);
 	atexit(unlock_pack);
 	exit_code = do_fetch(transport,
 			parse_fetch_refspec(ref_nr, refs), ref_nr);

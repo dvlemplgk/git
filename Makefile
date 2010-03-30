@@ -23,6 +23,9 @@ all::
 # Define NO_EXPAT if you do not have expat installed.  git-http-push is
 # not built, and you cannot push using http:// and https:// transports.
 #
+# Define EXPATDIR=/foo/bar if your expat header and library files are in
+# /foo/bar/include and /foo/bar/lib directories.
+#
 # Define NO_D_INO_IN_DIRENT if you don't have d_ino in your struct dirent.
 #
 # Define NO_D_TYPE_IN_DIRENT if your platform defines DT_UNKNOWN but lacks
@@ -179,28 +182,32 @@ STRIP ?= strip
 # Among the variables below, these:
 #   gitexecdir
 #   template_dir
+#   mandir
+#   infodir
 #   htmldir
 #   ETC_GITCONFIG (but not sysconfdir)
-# can be specified as a relative path ../some/where/else (which must begin
-# with ../); this is interpreted as relative to $(bindir) and "git" at
+# can be specified as a relative path some/where/else;
+# this is interpreted as relative to $(prefix) and "git" at
 # runtime figures out where they are based on the path to the executable.
 # This can help installing the suite in a relocatable way.
 
 prefix = $(HOME)
-bindir = $(prefix)/bin
-mandir = $(prefix)/share/man
-infodir = $(prefix)/share/info
-gitexecdir = $(prefix)/libexec/git-core
+bindir_relative = bin
+bindir = $(prefix)/$(bindir_relative)
+mandir = share/man
+infodir = share/info
+gitexecdir = libexec/git-core
 sharedir = $(prefix)/share
-template_dir = $(sharedir)/git-core/templates
-htmldir=$(sharedir)/doc/git-doc
+template_dir = share/git-core/templates
+htmldir = share/doc/git-doc
 ifeq ($(prefix),/usr)
 sysconfdir = /etc
+ETC_GITCONFIG = $(sysconfdir)/gitconfig
 else
 sysconfdir = $(prefix)/etc
+ETC_GITCONFIG = etc/gitconfig
 endif
 lib = lib
-ETC_GITCONFIG = $(sysconfdir)/gitconfig
 # DESTDIR=
 
 # default configuration for gitweb
@@ -221,7 +228,7 @@ GITWEB_FAVICON = git-favicon.png
 GITWEB_SITE_HEADER =
 GITWEB_SITE_FOOTER =
 
-export prefix bindir sharedir htmldir sysconfdir
+export prefix bindir sharedir sysconfdir
 
 CC = gcc
 AR = ar
@@ -289,7 +296,6 @@ EXTRA_PROGRAMS =
 # ... and all the rest that could be moved out of bindir to gitexecdir
 PROGRAMS += $(EXTRA_PROGRAMS)
 PROGRAMS += git-fast-import$X
-PROGRAMS += git-fetch-pack$X
 PROGRAMS += git-hash-object$X
 PROGRAMS += git-index-pack$X
 PROGRAMS += git-merge-index$X
@@ -298,7 +304,6 @@ PROGRAMS += git-mktag$X
 PROGRAMS += git-mktree$X
 PROGRAMS += git-pack-redundant$X
 PROGRAMS += git-patch-id$X
-PROGRAMS += git-send-pack$X
 PROGRAMS += git-shell$X
 PROGRAMS += git-show-index$X
 PROGRAMS += git-unpack-file$X
@@ -310,8 +315,8 @@ PROGRAMS += git-var$X
 # builtin-$C.o but is linked in as part of some other command.
 BUILT_INS += $(patsubst builtin-%.o,git-%$X,$(BUILTIN_OBJS))
 
-BUILT_INS += git-cherry-pick$X
 BUILT_INS += git-cherry$X
+BUILT_INS += git-cherry-pick$X
 BUILT_INS += git-format-patch$X
 BUILT_INS += git-fsck-objects$X
 BUILT_INS += git-get-tar-commit-id$X
@@ -350,8 +355,8 @@ LIB_H += builtin.h
 LIB_H += cache.h
 LIB_H += cache-tree.h
 LIB_H += commit.h
-LIB_H += compat/mingw.h
 LIB_H += compat/cygwin.h
+LIB_H += compat/mingw.h
 LIB_H += csum-file.h
 LIB_H += decorate.h
 LIB_H += delta.h
@@ -376,7 +381,6 @@ LIB_H += pack-refs.h
 LIB_H += pack-revindex.h
 LIB_H += parse-options.h
 LIB_H += patch-ids.h
-LIB_H += string-list.h
 LIB_H += pkt-line.h
 LIB_H += progress.h
 LIB_H += quote.h
@@ -388,7 +392,9 @@ LIB_H += revision.h
 LIB_H += run-command.h
 LIB_H += sha1-lookup.h
 LIB_H += sideband.h
+LIB_H += sigchain.h
 LIB_H += strbuf.h
+LIB_H += string-list.h
 LIB_H += tag.h
 LIB_H += transport.h
 LIB_H += tree.h
@@ -427,8 +433,8 @@ LIB_OBJS += diffcore-order.o
 LIB_OBJS += diffcore-pickaxe.o
 LIB_OBJS += diffcore-rename.o
 LIB_OBJS += diff-delta.o
-LIB_OBJS += diff-no-index.o
 LIB_OBJS += diff-lib.o
+LIB_OBJS += diff-no-index.o
 LIB_OBJS += diff.o
 LIB_OBJS += dir.o
 LIB_OBJS += editor.o
@@ -460,9 +466,9 @@ LIB_OBJS += pager.o
 LIB_OBJS += parse-options.o
 LIB_OBJS += patch-delta.o
 LIB_OBJS += patch-ids.o
-LIB_OBJS += string-list.o
 LIB_OBJS += path.o
 LIB_OBJS += pkt-line.o
+LIB_OBJS += preload-index.o
 LIB_OBJS += pretty.o
 LIB_OBJS += progress.o
 LIB_OBJS += quote.o
@@ -476,12 +482,14 @@ LIB_OBJS += revision.o
 LIB_OBJS += run-command.o
 LIB_OBJS += server-info.o
 LIB_OBJS += setup.o
-LIB_OBJS += sha1_file.o
 LIB_OBJS += sha1-lookup.o
+LIB_OBJS += sha1_file.o
 LIB_OBJS += sha1_name.o
 LIB_OBJS += shallow.o
 LIB_OBJS += sideband.o
+LIB_OBJS += sigchain.o
 LIB_OBJS += strbuf.o
+LIB_OBJS += string-list.o
 LIB_OBJS += symlinks.o
 LIB_OBJS += tag.o
 LIB_OBJS += trace.o
@@ -490,8 +498,8 @@ LIB_OBJS += tree-diff.o
 LIB_OBJS += tree.o
 LIB_OBJS += tree-walk.o
 LIB_OBJS += unpack-trees.o
-LIB_OBJS += userdiff.o
 LIB_OBJS += usage.o
+LIB_OBJS += userdiff.o
 LIB_OBJS += utf8.o
 LIB_OBJS += walker.o
 LIB_OBJS += wrapper.o
@@ -499,7 +507,6 @@ LIB_OBJS += write_or_die.o
 LIB_OBJS += ws.o
 LIB_OBJS += wt-status.o
 LIB_OBJS += xdiff-interface.o
-LIB_OBJS += preload-index.o
 
 BUILTIN_OBJS += builtin-add.o
 BUILTIN_OBJS += builtin-annotate.o
@@ -640,10 +647,12 @@ endif
 ifeq ($(uname_S),Darwin)
 	NEEDS_SSL_WITH_CRYPTO = YesPlease
 	NEEDS_LIBICONV = YesPlease
-	ifneq ($(shell expr "$(uname_R)" : '9\.'),2)
+	ifeq ($(shell expr "$(uname_R)" : '[15678]\.'),2)
 		OLD_ICONV = UnfortunatelyYes
 	endif
-	NO_STRLCPY = YesPlease
+	ifeq ($(shell expr "$(uname_R)" : '[15]\.'),2)
+		NO_STRLCPY = YesPlease
+	endif
 	NO_MEMMEM = YesPlease
 	THREADED_DELTA_SEARCH = YesPlease
 endif
@@ -785,6 +794,7 @@ ifneq (,$(findstring MINGW,$(uname_S)))
 	SNPRINTF_RETURNS_BOGUS = YesPlease
 	NO_SVN_TESTS = YesPlease
 	NO_PERL_MAKEMAKER = YesPlease
+	RUNTIME_PREFIX = YesPlease
 	NO_POSIX_ONLY_PROGRAMS = YesPlease
 	NO_ST_BLOCKS_IN_STRUCT_STAT = YesPlease
 	COMPAT_CFLAGS += -D__USE_MINGW_ACCESS -DNOGDI -Icompat -Icompat/regex -Icompat/fnmatch
@@ -793,9 +803,6 @@ ifneq (,$(findstring MINGW,$(uname_S)))
 	COMPAT_OBJS += compat/mingw.o compat/fnmatch/fnmatch.o compat/regex/regex.o compat/winansi.o
 	EXTLIBS += -lws2_32
 	X = .exe
-	gitexecdir = ../libexec/git-core
-	template_dir = ../share/git-core/templates/
-	ETC_GITCONFIG = ../etc/gitconfig
 endif
 ifneq (,$(findstring arm,$(uname_M)))
 	ARM_SHA1 = YesPlease
@@ -817,6 +824,7 @@ ifeq ($(uname_S),Darwin)
 			BASIC_LDFLAGS += -L/opt/local/lib
 		endif
 	endif
+	PTHREAD_LIBS =
 endif
 
 ifndef CC_LD_DYNPATH
@@ -849,7 +857,12 @@ else
 		endif
 	endif
 	ifndef NO_EXPAT
-		EXPAT_LIBEXPAT = -lexpat
+		ifdef EXPATDIR
+			BASIC_CFLAGS += -I$(EXPATDIR)/include
+			EXPAT_LIBEXPAT = -L$(EXPATDIR)/$(lib) $(CC_LD_DYNPATH)$(EXPATDIR)/$(lib) -lexpat
+		else
+			EXPAT_LIBEXPAT = -lexpat
+		endif
 	endif
 endif
 
@@ -1027,6 +1040,9 @@ ifdef INTERNAL_QSORT
 	COMPAT_CFLAGS += -DINTERNAL_QSORT
 	COMPAT_OBJS += compat/qsort.o
 endif
+ifdef RUNTIME_PREFIX
+	COMPAT_CFLAGS += -DRUNTIME_PREFIX
+endif
 
 ifdef NO_PTHREADS
 	THREADED_DELTA_SEARCH =
@@ -1086,6 +1102,7 @@ ETC_GITCONFIG_SQ = $(subst ','\'',$(ETC_GITCONFIG))
 
 DESTDIR_SQ = $(subst ','\'',$(DESTDIR))
 bindir_SQ = $(subst ','\'',$(bindir))
+bindir_relative_SQ = $(subst ','\'',$(bindir_relative))
 mandir_SQ = $(subst ','\'',$(mandir))
 infodir_SQ = $(subst ','\'',$(infodir))
 gitexecdir_SQ = $(subst ','\'',$(gitexecdir))
@@ -1251,7 +1268,12 @@ git.o git.spec \
 	$(QUIET_CC)$(CC) -o $*.o -c $(ALL_CFLAGS) $<
 
 exec_cmd.o: exec_cmd.c GIT-CFLAGS
-	$(QUIET_CC)$(CC) -o $*.o -c $(ALL_CFLAGS) '-DGIT_EXEC_PATH="$(gitexecdir_SQ)"' $<
+	$(QUIET_CC)$(CC) -o $*.o -c $(ALL_CFLAGS) \
+		'-DGIT_EXEC_PATH="$(gitexecdir_SQ)"' \
+		'-DBINDIR="$(bindir_relative_SQ)"' \
+		'-DPREFIX="$(prefix_SQ)"' \
+		$<
+
 builtin-init-db.o: builtin-init-db.c GIT-CFLAGS
 	$(QUIET_CC)$(CC) -o $*.o -c $(ALL_CFLAGS) -DDEFAULT_GIT_TEMPLATE_DIR='"$(template_dir_SQ)"' $<
 
@@ -1287,7 +1309,7 @@ $(LIB_FILE): $(LIB_OBJS)
 	$(QUIET_AR)$(RM) $@ && $(AR) rcs $@ $(LIB_OBJS)
 
 XDIFF_OBJS=xdiff/xdiffi.o xdiff/xprepare.o xdiff/xutils.o xdiff/xemit.o \
-	xdiff/xmerge.o
+	xdiff/xmerge.o xdiff/xpatience.o
 $(XDIFF_OBJS): xdiff/xinclude.h xdiff/xmacros.h xdiff/xdiff.h xdiff/xtypes.h \
 	xdiff/xutils.h xdiff/xprepare.h xdiff/xdiffi.h xdiff/xemit.h
 
@@ -1306,6 +1328,9 @@ html:
 
 info:
 	$(MAKE) -C Documentation info
+
+pdf:
+	$(MAKE) -C Documentation pdf
 
 TAGS:
 	$(RM) TAGS
@@ -1353,7 +1378,17 @@ endif
 
 ### Testing rules
 
-TEST_PROGRAMS = test-chmtime$X test-dump-cache-tree$X test-genrandom$X test-date$X test-delta$X test-sha1$X test-match-trees$X test-parse-options$X test-path-utils$X
+TEST_PROGRAMS += test-chmtime$X
+TEST_PROGRAMS += test-ctype$X
+TEST_PROGRAMS += test-date$X
+TEST_PROGRAMS += test-delta$X
+TEST_PROGRAMS += test-dump-cache-tree$X
+TEST_PROGRAMS += test-genrandom$X
+TEST_PROGRAMS += test-match-trees$X
+TEST_PROGRAMS += test-parse-options$X
+TEST_PROGRAMS += test-path-utils$X
+TEST_PROGRAMS += test-sha1$X
+TEST_PROGRAMS += test-sigchain$X
 
 all:: $(TEST_PROGRAMS)
 
@@ -1365,6 +1400,8 @@ export NO_SVN_TESTS
 
 test: all
 	$(MAKE) -C t/ all
+
+test-ctype$X: ctype.o
 
 test-date$X: date.o ctype.o
 
@@ -1397,17 +1434,17 @@ remove-dashes:
 
 ### Installation rules
 
-ifeq ($(firstword $(subst /, ,$(template_dir))),..)
-template_instdir = $(bindir)/$(template_dir)
-else
+ifneq ($(filter /%,$(firstword $(template_dir))),)
 template_instdir = $(template_dir)
+else
+template_instdir = $(prefix)/$(template_dir)
 endif
 export template_instdir
 
-ifeq ($(firstword $(subst /, ,$(gitexecdir))),..)
-gitexec_instdir = $(bindir)/$(gitexecdir)
-else
+ifneq ($(filter /%,$(firstword $(gitexecdir))),)
 gitexec_instdir = $(gitexecdir)
+else
+gitexec_instdir = $(prefix)/$(gitexecdir)
 endif
 gitexec_instdir_SQ = $(subst ','\'',$(gitexec_instdir))
 export gitexec_instdir
@@ -1429,12 +1466,14 @@ endif
 	bindir=$$(cd '$(DESTDIR_SQ)$(bindir_SQ)' && pwd) && \
 	execdir=$$(cd '$(DESTDIR_SQ)$(gitexec_instdir_SQ)' && pwd) && \
 	{ $(RM) "$$execdir/git-add$X" && \
-		ln git-add$X "$$execdir/git-add$X" 2>/dev/null || \
-		cp git-add$X "$$execdir/git-add$X"; } && \
-	{ $(foreach p,$(filter-out git-add$X,$(BUILT_INS)), $(RM) "$$execdir/$p" && \
-		ln "$$execdir/git-add$X" "$$execdir/$p" 2>/dev/null || \
-		ln -s "git-add$X" "$$execdir/$p" 2>/dev/null || \
-		cp "$$execdir/git-add$X" "$$execdir/$p" || exit;) } && \
+		ln "$$bindir/git$X" "$$execdir/git-add$X" 2>/dev/null || \
+		cp "$$bindir/git$X" "$$execdir/git-add$X"; } && \
+	{ for p in $(filter-out git-add$X,$(BUILT_INS)); do \
+		$(RM) "$$execdir/$$p" && \
+		ln "$$execdir/git-add$X" "$$execdir/$$p" 2>/dev/null || \
+		ln -s "git-add$X" "$$execdir/$$p" 2>/dev/null || \
+		cp "$$execdir/git-add$X" "$$execdir/$$p" || exit; \
+	  done } && \
 	./check_bindir "z$$bindir" "z$$execdir" "$$bindir/git-add$X"
 
 install-doc:
@@ -1448,6 +1487,9 @@ install-html:
 
 install-info:
 	$(MAKE) -C Documentation install-info
+
+install-pdf:
+	$(MAKE) -C Documentation install-pdf
 
 quick-install-doc:
 	$(MAKE) -C Documentation quick-install

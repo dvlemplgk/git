@@ -48,6 +48,22 @@ test_expect_success 'result is really identical' '
 	test $H = $(git rev-parse HEAD)
 '
 
+TRASHDIR=$(pwd)
+test_expect_success 'correct GIT_DIR while using -d' '
+	mkdir drepo &&
+	( cd drepo &&
+	git init &&
+	test_commit drepo &&
+	git filter-branch -d "$TRASHDIR/dfoo" \
+		--index-filter "cp \"$TRASHDIR\"/dfoo/backup-refs \"$TRASHDIR\"" \
+	) &&
+	grep drepo "$TRASHDIR/backup-refs"
+'
+
+test_expect_success 'Fail if commit filter fails' '
+	test_must_fail git filter-branch -f --commit-filter "exit 1" HEAD
+'
+
 test_expect_success 'rewrite, renaming a specific file' '
 	git filter-branch -f --tree-filter "mv d doh || :" HEAD
 '
@@ -261,6 +277,14 @@ test_expect_success 'Tag name filtering allows slashes in tag names' '
 	git cat-file tag X/1 | sed -e s,X/1,X/2, > expect &&
 	git filter-branch -f --tag-name-filter "echo X/2" &&
 	git cat-file tag X/2 > actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'Prune empty commits' '
+	git rev-list HEAD > expect &&
+	make_commit to_remove &&
+	git filter-branch -f --index-filter "git update-index --remove to_remove" --prune-empty HEAD &&
+	git rev-list HEAD > actual &&
 	test_cmp expect actual
 '
 

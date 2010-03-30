@@ -13,9 +13,9 @@ TCLTK_PATH = @TCLTK_PATH@
 prefix = @prefix@
 exec_prefix = @exec_prefix@
 bindir = @bindir@
-gitexecdir = @libexecdir@/git-core/
+gitexecdir = @libexecdir@/git-core
 datarootdir = @datarootdir@
-template_dir = @datadir@/git-core/templates/
+template_dir = @datadir@/git-core/templates
 
 mandir=@mandir@
 
@@ -52,4 +52,5 @@ NO_DEFLATE_BOUND=@NO_DEFLATE_BOUND@
 FREAD_READS_DIRECTORIES=@FREAD_READS_DIRECTORIES@
 SNPRINTF_RETURNS_BOGUS=@SNPRINTF_RETURNS_BOGUS@
 NO_PTHREADS=@NO_PTHREADS@
+THREADED_DELTA_SEARCH=@THREADED_DELTA_SEARCH@
 PTHREAD_LIBS=@PTHREAD_LIBS@

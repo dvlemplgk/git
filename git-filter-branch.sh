@@ -40,6 +40,16 @@ skip_commit()
 	done;
 }
 
+# if you run 'git_commit_non_empty_tree "$@"' in a commit filter,
+# it will skip commits that leave the tree untouched, commit the other.
+git_commit_non_empty_tree()
+{
+	if test $# = 3 && test "$1" = $(git rev-parse "$3^{tree}"); then
+		map "$3"
+	else
+		git commit-tree "$@"
+	fi
+}
 # override die(): this version puts in an extra line break, so that
 # the progress is still visible
 
@@ -109,11 +119,12 @@ filter_tree=
 filter_index=
 filter_parent=
 filter_msg=cat
-filter_commit='git commit-tree "$@"'
+filter_commit=
 filter_tag_name=
 filter_subdir=
 orig_namespace=refs/original/
 force=
+prune_empty=
 while :
 do
 	case "$1" in
@@ -124,6 +135,11 @@ do
 	--force|-f)
 		shift
 		force=t
+		continue
+		;;
+	--prune-empty)
+		shift
+		prune_empty=t
 		continue
 		;;
 	-*)
@@ -176,6 +192,17 @@ do
 	esac
 done
 
+case "$prune_empty,$filter_commit" in
+,)
+	filter_commit='git commit-tree "$@"';;
+t,)
+	filter_commit="$functions;"' git_commit_non_empty_tree "$@"';;
+,*)
+	;;
+*)
+	die "Cannot set --prune-empty and --filter-commit at the same time"
+esac
+
 case "$force" in
 t)
 	rm -rf "$tempdir"
@@ -193,8 +220,14 @@ die ""
 # Remove tempdir on exit
 trap 'cd ../..; rm -rf "$tempdir"' 0
 
+ORIG_GIT_DIR="$GIT_DIR"
+ORIG_GIT_WORK_TREE="$GIT_WORK_TREE"
+ORIG_GIT_INDEX_FILE="$GIT_INDEX_FILE"
+GIT_WORK_TREE=.
+export GIT_DIR GIT_WORK_TREE
+
 # Make sure refs/original is empty
-git for-each-ref > "$tempdir"/backup-refs
+git for-each-ref > "$tempdir"/backup-refs || exit
 while read sha1 type name
 do
 	case "$force,$name" in
@@ -207,15 +240,10 @@ do
 	esac
 done < "$tempdir"/backup-refs
 
-ORIG_GIT_DIR="$GIT_DIR"
-ORIG_GIT_WORK_TREE="$GIT_WORK_TREE"
-ORIG_GIT_INDEX_FILE="$GIT_INDEX_FILE"
-GIT_WORK_TREE=.
-export GIT_DIR GIT_WORK_TREE
-
 # The refs should be updated if their heads were rewritten
-git rev-parse --no-flags --revs-only --symbolic-full-name --default HEAD "$@" |
-sed -e '/^^/d' >"$tempdir"/heads
+git rev-parse --no-flags --revs-only --symbolic-full-name \
+	--default HEAD "$@" > "$tempdir"/raw-heads || exit
+sed -e '/^^/d' "$tempdir"/raw-heads >"$tempdir"/heads
 
 test -s "$tempdir"/heads ||
 	die "Which ref do you want to rewrite?"
@@ -223,8 +251,6 @@ test -s "$tempdir"/heads ||
 GIT_INDEX_FILE="$(pwd)/../index"
 export GIT_INDEX_FILE
 git read-tree || die "Could not seed the index"
-
-ret=0
 
 # map old->new commit ids for rewriting parents
 mkdir ../map || die "Could not create map/ directory"
@@ -288,10 +314,11 @@ while read commit parents; do
 			die "tree filter failed: $filter_tree"
 
 		(
-			git diff-index -r --name-only $commit
+			git diff-index -r --name-only $commit &&
 			git ls-files --others
-		) |
-		git update-index --add --replace --remove --stdin
+		) > "$tempdir"/tree-state || exit
+		git update-index --add --replace --remove --stdin \
+			< "$tempdir"/tree-state || exit
 	fi
 
 	eval "$filter_index" < /dev/null ||
@@ -312,7 +339,8 @@ while read commit parents; do
 		eval "$filter_msg" > ../message ||
 			die "msg filter failed: $filter_msg"
 	@SHELL_PATH@ -c "$filter_commit" "git commit-tree" \
-		$(git write-tree) $parentstr < ../message > ../map/$commit
+		$(git write-tree) $parentstr < ../message > ../map/$commit ||
+			die "could not write rewritten commit"
 done <../revs
 
 # In case of a subdirectory filter, it is possible that a specified head
@@ -380,7 +408,8 @@ do
 			die "Could not rewrite $ref"
 	;;
 	esac
-	git update-ref -m "filter-branch: backup" "$orig_namespace$ref" $sha1
+	git update-ref -m "filter-branch: backup" "$orig_namespace$ref" $sha1 ||
+		 exit
 done < "$tempdir"/heads
 
 # TODO: This should possibly go, with the semantics that all positive given
@@ -456,7 +485,7 @@ test -z "$ORIG_GIT_INDEX_FILE" || {
 }
 
 if [ "$(is_bare_repository)" = false ]; then
-	git read-tree -u -m HEAD
+	git read-tree -u -m HEAD || exit
 fi
 
-exit $ret
+exit 0

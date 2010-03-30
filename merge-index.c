@@ -1,5 +1,6 @@
 #include "cache.h"
 #include "run-command.h"
+#include "exec_cmd.h"
 
 static const char *pgm;
 static const char *arguments[9];
@@ -91,7 +92,9 @@ int main(int argc, char **argv)
 	signal(SIGCHLD, SIG_DFL);
 
 	if (argc < 3)
-		usage("git-merge-index [-o] [-q] <merge-program> (-a | [--] <filename>*)");
+		usage("git merge-index [-o] [-q] <merge-program> (-a | [--] <filename>*)");
+
+	git_extract_argv0_path(argv[0]);
 
 	setup_git_directory();
 	read_cache();

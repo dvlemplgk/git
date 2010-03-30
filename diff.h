@@ -78,6 +78,7 @@ struct diff_options {
 	const char *a_prefix, *b_prefix;
 	unsigned flags;
 	int context;
+	int interhunkcontext;
 	int break_opt;
 	int detect_rename;
 	int skip_stat_unmatch;
@@ -97,6 +98,7 @@ struct diff_options {
 
 	int stat_width;
 	int stat_name_width;
+	const char *word_regex;
 
 	/* this is set by diffcore for DIFF_FORMAT_PATCH */
 	int found_changes;
@@ -262,5 +264,7 @@ extern int diff_flush_patch_id(struct diff_options *, unsigned char *);
 extern int diff_result_code(struct diff_options *, int);
 
 extern void diff_no_index(struct rev_info *, int, const char **, int, const char *);
+
+extern int index_differs_from(const char *def, int diff_flags);
 
 #endif /* DIFF_H */

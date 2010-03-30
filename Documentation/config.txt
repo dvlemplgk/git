@@ -290,8 +290,10 @@ core.sharedRepository::
 	group-shareable. When 'umask' (or 'false'), git will use permissions
 	reported by umask(2). When '0xxx', where '0xxx' is an octal number,
 	files in the repository will have this mode value. '0xxx' will override
-	user's umask value, and thus, users with a safe umask (0077) can use
-	this option. Examples: '0660' is equivalent to 'group'. '0640' is a
+	user's umask value (whereas the other options will only override
+	requested parts of the user's umask value). Examples: '0660' will make
+	the repo read/write-able for the owner and group, but inaccessible to
+	others (equivalent to 'group' unless umask is e.g. '0022'). '0640' is a
 	repository that is group-readable but not group-writable.
 	See linkgit:git-init[1]. False by default.
 
@@ -556,8 +558,8 @@ color.interactive::
 
 color.interactive.<slot>::
 	Use customized color for 'git-add --interactive'
-	output. `<slot>` may be `prompt`, `header`, or `help`, for
-	three distinct types of normal output from interactive
+	output. `<slot>` may be `prompt`, `header`, `help` or `error`, for
+	four distinct types of normal output from interactive
 	programs.  The values of these variables may be specified as
 	in color.branch.<slot>.
 
@@ -638,6 +640,12 @@ diff.renames::
 diff.suppressBlankEmpty::
 	A boolean to inhibit the standard behavior of printing a space
 	before each empty output line. Defaults to false.
+
+diff.wordRegex::
+	A POSIX Extended Regular Expression used to determine what is a "word"
+	when performing word-by-word difference calculations.  Character
+	sequences that match the regular expression are "words", all other
+	characters are *ignorable* whitespace.
 
 fetch.unpackLimit::
 	If the number of objects fetched over the git native
@@ -724,6 +732,10 @@ gc.rerereunresolved::
 	Records of conflicted merge you have not resolved are
 	kept for this many days when 'git-rerere gc' is run.
 	The default is 15 days.  See linkgit:git-rerere[1].
+
+gitcvs.commitmsgannotation::
+	Append this string to each commit message. Set to empty string
+	to disable this feature. Defaults to "via git-CVS emulator".
 
 gitcvs.enabled::
 	Whether the CVS server interface is enabled for this repository.
@@ -990,6 +1002,13 @@ instaweb.port::
 	The port number to bind the gitweb httpd to. See
 	linkgit:git-instaweb[1].
 
+interactive.singlekey::
+	In interactive programs, allow the user to provide one-letter
+	input with a single key (i.e., without hitting enter).
+	Currently this is used only by the `\--patch` mode of
+	linkgit:git-add[1].  Note that this setting is silently
+	ignored if portable keystroke input is not available.
+
 log.date::
 	Set default date-time mode for the log command. Setting log.date
 	value is similar to using 'git-log'\'s --date option. The value is one of the
@@ -1001,6 +1020,14 @@ log.showroot::
 	This is equivalent to a diff against an empty tree.
 	Tools like linkgit:git-log[1] or linkgit:git-whatchanged[1], which
 	normally hide the root commit will now show it. True by default.
+
+mailmap.file::
+	The location of an augmenting mailmap file. The default
+	mailmap, located in the root of the repository, is loaded
+	first, then the mailmap file pointed to by this variable.
+	The location of the mailmap file may be in a repository
+	subdirectory, or somewhere outside of the repository itself.
+	See linkgit:git-shortlog[1] and linkgit:git-blame[1].
 
 man.viewer::
 	Specify the programs that may be used to display help in the
@@ -1045,6 +1072,16 @@ mergetool.keepBackup::
 	can be saved as a file with a `.orig` extension.  If this variable
 	is set to `false` then this file is not preserved.  Defaults to
 	`true` (i.e. keep the backup files).
+
+mergetool.keepTemporaries::
+	When invoking a custom merge tool, git uses a set of temporary
+	files to pass to the tool. If the tool returns an error and this
+	variable is set to `true`, then these temporary files will be
+	preserved, otherwise they will be removed after the tool has
+	exited. Defaults to `false`.
+
+mergetool.prompt::
+	Prompt before each invocation of the merge resolution program.
 
 pack.window::
 	The size of the window used by linkgit:git-pack-objects[1] when no

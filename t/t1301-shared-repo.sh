@@ -126,4 +126,45 @@ test_expect_success 'git reflog expire honors core.sharedRepository' '
 	esac
 '
 
+test_expect_success 'forced modes' '
+	mkdir -p templates/hooks &&
+	echo update-server-info >templates/hooks/post-update &&
+	chmod +x templates/hooks/post-update &&
+	echo : >random-file &&
+	mkdir new &&
+	(
+		cd new &&
+		umask 002 &&
+		git init --shared=0660 --template=../templates &&
+		>frotz &&
+		git add frotz &&
+		git commit -a -m initial &&
+		git repack
+	) &&
+	# List repository files meant to be protected; note that
+	# COMMIT_EDITMSG does not matter---0mode is not about a
+	# repository with a work tree.
+	find new/.git -type f -name COMMIT_EDITMSG -prune -o -print |
+	xargs ls -ld >actual &&
+
+	# Everything must be unaccessible to others
+	test -z "$(sed -e "/^.......---/d" actual)" &&
+
+	# All directories must have either 2770 or 770
+	test -z "$(sed -n -e "/^drwxrw[sx]---/d" -e "/^d/p" actual)" &&
+
+	# post-update hook must be 0770
+	test -z "$(sed -n -e "/post-update/{
+		/^-rwxrwx---/d
+		p
+	}" actual)" &&
+
+	# All files inside objects must be accessible by us
+	test -z "$(sed -n -e "/objects\//{
+		/^d/d
+		/^-r.-r.----/d
+		p
+	}" actual)"
+'
+
 test_done

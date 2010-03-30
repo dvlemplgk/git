@@ -801,7 +801,7 @@ unsigned char* use_pack(struct packed_git *p,
 	if (p->pack_fd == -1 && open_packed_git(p))
 		die("packfile %s cannot be accessed", p->pack_name);
 
-	/* Since packfiles end in a hash of their content and its
+	/* Since packfiles end in a hash of their content and it's
 	 * pointless to ask for an offset into the middle of that
 	 * hash, and the in_window function above wouldn't match
 	 * don't allow an offset too close to the end of the file.
@@ -1708,6 +1708,9 @@ static void add_delta_base_cache(struct packed_git *p, off_t base_offset,
 	delta_base_cache_lru.prev = &ent->lru;
 }
 
+static void *read_object(const unsigned char *sha1, enum object_type *type,
+			 unsigned long *size);
+
 static void *unpack_delta_entry(struct packed_git *p,
 				struct pack_window **w_curs,
 				off_t curpos,
@@ -2111,8 +2114,8 @@ int pretend_sha1_file(void *buf, unsigned long len, enum object_type type,
 	return 0;
 }
 
-void *read_object(const unsigned char *sha1, enum object_type *type,
-		  unsigned long *size)
+static void *read_object(const unsigned char *sha1, enum object_type *type,
+			 unsigned long *size)
 {
 	unsigned long mapsize;
 	void *map, *buf;
@@ -2213,11 +2216,15 @@ static void write_sha1_file_prepare(const void *buf, unsigned long len,
 }
 
 /*
- * Move the just written object into its final resting place
+ * Move the just written object into its final resting place.
+ * NEEDSWORK: this should be renamed to finalize_temp_file() as
+ * "moving" is only a part of what it does, when no patch between
+ * master to pu changes the call sites of this function.
  */
 int move_temp_to_file(const char *tmpfile, const char *filename)
 {
 	int ret = 0;
+
 	if (link(tmpfile, filename))
 		ret = errno;
 
@@ -2229,12 +2236,12 @@ int move_temp_to_file(const char *tmpfile, const char *filename)
 	 *
 	 * The same holds for FAT formatted media.
 	 *
-	 * When this succeeds, we just return 0. We have nothing
+	 * When this succeeds, we just return.  We have nothing
 	 * left to unlink.
 	 */
 	if (ret && ret != EEXIST) {
 		if (!rename(tmpfile, filename))
-			return 0;
+			goto out;
 		ret = errno;
 	}
 	unlink(tmpfile);
@@ -2245,6 +2252,9 @@ int move_temp_to_file(const char *tmpfile, const char *filename)
 		/* FIXME!!! Collision check here ? */
 	}
 
+out:
+	if (set_shared_perm(filename, (S_IFREG|0444)))
+		return error("unable to set permission to '%s'", filename);
 	return 0;
 }
 
@@ -2269,7 +2279,6 @@ static void close_sha1_file(int fd)
 {
 	if (fsync_object_files)
 		fsync_or_die(fd, "sha1 file");
-	fchmod(fd, 0444);
 	if (close(fd) != 0)
 		die("error when closing sha1 file (%s)", strerror(errno));
 }

@@ -3,6 +3,8 @@
 use strict;
 use Git;
 
+binmode(STDOUT, ":raw");
+
 my $repo = Git->repository();
 
 my $menu_use_color = $repo->get_colorbool('color.interactive');
@@ -12,6 +14,13 @@ my ($prompt_color, $header_color, $help_color) =
 		$repo->get_color('color.interactive.header', 'bold'),
 		$repo->get_color('color.interactive.help', 'red bold'),
 	) : ();
+my $error_color = ();
+if ($menu_use_color) {
+	my $help_color_spec = ($repo->config('color.interactive.help') or
+				'red bold');
+	$error_color = $repo->get_color('color.interactive.error',
+					$help_color_spec);
+}
 
 my $diff_use_color = $repo->get_colorbool('color.diff');
 my ($fraginfo_color) =
@@ -32,6 +41,17 @@ my ($diff_new_color) =
 	) : ();
 
 my $normal_color = $repo->get_color("", "reset");
+
+my $use_readkey = 0;
+sub ReadMode;
+sub ReadKey;
+if ($repo->config_bool("interactive.singlekey")) {
+	eval {
+		require Term::ReadKey;
+		Term::ReadKey->import;
+		$use_readkey = 1;
+	};
+}
 
 sub colored {
 	my $color = shift;
@@ -73,6 +93,47 @@ if (!defined $GIT_DIR) {
 }
 chomp($GIT_DIR);
 
+my %cquote_map = (
+ "b" => chr(8),
+ "t" => chr(9),
+ "n" => chr(10),
+ "v" => chr(11),
+ "f" => chr(12),
+ "r" => chr(13),
+ "\\" => "\\",
+ "\042" => "\042",
+);
+
+sub unquote_path {
+	local ($_) = @_;
+	my ($retval, $remainder);
+	if (!/^\042(.*)\042$/) {
+		return $_;
+	}
+	($_, $retval) = ($1, "");
+	while (/^([^\\]*)\\(.*)$/) {
+		$remainder = $2;
+		$retval .= $1;
+		for ($remainder) {
+			if (/^([0-3][0-7][0-7])(.*)$/) {
+				$retval .= chr(oct($1));
+				$_ = $2;
+				last;
+			}
+			if (/^([\\\042btnvfr])(.*)$/) {
+				$retval .= $cquote_map{$1};
+				$_ = $2;
+				last;
+			}
+			# This is malformed -- just return it as-is for now.
+			return $_[0];
+		}
+		$_ = $remainder;
+	}
+	$retval .= $_;
+	return $retval;
+}
+
 sub refresh {
 	my $fh;
 	open $fh, 'git update-index --refresh |'
@@ -86,7 +147,7 @@ sub refresh {
 sub list_untracked {
 	map {
 		chomp $_;
-		$_;
+		unquote_path($_);
 	}
 	run_cmd_pipe(qw(git ls-files --others --exclude-standard --), @ARGV);
 }
@@ -123,7 +184,8 @@ sub list_modified {
 
 	if (@ARGV) {
 		@tracked = map {
-			chomp $_; $_;
+			chomp $_;
+			unquote_path($_);
 		} run_cmd_pipe(qw(git ls-files --exclude-standard --), @ARGV);
 		return if (!@tracked);
 	}
@@ -135,6 +197,7 @@ sub list_modified {
 		if (($add, $del, $file) =
 		    /^([-\d]+)	([-\d]+)	(.*)/) {
 			my ($change, $bin);
+			$file = unquote_path($file);
 			if ($add eq '-' && $del eq '-') {
 				$change = 'binary';
 				$bin = 1;
@@ -150,6 +213,7 @@ sub list_modified {
 		}
 		elsif (($adddel, $file) =
 		       /^ (create|delete) mode [0-7]+ (.*)$/) {
+			$file = unquote_path($file);
 			$data{$file}{INDEX_ADDDEL} = $adddel;
 		}
 	}
@@ -157,6 +221,7 @@ sub list_modified {
 	for (run_cmd_pipe(qw(git diff-files --numstat --summary --), @tracked)) {
 		if (($add, $del, $file) =
 		    /^([-\d]+)	([-\d]+)	(.*)/) {
+			$file = unquote_path($file);
 			if (!exists $data{$file}) {
 				$data{$file} = +{
 					INDEX => 'unchanged',
@@ -178,6 +243,7 @@ sub list_modified {
 		}
 		elsif (($adddel, $file) =
 		       /^ (create|delete) mode [0-7]+ (.*)$/) {
+			$file = unquote_path($file);
 			$data{$file}{FILE_ADDDEL} = $adddel;
 		}
 	}
@@ -284,7 +350,8 @@ sub find_unique_prefixes {
 			}
 			%search = %{$search{$letter}};
 		}
-		if ($soft_limit && $j + 1 > $soft_limit) {
+		if (ord($letters[0]) > 127 ||
+		    ($soft_limit && $j + 1 > $soft_limit)) {
 			$prefix = undef;
 			$remainder = $ret;
 		}
@@ -323,6 +390,10 @@ sub highlight_prefix {
 	}
 
 	return "$prompt_color$prefix$normal_color$remainder";
+}
+
+sub error_msg {
+	print STDERR colored $error_color, @_;
 }
 
 sub list_and_choose {
@@ -420,12 +491,12 @@ sub list_and_choose {
 			else {
 				$bottom = $top = find_unique($choice, @stuff);
 				if (!defined $bottom) {
-					print "Huh ($choice)?\n";
+					error_msg "Huh ($choice)?\n";
 					next TOPLOOP;
 				}
 			}
 			if ($opts->{SINGLETON} && $bottom != $top) {
-				print "Huh ($choice)?\n";
+				error_msg "Huh ($choice)?\n";
 				next TOPLOOP;
 			}
 			for ($i = $bottom-1; $i <= $top-1; $i++) {
@@ -549,11 +620,12 @@ sub parse_diff {
 	if ($diff_use_color) {
 		@colored = run_cmd_pipe(qw(git diff-files -p --color --), $path);
 	}
-	my (@hunk) = { TEXT => [], DISPLAY => [] };
+	my (@hunk) = { TEXT => [], DISPLAY => [], TYPE => 'header' };
 
 	for (my $i = 0; $i < @diff; $i++) {
 		if ($diff[$i] =~ /^@@ /) {
-			push @hunk, { TEXT => [], DISPLAY => [] };
+			push @hunk, { TEXT => [], DISPLAY => [],
+				TYPE => 'hunk' };
 		}
 		push @{$hunk[-1]{TEXT}}, $diff[$i];
 		push @{$hunk[-1]{DISPLAY}},
@@ -565,8 +637,8 @@ sub parse_diff {
 sub parse_diff_header {
 	my $src = shift;
 
-	my $head = { TEXT => [], DISPLAY => [] };
-	my $mode = { TEXT => [], DISPLAY => [] };
+	my $head = { TEXT => [], DISPLAY => [], TYPE => 'header' };
+	my $mode = { TEXT => [], DISPLAY => [], TYPE => 'mode' };
 
 	for (my $i = 0; $i < @{$src->{TEXT}}; $i++) {
 		my $dest = $src->{TEXT}->[$i] =~ /^(old|new) mode (\d+)$/ ?
@@ -613,6 +685,7 @@ sub split_hunk {
 		my $this = +{
 			TEXT => [],
 			DISPLAY => [],
+			TYPE => 'hunk',
 			OLD => $o_ofs,
 			NEW => $n_ofs,
 			OCNT => 0,
@@ -758,11 +831,32 @@ sub diff_applies {
 	return close $fh;
 }
 
+sub _restore_terminal_and_die {
+	ReadMode 'restore';
+	print "\n";
+	exit 1;
+}
+
+sub prompt_single_character {
+	if ($use_readkey) {
+		local $SIG{TERM} = \&_restore_terminal_and_die;
+		local $SIG{INT} = \&_restore_terminal_and_die;
+		ReadMode 'cbreak';
+		my $key = ReadKey 0;
+		ReadMode 'restore';
+		print "$key" if defined $key;
+		print "\n";
+		return $key;
+	} else {
+		return <STDIN>;
+	}
+}
+
 sub prompt_yesno {
 	my ($prompt) = @_;
 	while (1) {
 		print colored $prompt_color, $prompt;
-		my $line = <STDIN>;
+		my $line = prompt_single_character;
 		return 0 if $line =~ /^n/i;
 		return 1 if $line =~ /^y/i;
 	}
@@ -777,7 +871,11 @@ sub edit_hunk_loop {
 		if (!defined $text) {
 			return undef;
 		}
-		my $newhunk = { TEXT => $text, USE => 1 };
+		my $newhunk = {
+			TEXT => $text,
+			TYPE => $hunk->[$ix]->{TYPE},
+			USE => 1
+		};
 		if (diff_applies($head,
 				 @{$hunk}[0..$ix-1],
 				 $newhunk,
@@ -798,8 +896,11 @@ sub help_patch_cmd {
 	print colored $help_color, <<\EOF ;
 y - stage this hunk
 n - do not stage this hunk
+q - quit, do not stage this hunk nor any of the remaining ones
 a - stage this and all the remaining hunks in the file
 d - do not stage this hunk nor any of the remaining hunks in the file
+g - select a hunk to go to
+/ - search for a hunk matching the given regex
 j - leave this hunk undecided, see next undecided hunk
 J - leave this hunk undecided, see next hunk
 k - leave this hunk undecided, see previous undecided hunk
@@ -832,11 +933,53 @@ sub patch_update_cmd {
 					@mods);
 	}
 	for (@them) {
-		patch_update_file($_->{VALUE});
+		return 0 if patch_update_file($_->{VALUE});
 	}
 }
 
+# Generate a one line summary of a hunk.
+sub summarize_hunk {
+	my $rhunk = shift;
+	my $summary = $rhunk->{TEXT}[0];
+
+	# Keep the line numbers, discard extra context.
+	$summary =~ s/@@(.*?)@@.*/$1 /s;
+	$summary .= " " x (20 - length $summary);
+
+	# Add some user context.
+	for my $line (@{$rhunk->{TEXT}}) {
+		if ($line =~ m/^[+-].*\w/) {
+			$summary .= $line;
+			last;
+		}
+	}
+
+	chomp $summary;
+	return substr($summary, 0, 80) . "\n";
+}
+
+
+# Print a one-line summary of each hunk in the array ref in
+# the first argument, starting wih the index in the 2nd.
+sub display_hunks {
+	my ($hunks, $i) = @_;
+	my $ctr = 0;
+	$i ||= 0;
+	for (; $i < @$hunks && $ctr < 20; $i++, $ctr++) {
+		my $status = " ";
+		if (defined $hunks->[$i]{USE}) {
+			$status = $hunks->[$i]{USE} ? "+" : "-";
+		}
+		printf "%s%2d: %s",
+			$status,
+			$i + 1,
+			summarize_hunk($hunks->[$i]);
+	}
+	return $i;
+}
+
 sub patch_update_file {
+	my $quit = 0;
 	my ($ix, $num);
 	my $path = shift;
 	my ($head, @hunk) = parse_diff($path);
@@ -846,32 +989,7 @@ sub patch_update_file {
 	}
 
 	if (@{$mode->{TEXT}}) {
-		while (1) {
-			print @{$mode->{DISPLAY}};
-			print colored $prompt_color,
-				"Stage mode change [y/n/a/d/?]? ";
-			my $line = <STDIN>;
-			if ($line =~ /^y/i) {
-				$mode->{USE} = 1;
-				last;
-			}
-			elsif ($line =~ /^n/i) {
-				$mode->{USE} = 0;
-				last;
-			}
-			elsif ($line =~ /^a/i) {
-				$_->{USE} = 1 foreach ($mode, @hunk);
-				last;
-			}
-			elsif ($line =~ /^d/i) {
-				$_->{USE} = 0 foreach ($mode, @hunk);
-				last;
-			}
-			else {
-				help_patch_cmd('');
-				next;
-			}
-		}
+		unshift @hunk, $mode;
 	}
 
 	$num = scalar @hunk;
@@ -887,22 +1005,25 @@ sub patch_update_file {
 		for ($i = 0; $i < $ix; $i++) {
 			if (!defined $hunk[$i]{USE}) {
 				$prev = 1;
-				$other .= '/k';
+				$other .= ',k';
 				last;
 			}
 		}
 		if ($ix) {
-			$other .= '/K';
+			$other .= ',K';
 		}
 		for ($i = $ix + 1; $i < $num; $i++) {
 			if (!defined $hunk[$i]{USE}) {
 				$next = 1;
-				$other .= '/j';
+				$other .= ',j';
 				last;
 			}
 		}
 		if ($ix < $num - 1) {
-			$other .= '/J';
+			$other .= ',J';
+		}
+		if ($num > 1) {
+			$other .= ',g';
 		}
 		for ($i = 0; $i < $num; $i++) {
 			if (!defined $hunk[$i]{USE}) {
@@ -912,15 +1033,20 @@ sub patch_update_file {
 		}
 		last if (!$undecided);
 
-		if (hunk_splittable($hunk[$ix]{TEXT})) {
-			$other .= '/s';
+		if ($hunk[$ix]{TYPE} eq 'hunk' &&
+		    hunk_splittable($hunk[$ix]{TEXT})) {
+			$other .= ',s';
 		}
-		$other .= '/e';
+		if ($hunk[$ix]{TYPE} eq 'hunk') {
+			$other .= ',e';
+		}
 		for (@{$hunk[$ix]{DISPLAY}}) {
 			print;
 		}
-		print colored $prompt_color, "Stage this hunk [y/n/a/d$other/?]? ";
-		my $line = <STDIN>;
+		print colored $prompt_color, 'Stage ',
+		  ($hunk[$ix]{TYPE} eq 'mode' ? 'mode change' : 'this hunk'),
+		  " [y,n,q,a,d,/$other,?]? ";
+		my $line = prompt_single_character;
 		if ($line) {
 			if ($line =~ /^y/i) {
 				$hunk[$ix]{USE} = 1;
@@ -937,6 +1063,31 @@ sub patch_update_file {
 				}
 				next;
 			}
+			elsif ($other =~ /g/ && $line =~ /^g(.*)/) {
+				my $response = $1;
+				my $no = $ix > 10 ? $ix - 10 : 0;
+				while ($response eq '') {
+					my $extra = "";
+					$no = display_hunks(\@hunk, $no);
+					if ($no < $num) {
+						$extra = " (<ret> to see more)";
+					}
+					print "go to which hunk$extra? ";
+					$response = <STDIN>;
+					if (!defined $response) {
+						$response = '';
+					}
+					chomp $response;
+				}
+				if ($response !~ /^\s*\d+\s*$/) {
+					error_msg "Invalid number: '$response'\n";
+				} elsif (0 < $response && $response <= $num) {
+					$ix = $response - 1;
+				} else {
+					error_msg "Sorry, only $num hunks available.\n";
+				}
+				next;
+			}
 			elsif ($line =~ /^d/i) {
 				while ($ix < $num) {
 					if (!defined $hunk[$ix]{USE}) {
@@ -946,29 +1097,85 @@ sub patch_update_file {
 				}
 				next;
 			}
-			elsif ($other =~ /K/ && $line =~ /^K/) {
-				$ix--;
-				next;
-			}
-			elsif ($other =~ /J/ && $line =~ /^J/) {
-				$ix++;
-				next;
-			}
-			elsif ($other =~ /k/ && $line =~ /^k/) {
-				while (1) {
-					$ix--;
-					last if (!$ix ||
-						 !defined $hunk[$ix]{USE});
-				}
-				next;
-			}
-			elsif ($other =~ /j/ && $line =~ /^j/) {
-				while (1) {
+			elsif ($line =~ /^q/i) {
+				while ($ix < $num) {
+					if (!defined $hunk[$ix]{USE}) {
+						$hunk[$ix]{USE} = 0;
+					}
 					$ix++;
-					last if ($ix >= $num ||
-						 !defined $hunk[$ix]{USE});
+				}
+				$quit = 1;
+				next;
+			}
+			elsif ($line =~ m|^/(.*)|) {
+				my $regex = $1;
+				if ($1 eq "") {
+					print colored $prompt_color, "search for regex? ";
+					$regex = <STDIN>;
+					if (defined $regex) {
+						chomp $regex;
+					}
+				}
+				my $search_string;
+				eval {
+					$search_string = qr{$regex}m;
+				};
+				if ($@) {
+					my ($err,$exp) = ($@, $1);
+					$err =~ s/ at .*git-add--interactive line \d+, <STDIN> line \d+.*$//;
+					error_msg "Malformed search regexp $exp: $err\n";
+					next;
+				}
+				my $iy = $ix;
+				while (1) {
+					my $text = join ("", @{$hunk[$iy]{TEXT}});
+					last if ($text =~ $search_string);
+					$iy++;
+					$iy = 0 if ($iy >= $num);
+					if ($ix == $iy) {
+						error_msg "No hunk matches the given pattern\n";
+						last;
+					}
+				}
+				$ix = $iy;
+				next;
+			}
+			elsif ($line =~ /^K/) {
+				if ($other =~ /K/) {
+					$ix--;
+				}
+				else {
+					error_msg "No previous hunk\n";
 				}
 				next;
+			}
+			elsif ($line =~ /^J/) {
+				if ($other =~ /J/) {
+					$ix++;
+				}
+				else {
+					error_msg "No next hunk\n";
+				}
+				next;
+			}
+			elsif ($line =~ /^k/) {
+				if ($other =~ /k/) {
+					while (1) {
+						$ix--;
+						last if (!$ix ||
+							 !defined $hunk[$ix]{USE});
+					}
+				}
+				else {
+					error_msg "No previous hunk\n";
+				}
+				next;
+			}
+			elsif ($line =~ /^j/) {
+				if ($other !~ /j/) {
+					error_msg "No next hunk\n";
+					next;
+				}
 			}
 			elsif ($other =~ /s/ && $line =~ /^s/) {
 				my @split = split_hunk($hunk[$ix]{TEXT}, $hunk[$ix]{DISPLAY});
@@ -980,7 +1187,7 @@ sub patch_update_file {
 				$num = scalar @hunk;
 				next;
 			}
-			elsif ($line =~ /^e/) {
+			elsif ($other =~ /e/ && $line =~ /^e/) {
 				my $newhunk = edit_hunk_loop($head, \@hunk, $ix);
 				if (defined $newhunk) {
 					splice @hunk, $ix, 1, $newhunk;
@@ -1001,9 +1208,6 @@ sub patch_update_file {
 
 	my $n_lofs = 0;
 	my @result = ();
-	if ($mode->{USE}) {
-		push @result, @{$mode->{TEXT}};
-	}
 	for (@hunk) {
 		if ($_->{USE}) {
 			push @result, @{$_->{TEXT}};
@@ -1026,6 +1230,7 @@ sub patch_update_file {
 	}
 
 	print "\n";
+	return $quit;
 }
 
 sub diff_cmd {

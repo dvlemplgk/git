@@ -92,6 +92,30 @@ COMMANDS
 	.git/config file may be specified as an optional command-line
 	argument.
 
+--localtime;;
+	Store Git commit times in the local timezone instead of UTC.  This
+	makes 'git-log' (even without --date=local) show the same times
+	that `svn log` would in the local timezone.
+
+This doesn't interfere with interoperating with the Subversion
+repository you cloned from, but if you wish for your local Git
+repository to be able to interoperate with someone else's local Git
+repository, either don't use this option or you should both use it in
+the same local timezone.
+
+--ignore-paths=<regex>;;
+	This allows one to specify Perl regular expression that will
+	cause skipping of all matching paths from checkout from SVN.
+	Examples:
+
+	--ignore-paths="^doc" - skip "doc*" directory for every fetch.
+
+	--ignore-paths="^[^/]+/(?:branches|tags)" - skip "branches"
+	    and "tags" of first level directories.
+
+	Regular expression is not persistent, you should specify
+	it every time when fetching.
+
 'clone'::
 	Runs 'init' and 'fetch'.  It will automatically create a
 	directory based on the basename of the URL passed to it;
@@ -144,6 +168,10 @@ and have no uncommitted changes.
 	method (e.g. `svn://` or `http://` for anonymous read) to be
 	reused if a user is later given access to an alternate transport
 	method (e.g. `svn+ssh://` or `https://`) for commit.
+
+config key: svn-remote.<name>.commiturl
+
+config key: svn.commiturl (overwrites all svn-remote.<name>.commiturl options)
 
 	Using this option for any other purpose (don't ask)
 	is very strongly discouraged.
@@ -474,6 +502,14 @@ svn-remote.<name>.rewriteRoot::
 	server locally (accessing via file://) but wish to distribute
 	the repository with a public http:// or svn:// URL in the
 	metadata so users of it will see the public URL.
+
+svn.brokenSymlinkWorkaround::
+This disables potentially expensive checks to workaround broken symlinks
+checked into SVN by broken clients.  Set this option to "false" if you
+track a SVN repository with many empty blobs that are not symlinks.
+This option may be changed while "git-svn" is running and take effect on
+the next revision fetched.  If unset, git-svn assumes this option to be
+"true".
 
 --
 

@@ -166,7 +166,7 @@ static int list_paths(struct string_list *list, const char *with_tree,
 		struct cache_entry *ce = active_cache[i];
 		if (ce->ce_flags & CE_UPDATE)
 			continue;
-		if (!pathspec_match(pattern, m, ce->name, 0))
+		if (!match_pathspec(pattern, ce->name, ce_namelen(ce), 0, m))
 			continue;
 		string_list_insert(ce->name, list);
 	}
@@ -360,40 +360,6 @@ static int run_status(FILE *fp, const char *index_file, const char *prefix, int 
 	wt_status_print(&s);
 
 	return s.commitable;
-}
-
-static int run_hook(const char *index_file, const char *name, ...)
-{
-	struct child_process hook;
-	const char *argv[10], *env[2];
-	char index[PATH_MAX];
-	va_list args;
-	int i;
-
-	va_start(args, name);
-	argv[0] = git_path("hooks/%s", name);
-	i = 0;
-	do {
-		if (++i >= ARRAY_SIZE(argv))
-			die ("run_hook(): too many arguments");
-		argv[i] = va_arg(args, const char *);
-	} while (argv[i]);
-	va_end(args);
-
-	snprintf(index, sizeof(index), "GIT_INDEX_FILE=%s", index_file);
-	env[0] = index;
-	env[1] = NULL;
-
-	if (access(argv[0], X_OK) < 0)
-		return 0;
-
-	memset(&hook, 0, sizeof(hook));
-	hook.argv = argv;
-	hook.no_stdin = 1;
-	hook.stdout_to_stderr = 1;
-	hook.env = env;
-
-	return run_command(&hook);
 }
 
 static int is_a_merge(const unsigned char *sha1)
@@ -596,7 +562,6 @@ static int prepare_to_commit(const char *index_file, const char *prefix)
 		commitable = run_status(fp, index_file, prefix, 1);
 		wt_status_use_color = saved_color_setting;
 	} else {
-		struct rev_info rev;
 		unsigned char sha1[20];
 		const char *parent = "HEAD";
 
@@ -608,16 +573,8 @@ static int prepare_to_commit(const char *index_file, const char *prefix)
 
 		if (get_sha1(parent, sha1))
 			commitable = !!active_nr;
-		else {
-			init_revisions(&rev, "");
-			rev.abbrev = 0;
-			setup_revisions(0, NULL, &rev, parent);
-			DIFF_OPT_SET(&rev.diffopt, QUIET);
-			DIFF_OPT_SET(&rev.diffopt, EXIT_WITH_STATUS);
-			run_diff_index(&rev, 1 /* cached */);
-
-			commitable = !!DIFF_OPT_TST(&rev.diffopt, HAS_CHANGES);
-		}
+		else
+			commitable = index_differs_from(parent, 0);
 	}
 
 	fclose(fp);
@@ -884,7 +841,7 @@ static void print_summary(const char *prefix, const unsigned char *sha1)
 {
 	struct rev_info rev;
 	struct commit *commit;
-	static const char *format = "format:%h: \"%s\"";
+	static const char *format = "format:%h] %s";
 	unsigned char junk_sha1[20];
 	const char *head = resolve_ref("HEAD", junk_sha1, 0, NULL);
 
@@ -911,7 +868,7 @@ static void print_summary(const char *prefix, const unsigned char *sha1)
 	rev.diffopt.break_opt = 0;
 	diff_setup_done(&rev.diffopt);
 
-	printf("[%s%s]: created ",
+	printf("[%s%s ",
 		!prefixcmp(head, "refs/heads/") ?
 			head + 11 :
 			!strcmp(head, "HEAD") ?

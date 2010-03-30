@@ -99,6 +99,7 @@ static int delete_branches(int argc, const char **argv, int force, int kinds)
 	const char *fmt, *remote;
 	int i;
 	int ret = 0;
+	struct strbuf bname = STRBUF_INIT;
 
 	switch (kinds) {
 	case REF_REMOTE_BRANCH:
@@ -119,20 +120,25 @@ static int delete_branches(int argc, const char **argv, int force, int kinds)
 		if (!head_rev)
 			die("Couldn't look up commit object for HEAD");
 	}
-	for (i = 0; i < argc; i++) {
-		if (kinds == REF_LOCAL_BRANCH && !strcmp(head, argv[i])) {
+	for (i = 0; i < argc; i++, strbuf_release(&bname)) {
+		int len = strlen(argv[i]);
+
+		if (interpret_nth_last_branch(argv[i], &bname) != len)
+			strbuf_add(&bname, argv[i], len);
+
+		if (kinds == REF_LOCAL_BRANCH && !strcmp(head, bname.buf)) {
 			error("Cannot delete the branch '%s' "
-				"which you are currently on.", argv[i]);
+			      "which you are currently on.", bname.buf);
 			ret = 1;
 			continue;
 		}
 
 		free(name);
 
-		name = xstrdup(mkpath(fmt, argv[i]));
+		name = xstrdup(mkpath(fmt, bname.buf));
 		if (!resolve_ref(name, sha1, 1, NULL)) {
 			error("%sbranch '%s' not found.",
-					remote, argv[i]);
+					remote, bname.buf);
 			ret = 1;
 			continue;
 		}
@@ -152,22 +158,23 @@ static int delete_branches(int argc, const char **argv, int force, int kinds)
 		if (!force &&
 		    !in_merge_bases(rev, &head_rev, 1)) {
 			error("The branch '%s' is not an ancestor of "
-				"your current HEAD.\n"
-				"If you are sure you want to delete it, "
-				"run 'git branch -D %s'.", argv[i], argv[i]);
+			      "your current HEAD.\n"
+			      "If you are sure you want to delete it, "
+			      "run 'git branch -D %s'.", bname.buf, bname.buf);
 			ret = 1;
 			continue;
 		}
 
 		if (delete_ref(name, sha1, 0)) {
 			error("Error deleting %sbranch '%s'", remote,
-			       argv[i]);
+			      bname.buf);
 			ret = 1;
 		} else {
 			struct strbuf buf = STRBUF_INIT;
-			printf("Deleted %sbranch %s (was %s).\n", remote, argv[i],
-				find_unique_abbrev(sha1, DEFAULT_ABBREV));
-			strbuf_addf(&buf, "branch.%s", argv[i]);
+			printf("Deleted %sbranch %s (was %s).\n", remote,
+			       bname.buf,
+			       find_unique_abbrev(sha1, DEFAULT_ABBREV));
+			strbuf_addf(&buf, "branch.%s", bname.buf);
 			if (git_config_rename_section(buf.buf, NULL) < 0)
 				warning("Update of config-file failed");
 			strbuf_release(&buf);
@@ -193,21 +200,6 @@ struct ref_list {
 	int kinds;
 };
 
-static int has_commit(struct commit *commit, struct commit_list *with_commit)
-{
-	if (!with_commit)
-		return 1;
-	while (with_commit) {
-		struct commit *other;
-
-		other = with_commit->item;
-		with_commit = with_commit->next;
-		if (in_merge_bases(other, &commit, 1))
-			return 1;
-	}
-	return 0;
-}
-
 static int append_ref(const char *refname, const unsigned char *sha1, int flags, void *cb_data)
 {
 	struct ref_list *ref_list = (struct ref_list*)(cb_data);
@@ -231,7 +223,7 @@ static int append_ref(const char *refname, const unsigned char *sha1, int flags,
 		return error("branch '%s' does not point at a commit", refname);
 
 	/* Filter with with_commit if specified */
-	if (!has_commit(commit, ref_list->with_commit))
+	if (!is_descendant_of(commit, ref_list->with_commit))
 		return 0;
 
 	/* Don't add types the caller doesn't want */
@@ -401,7 +393,8 @@ static void print_ref_list(int kinds, int detached, int verbose, int abbrev, str
 	qsort(ref_list.list, ref_list.index, sizeof(struct ref_item), ref_cmp);
 
 	detached = (detached && (kinds & REF_LOCAL_BRANCH));
-	if (detached && head_commit && has_commit(head_commit, with_commit)) {
+	if (detached && head_commit &&
+	    is_descendant_of(head_commit, with_commit)) {
 		struct ref_item item;
 		item.name = xstrdup("(no branch)");
 		item.kind = REF_LOCAL_BRANCH;
@@ -466,22 +459,6 @@ static void rename_branch(const char *oldname, const char *newname, int force)
 	strbuf_release(&newsection);
 }
 
-static int opt_parse_with_commit(const struct option *opt, const char *arg, int unset)
-{
-	unsigned char sha1[20];
-	struct commit *commit;
-
-	if (!arg)
-		return -1;
-	if (get_sha1(arg, sha1))
-		die("malformed object name %s", arg);
-	commit = lookup_commit_reference(sha1);
-	if (!commit)
-		die("no such commit %s", arg);
-	commit_list_insert(commit, opt->value);
-	return 0;
-}
-
 static int opt_parse_merge_filter(const struct option *opt, const char *arg, int unset)
 {
 	merge_filter = ((opt->long_name[0] == 'n')
@@ -517,13 +494,13 @@ int cmd_branch(int argc, const char **argv, const char *prefix)
 			OPTION_CALLBACK, 0, "contains", &with_commit, "commit",
 			"print only branches that contain the commit",
 			PARSE_OPT_LASTARG_DEFAULT,
-			opt_parse_with_commit, (intptr_t)"HEAD",
+			parse_opt_with_commit, (intptr_t)"HEAD",
 		},
 		{
 			OPTION_CALLBACK, 0, "with", &with_commit, "commit",
 			"print only branches that contain the commit",
 			PARSE_OPT_HIDDEN | PARSE_OPT_LASTARG_DEFAULT,
-			opt_parse_with_commit, (intptr_t) "HEAD",
+			parse_opt_with_commit, (intptr_t) "HEAD",
 		},
 		OPT__ABBREV(&abbrev),
 

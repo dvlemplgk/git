@@ -10,7 +10,7 @@ enum {
 	ERR_RUN_COMMAND_WAITPID_SIGNAL,
 	ERR_RUN_COMMAND_WAITPID_NOEXIT,
 };
-#define IS_RUN_COMMAND_ERR(x) ((x) <= -ERR_RUN_COMMAND_FORK)
+#define IS_RUN_COMMAND_ERR(x) (-(x) >= ERR_RUN_COMMAND_FORK)
 
 struct child_process {
 	const char **argv;
@@ -49,6 +49,8 @@ struct child_process {
 int start_command(struct child_process *);
 int finish_command(struct child_process *);
 int run_command(struct child_process *);
+
+extern int run_hook(const char *index_file, const char *name, ...);
 
 #define RUN_COMMAND_NO_STDIN 1
 #define RUN_GIT_CMD	     2	/*If this is to be git sub-command */

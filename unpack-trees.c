@@ -49,7 +49,7 @@ static void add_entry(struct unpack_trees_options *o, struct cache_entry *ce,
 	memcpy(new, ce, size);
 	new->next = NULL;
 	new->ce_flags = (new->ce_flags & ~clear) | set;
-	add_index_entry(&o->result, new, ADD_CACHE_OK_TO_ADD|ADD_CACHE_OK_TO_REPLACE|ADD_CACHE_SKIP_DFCHECK);
+	add_index_entry(&o->result, new, ADD_CACHE_OK_TO_ADD|ADD_CACHE_OK_TO_REPLACE);
 }
 
 /* Unlink the last component and attempt to remove leading
@@ -61,7 +61,7 @@ static void unlink_entry(struct cache_entry *ce)
 	char *cp, *prev;
 	char *name = ce->name;
 
-	if (has_symlink_leading_path(ce_namelen(ce), ce->name))
+	if (has_symlink_or_noent_leading_path(ce_namelen(ce), ce->name))
 		return;
 	if (unlink(name))
 		return;
@@ -286,9 +286,9 @@ static int unpack_nondirectories(int n, unsigned long mask,
 	if (o->merge)
 		return call_unpack_fn(src, o);
 
-	n += o->merge;
 	for (i = 0; i < n; i++)
-		add_entry(o, src[i], 0, 0);
+		if (src[i] && src[i] != o->df_conflict_entry)
+			add_entry(o, src[i], 0, 0);
 	return 0;
 }
 
@@ -583,7 +583,7 @@ static int verify_absent(struct cache_entry *ce, const char *action,
 	if (o->index_only || o->reset || !o->update)
 		return 0;
 
-	if (has_symlink_leading_path(ce_namelen(ce), ce->name))
+	if (has_symlink_or_noent_leading_path(ce_namelen(ce), ce->name))
 		return 0;
 
 	if (!lstat(ce->name, &st)) {

@@ -5,6 +5,7 @@
 #include "commit.h"
 #include "tree.h"
 #include "tree-walk.h"
+#include "cache-tree.h"
 #include "unpack-trees.h"
 #include "dir.h"
 #include "run-command.h"
@@ -38,23 +39,13 @@ struct checkout_opts {
 static int post_checkout_hook(struct commit *old, struct commit *new,
 			      int changed)
 {
-	struct child_process proc;
-	const char *name = git_path("hooks/post-checkout");
-	const char *argv[5];
+	return run_hook(NULL, "post-checkout",
+			sha1_to_hex(old ? old->object.sha1 : null_sha1),
+			sha1_to_hex(new ? new->object.sha1 : null_sha1),
+			changed ? "1" : "0", NULL);
+	/* "new" can be NULL when checking out from the index before
+	   a commit exists. */
 
-	if (access(name, X_OK) < 0)
-		return 0;
-
-	memset(&proc, 0, sizeof(proc));
-	argv[0] = name;
-	argv[1] = xstrdup(sha1_to_hex(old ? old->object.sha1 : null_sha1));
-	argv[2] = xstrdup(sha1_to_hex(new->object.sha1));
-	argv[3] = changed ? "1" : "0";
-	argv[4] = NULL;
-	proc.argv = argv;
-	proc.no_stdin = 1;
-	proc.stdout_to_stderr = 1;
-	return run_command(&proc);
 }
 
 static int update_some(const unsigned char *sha1, const char *base, int baselen,
@@ -62,9 +53,6 @@ static int update_some(const unsigned char *sha1, const char *base, int baselen,
 {
 	int len;
 	struct cache_entry *ce;
-
-	if (S_ISGITLINK(mode))
-		return 0;
 
 	if (S_ISDIR(mode))
 		return READ_TREE_RECURSIVE;
@@ -240,7 +228,7 @@ static int checkout_paths(struct tree *source_tree, const char **pathspec,
 
 	for (pos = 0; pos < active_nr; pos++) {
 		struct cache_entry *ce = active_cache[pos];
-		pathspec_match(pathspec, ps_matched, ce->name, 0);
+		match_pathspec(pathspec, ce->name, ce_namelen(ce), 0, ps_matched);
 	}
 
 	if (report_path_error(ps_matched, pathspec, 0))
@@ -249,7 +237,7 @@ static int checkout_paths(struct tree *source_tree, const char **pathspec,
 	/* Any unmerged paths? */
 	for (pos = 0; pos < active_nr; pos++) {
 		struct cache_entry *ce = active_cache[pos];
-		if (pathspec_match(pathspec, NULL, ce->name, 0)) {
+		if (match_pathspec(pathspec, ce->name, ce_namelen(ce), 0, NULL)) {
 			if (!ce_stage(ce))
 				continue;
 			if (opts->force) {
@@ -274,7 +262,7 @@ static int checkout_paths(struct tree *source_tree, const char **pathspec,
 	state.refresh_cache = 1;
 	for (pos = 0; pos < active_nr; pos++) {
 		struct cache_entry *ce = active_cache[pos];
-		if (pathspec_match(pathspec, NULL, ce->name, 0)) {
+		if (match_pathspec(pathspec, ce->name, ce_namelen(ce), 0, NULL)) {
 			if (!ce_stage(ce)) {
 				errs |= checkout_entry(ce, &state, NULL);
 				continue;
@@ -361,8 +349,16 @@ struct branch_info {
 static void setup_branch_path(struct branch_info *branch)
 {
 	struct strbuf buf = STRBUF_INIT;
-	strbuf_addstr(&buf, "refs/heads/");
-	strbuf_addstr(&buf, branch->name);
+	int ret;
+
+	if ((ret = interpret_nth_last_branch(branch->name, &buf))
+	    && ret == strlen(branch->name)) {
+		branch->name = xstrdup(buf.buf);
+		strbuf_splice(&buf, 0, 0, "refs/heads/", 11);
+	} else {
+		strbuf_addstr(&buf, "refs/heads/");
+		strbuf_addstr(&buf, branch->name);
+	}
 	branch->path = strbuf_detach(&buf, NULL);
 }
 
@@ -372,14 +368,17 @@ static int merge_working_tree(struct checkout_opts *opts,
 	int ret;
 	struct lock_file *lock_file = xcalloc(1, sizeof(struct lock_file));
 	int newfd = hold_locked_index(lock_file, 1);
+	int reprime_cache_tree = 0;
 
 	if (read_cache() < 0)
 		return error("corrupt index file");
 
+	cache_tree_free(&active_cache_tree);
 	if (opts->force) {
 		ret = reset_tree(new->commit->tree, opts, 1);
 		if (ret)
 			return ret;
+		reprime_cache_tree = 1;
 	} else {
 		struct tree_desc trees[2];
 		struct tree *tree;
@@ -415,7 +414,9 @@ static int merge_working_tree(struct checkout_opts *opts,
 		init_tree_desc(&trees[1], tree->buffer, tree->size);
 
 		ret = unpack_trees(2, trees, &topts);
-		if (ret == -1) {
+		if (ret != -1) {
+			reprime_cache_tree = 1;
+		} else {
 			/*
 			 * Unpack couldn't do a trivial merge; either
 			 * give up or do a real merge, depending on
@@ -459,6 +460,8 @@ static int merge_working_tree(struct checkout_opts *opts,
 		}
 	}
 
+	if (reprime_cache_tree)
+		prime_cache_tree(&active_cache_tree, new->commit->tree);
 	if (write_cache(newfd, active_cache, active_nr) ||
 	    commit_locked_index(lock_file))
 		die("unable to write new index file");
@@ -503,10 +506,10 @@ static void update_refs_for_switch(struct checkout_opts *opts,
 		create_symref("HEAD", new->path, msg.buf);
 		if (!opts->quiet) {
 			if (old->path && !strcmp(new->path, old->path))
-				fprintf(stderr, "Already on \"%s\"\n",
+				fprintf(stderr, "Already on '%s'\n",
 					new->name);
 			else
-				fprintf(stderr, "Switched to%s branch \"%s\"\n",
+				fprintf(stderr, "Switched to%s branch '%s'\n",
 					opts->new_branch ? " a new" : "",
 					new->name);
 		}
@@ -515,7 +518,7 @@ static void update_refs_for_switch(struct checkout_opts *opts,
 			   REF_NODEREF, DIE_ON_ERR);
 		if (!opts->quiet) {
 			if (old->path)
-				fprintf(stderr, "Note: moving to \"%s\" which isn't a local branch\nIf you want to create a new branch from this checkout, you may do so\n(now or later) by using -b with the checkout command again. Example:\n  git checkout -b <new_branch_name>\n", new->name);
+				fprintf(stderr, "Note: moving to '%s' which isn't a local branch\nIf you want to create a new branch from this checkout, you may do so\n(now or later) by using -b with the checkout command again. Example:\n  git checkout -b <new_branch_name>\n", new->name);
 			describe_detached_head("HEAD is now at", new->commit);
 		}
 	}
@@ -670,6 +673,9 @@ int cmd_checkout(int argc, const char **argv, const char *prefix)
 
 		arg = argv[0];
 		has_dash_dash = (argc > 1) && !strcmp(argv[1], "--");
+
+		if (!strcmp(arg, "-"))
+			arg = "@{-1}";
 
 		if (get_sha1(arg, rev)) {
 			if (has_dash_dash)          /* case (1) */

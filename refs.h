@@ -24,6 +24,11 @@ extern int for_each_tag_ref(each_ref_fn, void *);
 extern int for_each_branch_ref(each_ref_fn, void *);
 extern int for_each_remote_ref(each_ref_fn, void *);
 
+/* can be used to learn about broken ref and symref */
+extern int for_each_rawref(each_ref_fn, void *);
+
+extern void warn_dangling_symref(const char *msg_fmt, const char *refname);
+
 /*
  * Extra refs will be listed by for_each_ref() before any actual refs
  * for the duration of this process or until clear_extra_refs() is
@@ -60,6 +65,7 @@ extern int read_ref_at(const char *ref, unsigned long at_time, int cnt, unsigned
 /* iterate over reflog entries */
 typedef int each_reflog_ent_fn(unsigned char *osha1, unsigned char *nsha1, const char *, unsigned long, int, const char *, void *);
 int for_each_reflog_ent(const char *ref, each_reflog_ent_fn fn, void *cb_data);
+int for_each_recent_reflog_ent(const char *ref, each_reflog_ent_fn fn, long, void *cb_data);
 
 /*
  * Calls the specified function for each reflog file until it returns nonzero,

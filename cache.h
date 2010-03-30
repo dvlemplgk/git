@@ -613,7 +613,8 @@ enum sharedrepo {
 	PERM_EVERYBODY      = 0664,
 };
 int git_config_perm(const char *var, const char *value);
-int adjust_shared_perm(const char *path);
+int set_shared_perm(const char *path, int mode);
+#define adjust_shared_perm(path) set_shared_perm((path), 0)
 int safe_create_leading_directories(char *path);
 int safe_create_leading_directories_const(const char *path);
 char *enter_repo(char *path, int strict);
@@ -627,6 +628,7 @@ const char *make_nonrelative_path(const char *path);
 const char *make_relative_path(const char *abs, const char *base);
 int normalize_path_copy(char *dst, const char *src);
 int longest_ancestor_length(const char *path, const char *prefix_list);
+char *strip_path_suffix(const char *path, const char *suffix);
 
 /* Read and unpack a sha1 file into memory, write memory to a sha1 file */
 extern int sha1_object_info(const unsigned char *, unsigned long *);
@@ -635,9 +637,6 @@ extern int hash_sha1_file(const void *buf, unsigned long len, const char *type, 
 extern int write_sha1_file(void *buf, unsigned long len, const char *type, unsigned char *return_sha1);
 extern int pretend_sha1_file(void *, unsigned long, enum object_type, unsigned char *);
 extern int force_object_loose(const unsigned char *sha1, time_t mtime);
-
-/* just like read_sha1_file(), but non fatal in presence of bad objects */
-extern void *read_object(const unsigned char *sha1, enum object_type *type, unsigned long *size);
 
 /* global flag to enable extra checks when accessing packed objects */
 extern int do_check_packed_object_crc;
@@ -671,6 +670,7 @@ extern int read_ref(const char *filename, unsigned char *sha1);
 extern const char *resolve_ref(const char *path, unsigned char *sha1, int, int *);
 extern int dwim_ref(const char *str, int len, unsigned char *sha1, char **ref);
 extern int dwim_log(const char *str, int len, unsigned char *sha1, char **ref);
+extern int interpret_nth_last_branch(const char *str, struct strbuf *);
 
 extern int refname_match(const char *abbrev_name, const char *full_name, const char **rules);
 extern const char *ref_rev_parse_rules[];
@@ -697,7 +697,8 @@ enum date_mode {
 	DATE_SHORT,
 	DATE_LOCAL,
 	DATE_ISO8601,
-	DATE_RFC2822
+	DATE_RFC2822,
+	DATE_RAW
 };
 
 const char *show_date(unsigned long time, int timezone, enum date_mode mode);
@@ -725,6 +726,10 @@ struct checkout {
 
 extern int checkout_entry(struct cache_entry *ce, const struct checkout *state, char *topath);
 extern int has_symlink_leading_path(int len, const char *name);
+extern int has_symlink_or_noent_leading_path(int len, const char *name);
+extern int has_dirs_only_path(int len, const char *name, int prefix_len);
+extern void invalidate_lstat_cache(int len, const char *name);
+extern void clear_lstat_cache(void);
 
 extern struct alternate_object_database {
 	struct alternate_object_database *next;
@@ -866,6 +871,7 @@ extern int user_ident_explicitly_given;
 
 extern const char *git_commit_encoding;
 extern const char *git_log_output_encoding;
+extern const char *git_mailmap_file;
 
 /* IO helper functions */
 extern void maybe_flush_or_die(FILE *, const char *);
@@ -941,7 +947,6 @@ extern int ws_fix_copy(char *, const char *, int, unsigned, int *);
 extern int ws_blank_line(const char *line, int len, unsigned ws_rule);
 
 /* ls-files */
-int pathspec_match(const char **spec, char *matched, const char *filename, int skiplen);
 int report_path_error(const char *ps_matched, const char **pathspec, int prefix_offset);
 void overlay_tree_on_cache(const char *tree_name, const char *prefix);
 

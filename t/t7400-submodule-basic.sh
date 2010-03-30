@@ -47,6 +47,55 @@ test_expect_success 'Prepare submodule testing' '
 	GIT_CONFIG=.gitmodules git config submodule.example.url git://example.com/init.git
 '
 
+test_expect_success 'Prepare submodule add testing' '
+	submodurl=$(pwd)
+	(
+		mkdir addtest &&
+		cd addtest &&
+		git init
+	)
+'
+
+test_expect_success 'submodule add' '
+	(
+		cd addtest &&
+		git submodule add "$submodurl" submod &&
+		git submodule init
+	)
+'
+
+test_expect_success 'submodule add with ./ in path' '
+	(
+		cd addtest &&
+		git submodule add "$submodurl" ././dotsubmod/./frotz/./ &&
+		git submodule init
+	)
+'
+
+test_expect_success 'submodule add with // in path' '
+	(
+		cd addtest &&
+		git submodule add "$submodurl" slashslashsubmod///frotz// &&
+		git submodule init
+	)
+'
+
+test_expect_success 'submodule add with /.. in path' '
+	(
+		cd addtest &&
+		git submodule add "$submodurl" dotdotsubmod/../realsubmod/frotz/.. &&
+		git submodule init
+	)
+'
+
+test_expect_success 'submodule add with ./, /.. and // in path' '
+	(
+		cd addtest &&
+		git submodule add "$submodurl" dot/dotslashsubmod/./../..////realsubmod2/a/b/c/d/../../../../frotz//.. &&
+		git submodule init
+	)
+'
+
 test_expect_success 'status should fail for unmapped paths' '
 	if git submodule status
 	then
@@ -231,6 +280,19 @@ test_expect_success 'gracefully add submodule with a trailing slash' '
 	test_must_fail git diff --exit-code --cached init &&
 	test $commit = $(git ls-files --stage |
 		sed -n "s/^160000 \([^ ]*\).*/\1/p")
+
+'
+
+test_expect_success 'ls-files gracefully handles trailing slash' '
+
+	test "init" = "$(git ls-files init/)"
+
+'
+
+test_expect_success 'submodule <invalid-path> warns' '
+
+	git submodule no-such-submodule 2> output.err &&
+	grep "^error: .*no-such-submodule" output.err
 
 '
 

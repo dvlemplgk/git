@@ -8,21 +8,24 @@ OPTIONS_SPEC="\
 git am [options] [<mbox>|<Maildir>...]
 git am [options] (--resolved | --skip | --abort)
 --
-d,dotest=       (removed -- do not use)
 i,interactive   run interactively
-b,binary        (historical option -- no-op)
+b,binary*       (historical option -- no-op)
 3,3way          allow fall back on 3way merging if needed
 s,signoff       add a Signed-off-by line to the commit message
 u,utf8          recode into utf8 (default)
 k,keep          pass -k flag to git-mailinfo
 whitespace=     pass it through git-apply
+directory=      pass it through git-apply
 C=              pass it through git-apply
 p=              pass it through git-apply
+reject          pass it through git-apply
 resolvemsg=     override error message when patch failure occurs
 r,resolved      to be used after a patch failure
 skip            skip the current patch
 abort           restore the original branch and abort the patching operation.
-rebasing        (internal use for git-rebase)"
+committer-date-is-author-date    lie about committer date
+ignore-date     use current timestamp for author date
+rebasing*       (internal use for git-rebase)"
 
 . git-sh-setup
 prefix=$(git rev-parse --show-prefix)
@@ -32,6 +35,14 @@ cd_to_toplevel
 
 git var GIT_COMMITTER_IDENT >/dev/null ||
 	die "You need to set your committer info first"
+
+sq () {
+	for sqarg
+	do
+		printf "%s" "$sqarg" |
+		sed -e 's/'\''/'\''\\'\'''\''/g' -e 's/.*/ '\''&'\''/'
+	done
+}
 
 stop_here () {
     echo "$1" >"$dotest/next"
@@ -124,6 +135,8 @@ dotest="$GIT_DIR/rebase-apply"
 sign= utf8=t keep= skip= interactive= resolved= rebasing= abort=
 resolvemsg= resume=
 git_apply_opt=
+committer_date_is_author_date=
+ignore_date=
 
 while test $# != 0
 do
@@ -155,10 +168,16 @@ do
 		;;
 	--resolvemsg)
 		shift; resolvemsg=$1 ;;
-	--whitespace)
-		git_apply_opt="$git_apply_opt $1=$2"; shift ;;
+	--whitespace|--directory)
+		git_apply_opt="$git_apply_opt $(sq "$1=$2")"; shift ;;
 	-C|-p)
-		git_apply_opt="$git_apply_opt $1$2"; shift ;;
+		git_apply_opt="$git_apply_opt $(sq "$1$2")"; shift ;;
+	--reject)
+		git_apply_opt="$git_apply_opt $1" ;;
+	--committer-date-is-author-date)
+		committer_date_is_author_date=t ;;
+	--ignore-date)
+		ignore_date=t ;;
 	--)
 		shift; break ;;
 	*)
@@ -192,7 +211,7 @@ then
 		# unreliable -- stdin could be /dev/null for example
 		# and the caller did not intend to feed us a patch but
 		# wanted to continue unattended.
-		tty -s
+		test -t 0
 		;;
 	*)
 		false
@@ -202,6 +221,9 @@ then
 	resume=yes
 
 	case "$skip,$abort" in
+	t,t)
+		die "Please make up your mind. --skip or --abort?"
+		;;
 	t,)
 		git rerere clear
 		git read-tree --reset -u HEAD HEAD
@@ -210,12 +232,19 @@ then
 		git update-ref ORIG_HEAD $orig_head
 		;;
 	,t)
+		if test -f "$dotest/rebasing"
+		then
+			exec git rebase --abort
+		fi
 		git rerere clear
-		git read-tree --reset -u HEAD ORIG_HEAD
-		git reset ORIG_HEAD
+		test -f "$dotest/dirtyindex" || {
+			git read-tree --reset -u HEAD ORIG_HEAD
+			git reset ORIG_HEAD
+		}
 		rm -fr "$dotest"
 		exit ;;
 	esac
+	rm -f "$dotest/dirtyindex"
 else
 	# Make sure we are not given --skip, --resolved, nor --abort
 	test "$skip$resolved$abort" = "" ||
@@ -268,9 +297,10 @@ fi
 case "$resolved" in
 '')
 	files=$(git diff-index --cached --name-only HEAD --) || exit
-	if [ "$files" ]; then
-	   echo "Dirty index: cannot apply patches (dirty: $files)" >&2
-	   exit 1
+	if test "$files"
+	then
+		: >"$dotest/dirtyindex"
+		die "Dirty index: cannot apply patches (dirty: $files)"
 	fi
 esac
 
@@ -459,7 +489,7 @@ do
 
 	case "$resolved" in
 	'')
-		git apply $git_apply_opt --index "$dotest/patch"
+		eval 'git apply '"$git_apply_opt"' --index "$dotest/patch"'
 		apply_status=$?
 		;;
 	t)
@@ -501,7 +531,7 @@ do
 	fi
 	if test $apply_status != 0
 	then
-		echo Patch failed at $msgnum.
+		printf 'Patch failed at %s %s\n' "$msgnum" "$FIRSTLINE"
 		stop_here_user_resolve $this
 	fi
 
@@ -512,7 +542,18 @@ do
 
 	tree=$(git write-tree) &&
 	parent=$(git rev-parse --verify HEAD) &&
-	commit=$(git commit-tree $tree -p $parent <"$dotest/final-commit") &&
+	commit=$(
+		if test -n "$ignore_date"
+		then
+			GIT_AUTHOR_DATE=
+		fi
+		if test -n "$committer_date_is_author_date"
+		then
+			GIT_COMMITTER_DATE="$GIT_AUTHOR_DATE"
+			export GIT_COMMITTER_DATE
+		fi &&
+		git commit-tree $tree -p $parent <"$dotest/final-commit"
+	) &&
 	git update-ref -m "$GIT_REFLOG_ACTION: $FIRSTLINE" HEAD $commit $parent ||
 	stop_here $this
 

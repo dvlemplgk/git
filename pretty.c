@@ -6,6 +6,7 @@
 #include "string-list.h"
 #include "mailmap.h"
 #include "log-tree.h"
+#include "color.h"
 
 static char *user_format;
 
@@ -74,8 +75,7 @@ static int get_one_line(const char *msg)
 /* High bit set, or ISO-2022-INT */
 int non_ascii(int ch)
 {
-	ch = (ch & 0xff);
-	return ((ch & 0x80) || (ch == 0x1b));
+	return !isascii(ch) || ch == '\033';
 }
 
 static int is_rfc2047_special(char ch)
@@ -209,15 +209,13 @@ static void add_merge_info(enum cmit_fmt fmt, struct strbuf *sb,
 	while (parent) {
 		struct commit *p = parent->item;
 		const char *hex = NULL;
-		const char *dots;
 		if (abbrev)
 			hex = find_unique_abbrev(p->object.sha1, abbrev);
 		if (!hex)
 			hex = sha1_to_hex(p->object.sha1);
-		dots = (abbrev && strlen(hex) != 40) ?  "..." : "";
 		parent = parent->next;
 
-		strbuf_addf(sb, " %s%s", hex, dots);
+		strbuf_addf(sb, " %s", hex);
 	}
 	strbuf_addch(sb, '\n');
 }
@@ -304,23 +302,14 @@ static char *logmsg_reencode(const struct commit *commit,
 	return out;
 }
 
-static int mailmap_name(struct strbuf *sb, const char *email)
+static int mailmap_name(char *email, int email_len, char *name, int name_len)
 {
 	static struct string_list *mail_map;
-	char buffer[1024];
-
 	if (!mail_map) {
 		mail_map = xcalloc(1, sizeof(*mail_map));
-		read_mailmap(mail_map, ".mailmap", NULL);
+		read_mailmap(mail_map, NULL);
 	}
-
-	if (!mail_map->nr)
-		return -1;
-
-	if (!map_email(mail_map, email, buffer, sizeof(buffer)))
-		return -1;
-	strbuf_addstr(sb, buffer);
-	return 0;
+	return mail_map->nr && map_user(mail_map, email, email_len, name, name_len);
 }
 
 static size_t format_person_part(struct strbuf *sb, char part,
@@ -331,6 +320,9 @@ static size_t format_person_part(struct strbuf *sb, char part,
 	int start, end, tz = 0;
 	unsigned long date = 0;
 	char *ep;
+	const char *name_start, *name_end, *mail_start, *mail_end, *msg_end = msg+len;
+	char person_name[1024];
+	char person_mail[1024];
 
 	/* advance 'end' to point to email start delimiter */
 	for (end = 0; end < len && msg[end] != '<'; end++)
@@ -344,25 +336,34 @@ static size_t format_person_part(struct strbuf *sb, char part,
 	if (end >= len - 2)
 		goto skip;
 
+	/* Seek for both name and email part */
+	name_start = msg;
+	name_end = msg+end;
+	while (name_end > name_start && isspace(*(name_end-1)))
+		name_end--;
+	mail_start = msg+end+1;
+	mail_end = mail_start;
+	while (mail_end < msg_end && *mail_end != '>')
+		mail_end++;
+	if (mail_end == msg_end)
+		goto skip;
+	end = mail_end-msg;
+
+	if (part == 'N' || part == 'E') { /* mailmap lookup */
+		strlcpy(person_name, name_start, name_end-name_start+1);
+		strlcpy(person_mail, mail_start, mail_end-mail_start+1);
+		mailmap_name(person_mail, sizeof(person_mail), person_name, sizeof(person_name));
+		name_start = person_name;
+		name_end = name_start + strlen(person_name);
+		mail_start = person_mail;
+		mail_end = mail_start +  strlen(person_mail);
+	}
 	if (part == 'n' || part == 'N') {	/* name */
-		while (end > 0 && isspace(msg[end - 1]))
-			end--;
-		if (part != 'N' || !msg[end] || !msg[end + 1] ||
-		    mailmap_name(sb, msg + end + 2) < 0)
-			strbuf_add(sb, msg, end);
+		strbuf_add(sb, name_start, name_end-name_start);
 		return placeholder_len;
 	}
-	start = ++end; /* save email start position */
-
-	/* advance 'end' to point to email end delimiter */
-	for ( ; end < len && msg[end] != '>'; end++)
-		; /* do nothing */
-
-	if (end >= len)
-		goto skip;
-
-	if (part == 'e') {	/* email */
-		strbuf_add(sb, msg + start, end - start);
+	if (part == 'e' || part == 'E') {	/* email */
+		strbuf_add(sb, mail_start, mail_end-mail_start);
 		return placeholder_len;
 	}
 
@@ -554,6 +555,17 @@ static size_t format_commit_item(struct strbuf *sb, const char *placeholder,
 	/* these are independent of the commit */
 	switch (placeholder[0]) {
 	case 'C':
+		if (placeholder[1] == '(') {
+			const char *end = strchr(placeholder + 2, ')');
+			char color[COLOR_MAXLEN];
+			if (!end)
+				return 0;
+			color_parse_mem(placeholder + 2,
+					end - (placeholder + 2),
+					"--pretty format", color);
+			strbuf_addstr(sb, color);
+			return end - placeholder + 1;
+		}
 		if (!prefixcmp(placeholder + 1, "red")) {
 			strbuf_addstr(sb, "\033[31m");
 			return 4;

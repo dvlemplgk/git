@@ -78,7 +78,7 @@ static int progress = 1;
 static int window = 10;
 static uint32_t pack_size_limit, pack_size_limit_cfg;
 static int depth = 50;
-static int delta_search_threads = 1;
+static int delta_search_threads;
 static int pack_to_stdout;
 static int num_preferred_base;
 static struct progress *progress_state;
@@ -1611,10 +1611,17 @@ static void ll_find_deltas(struct object_entry **list, unsigned list_size,
 		find_deltas(list, &list_size, window, depth, processed);
 		return;
 	}
+	if (progress > pack_to_stdout)
+		fprintf(stderr, "Delta compression using %d threads.\n",
+				delta_search_threads);
 
 	/* Partition the work amongst work threads. */
 	for (i = 0; i < delta_search_threads; i++) {
 		unsigned sub_size = list_size / (delta_search_threads - i);
+
+		/* don't use too small segments or no deltas will be found */
+		if (sub_size < 2*window && i+1 < delta_search_threads)
+			sub_size = 0;
 
 		p[i].window = window;
 		p[i].depth = depth;
@@ -1900,13 +1907,19 @@ static void show_commit(struct commit *commit)
 	commit->object.flags |= OBJECT_ADDED;
 }
 
-static void show_object(struct object_array_entry *p)
+static void show_object(struct object *obj, const struct name_path *path, const char *last)
 {
-	add_preferred_base_object(p->name);
-	add_object_entry(p->item->sha1, p->item->type, p->name, 0);
-	p->item->flags |= OBJECT_ADDED;
-	free((char *)p->name);
-	p->name = NULL;
+	char *name = path_name(path, last);
+
+	add_preferred_base_object(name);
+	add_object_entry(obj->sha1, obj->type, name, 0);
+	obj->flags |= OBJECT_ADDED;
+
+	/*
+	 * We will have generated the hash from the name,
+	 * but not saved a pointer to it - we can free it
+	 */
+	free((char *)name);
 }
 
 static void show_edge(struct commit *commit)

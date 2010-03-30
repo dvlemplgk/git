@@ -9,22 +9,25 @@
 #include "remote.h"
 #include "transport.h"
 
-static const char receive_pack_usage[] = "git-receive-pack <git-dir>";
+static const char receive_pack_usage[] = "git receive-pack <git-dir>";
 
 enum deny_action {
+	DENY_UNCONFIGURED,
 	DENY_IGNORE,
 	DENY_WARN,
 	DENY_REFUSE,
 };
 
-static int deny_deletes = 0;
-static int deny_non_fast_forwards = 0;
-static enum deny_action deny_current_branch = DENY_WARN;
+static int deny_deletes;
+static int deny_non_fast_forwards;
+static enum deny_action deny_current_branch = DENY_UNCONFIGURED;
+static enum deny_action deny_delete_current = DENY_UNCONFIGURED;
 static int receive_fsck_objects;
 static int receive_unpack_limit = -1;
 static int transfer_unpack_limit = -1;
 static int unpack_limit = 100;
 static int report_status;
+static const char *head_name;
 
 static char capabilities[] = " report-status delete-refs ";
 static int capabilities_sent;
@@ -73,6 +76,11 @@ static int receive_pack_config(const char *var, const char *value, void *cb)
 
 	if (!strcmp(var, "receive.denycurrentbranch")) {
 		deny_current_branch = parse_deny_action(var, value);
+		return 0;
+	}
+
+	if (strcmp(var, "receive.denydeletecurrent") == 0) {
+		deny_delete_current = parse_deny_action(var, value);
 		return 0;
 	}
 
@@ -136,7 +144,7 @@ static int hook_status(int code, const char *hook_name)
 	}
 }
 
-static int run_hook(const char *hook_name)
+static int run_receive_hook(const char *hook_name)
 {
 	static char buf[sizeof(commands->old_sha1) * 2 + PATH_MAX + 4];
 	struct command *cmd;
@@ -202,16 +210,67 @@ static int run_update_hook(struct command *cmd)
 
 static int is_ref_checked_out(const char *ref)
 {
-	unsigned char sha1[20];
-	const char *head;
-
 	if (is_bare_repository())
 		return 0;
 
-	head = resolve_ref("HEAD", sha1, 0, NULL);
-	if (!head)
+	if (!head_name)
 		return 0;
-	return !strcmp(head, ref);
+	return !strcmp(head_name, ref);
+}
+
+static char *warn_unconfigured_deny_msg[] = {
+	"Updating the currently checked out branch may cause confusion,",
+	"as the index and work tree do not reflect changes that are in HEAD.",
+	"As a result, you may see the changes you just pushed into it",
+	"reverted when you run 'git diff' over there, and you may want",
+	"to run 'git reset --hard' before starting to work to recover.",
+	"",
+	"You can set 'receive.denyCurrentBranch' configuration variable to",
+	"'refuse' in the remote repository to forbid pushing into its",
+	"current branch."
+	"",
+	"To allow pushing into the current branch, you can set it to 'ignore';",
+	"but this is not recommended unless you arranged to update its work",
+	"tree to match what you pushed in some other way.",
+	"",
+	"To squelch this message, you can set it to 'warn'.",
+	"",
+	"Note that the default will change in a future version of git",
+	"to refuse updating the current branch unless you have the",
+	"configuration variable set to either 'ignore' or 'warn'."
+};
+
+static void warn_unconfigured_deny(void)
+{
+	int i;
+	for (i = 0; i < ARRAY_SIZE(warn_unconfigured_deny_msg); i++)
+		warning("%s", warn_unconfigured_deny_msg[i]);
+}
+
+static char *warn_unconfigured_deny_delete_current_msg[] = {
+	"Deleting the current branch can cause confusion by making the next",
+	"'git clone' not check out any file.",
+	"",
+	"You can set 'receive.denyDeleteCurrent' configuration variable to",
+	"'refuse' in the remote repository to disallow deleting the current",
+	"branch.",
+	"",
+	"You can set it to 'ignore' to allow such a delete without a warning.",
+	"",
+	"To make this warning message less loud, you can set it to 'warn'.",
+	"",
+	"Note that the default will change in a future version of git",
+	"to refuse deleting the current branch unless you have the",
+	"configuration variable set to either 'ignore' or 'warn'."
+};
+
+static void warn_unconfigured_deny_delete_current(void)
+{
+	int i;
+	for (i = 0;
+	     i < ARRAY_SIZE(warn_unconfigured_deny_delete_current_msg);
+	     i++)
+		warning("%s", warn_unconfigured_deny_delete_current_msg[i]);
 }
 
 static const char *update(struct command *cmd)
@@ -227,22 +286,20 @@ static const char *update(struct command *cmd)
 		return "funny refname";
 	}
 
-	switch (deny_current_branch) {
-	case DENY_IGNORE:
-		break;
-	case DENY_WARN:
-		if (!is_ref_checked_out(name))
+	if (is_ref_checked_out(name)) {
+		switch (deny_current_branch) {
+		case DENY_IGNORE:
 			break;
-		warning("updating the currently checked out branch; this may"
-			" cause confusion,\n"
-			"as the index and working tree do not reflect changes"
-			" that are now in HEAD.");
-		break;
-	case DENY_REFUSE:
-		if (!is_ref_checked_out(name))
+		case DENY_UNCONFIGURED:
+		case DENY_WARN:
+			warning("updating the current branch");
+			if (deny_current_branch == DENY_UNCONFIGURED)
+				warn_unconfigured_deny();
 			break;
-		error("refusing to update checked out branch: %s", name);
-		return "branch is currently checked out";
+		case DENY_REFUSE:
+			error("refusing to update checked out branch: %s", name);
+			return "branch is currently checked out";
+		}
 	}
 
 	if (!is_null_sha1(new_sha1) && !has_sha1_file(new_sha1)) {
@@ -250,12 +307,30 @@ static const char *update(struct command *cmd)
 		      "but I can't find it!", sha1_to_hex(new_sha1));
 		return "bad pack";
 	}
-	if (deny_deletes && is_null_sha1(new_sha1) &&
-	    !is_null_sha1(old_sha1) &&
-	    !prefixcmp(name, "refs/heads/")) {
-		error("denying ref deletion for %s", name);
-		return "deletion prohibited";
+
+	if (!is_null_sha1(old_sha1) && is_null_sha1(new_sha1)) {
+		if (deny_deletes && !prefixcmp(name, "refs/heads/")) {
+			error("denying ref deletion for %s", name);
+			return "deletion prohibited";
+		}
+
+		if (!strcmp(name, head_name)) {
+			switch (deny_delete_current) {
+			case DENY_IGNORE:
+				break;
+			case DENY_WARN:
+			case DENY_UNCONFIGURED:
+				if (deny_delete_current == DENY_UNCONFIGURED)
+					warn_unconfigured_deny_delete_current();
+				warning("deleting the current branch");
+				break;
+			case DENY_REFUSE:
+				error("refusing to delete the current branch: %s", name);
+				return "deletion of the current branch prohibited";
+			}
+		}
 	}
+
 	if (deny_non_fast_forwards && !is_null_sha1(new_sha1) &&
 	    !is_null_sha1(old_sha1) &&
 	    !prefixcmp(name, "refs/heads/")) {
@@ -349,6 +424,7 @@ static void run_update_post_hook(struct command *cmd)
 static void execute_commands(const char *unpacker_error)
 {
 	struct command *cmd = commands;
+	unsigned char sha1[20];
 
 	if (unpacker_error) {
 		while (cmd) {
@@ -358,13 +434,15 @@ static void execute_commands(const char *unpacker_error)
 		return;
 	}
 
-	if (run_hook(pre_receive_hook)) {
+	if (run_receive_hook(pre_receive_hook)) {
 		while (cmd) {
 			cmd->error_string = "pre-receive hook declined";
 			cmd = cmd->next;
 		}
 		return;
 	}
+
+	head_name = resolve_ref("HEAD", sha1, 0, NULL);
 
 	while (cmd) {
 		cmd->error_string = update(cmd);
@@ -627,7 +705,7 @@ int cmd_receive_pack(int argc, const char **argv, const char *prefix)
 			unlink(pack_lockfile);
 		if (report_status)
 			report(unpack_status);
-		run_hook(post_receive_hook);
+		run_receive_hook(post_receive_hook);
 		run_update_post_hook(commands);
 	}
 	return 0;
