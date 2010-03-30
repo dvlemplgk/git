@@ -4,6 +4,7 @@
 #include "git-compat-util.h"
 #include "strbuf.h"
 #include "hash.h"
+#include "advice.h"
 
 #include SHA1_HEADER
 #ifndef git_SHA_CTX
@@ -330,7 +331,7 @@ static inline void remove_name_hash(struct cache_entry *ce)
 #define remove_file_from_cache(path) remove_file_from_index(&the_index, (path))
 #define add_to_cache(path, st, flags) add_to_index(&the_index, (path), (st), (flags))
 #define add_file_to_cache(path, flags) add_file_to_index(&the_index, (path), (flags))
-#define refresh_cache(flags) refresh_index(&the_index, (flags), NULL, NULL)
+#define refresh_cache(flags) refresh_index(&the_index, (flags), NULL, NULL, NULL)
 #define ce_match_stat(ce, st, options) ie_match_stat(&the_index, (ce), (st), (options))
 #define ce_modified(ce, st, options) ie_modified(&the_index, (ce), (st), (options))
 #define cache_name_exists(name, namelen, igncase) index_name_exists(&the_index, (name), (namelen), (igncase))
@@ -476,8 +477,8 @@ extern int check_path(const char *path, int len, struct stat *st, int skiplen);
 #define REFRESH_QUIET		0x0004	/* be quiet about it */
 #define REFRESH_IGNORE_MISSING	0x0008	/* ignore non-existent */
 #define REFRESH_IGNORE_SUBMODULES	0x0010	/* ignore submodules */
-#define REFRESH_SAY_CHANGED	0x0020	/* say "changed" not "needs update" */
-extern int refresh_index(struct index_state *, unsigned int flags, const char **pathspec, char *seen);
+#define REFRESH_IN_PORCELAIN	0x0020	/* user friendly output, not "needs update" */
+extern int refresh_index(struct index_state *, unsigned int flags, const char **pathspec, char *seen, char *header_msg);
 
 struct lock_file {
 	struct lock_file *next;
@@ -488,6 +489,7 @@ struct lock_file {
 };
 #define LOCK_DIE_ON_ERROR 1
 #define LOCK_NODEREF 2
+extern int unable_to_lock_error(const char *path, int err);
 extern NORETURN void unable_to_lock_index_die(const char *path, int err);
 extern int hold_lock_file_for_update(struct lock_file *, const char *path, int);
 extern int hold_lock_file_for_append(struct lock_file *, const char *path, int);
@@ -512,6 +514,7 @@ extern int log_all_ref_updates;
 extern int warn_ambiguous_refs;
 extern int shared_repository;
 extern const char *apply_default_whitespace;
+extern const char *apply_default_ignorewhitespace;
 extern int zlib_compression_level;
 extern int core_compression_level;
 extern int core_compression_seen;
@@ -519,6 +522,7 @@ extern size_t packed_git_window_size;
 extern size_t packed_git_limit;
 extern size_t delta_base_cache_limit;
 extern int auto_crlf;
+extern int read_replace_refs;
 extern int fsync_object_files;
 extern int core_preload_index;
 
@@ -640,6 +644,7 @@ int set_shared_perm(const char *path, int mode);
 #define adjust_shared_perm(path) set_shared_perm((path), 0)
 int safe_create_leading_directories(char *path);
 int safe_create_leading_directories_const(const char *path);
+extern char *expand_user_path(const char *path);
 char *enter_repo(char *path, int strict);
 static inline int is_absolute_path(const char *path)
 {
@@ -655,7 +660,11 @@ char *strip_path_suffix(const char *path, const char *suffix);
 
 /* Read and unpack a sha1 file into memory, write memory to a sha1 file */
 extern int sha1_object_info(const unsigned char *, unsigned long *);
-extern void * read_sha1_file(const unsigned char *sha1, enum object_type *type, unsigned long *size);
+extern void *read_sha1_file_repl(const unsigned char *sha1, enum object_type *type, unsigned long *size, const unsigned char **replacement);
+static inline void *read_sha1_file(const unsigned char *sha1, enum object_type *type, unsigned long *size)
+{
+	return read_sha1_file_repl(sha1, type, size, NULL);
+}
 extern int hash_sha1_file(const void *buf, unsigned long len, const char *type, unsigned char *sha1);
 extern int write_sha1_file(void *buf, unsigned long len, const char *type, unsigned char *return_sha1);
 extern int pretend_sha1_file(void *, unsigned long, enum object_type, unsigned char *);
@@ -725,9 +734,14 @@ enum date_mode {
 };
 
 const char *show_date(unsigned long time, int timezone, enum date_mode mode);
+const char *show_date_relative(unsigned long time, int tz,
+			       const struct timeval *now,
+			       char *timebuf,
+			       size_t timebuf_size);
 int parse_date(const char *date, char *buf, int bufsize);
 void datestamp(char *buf, int bufsize);
 unsigned long approxidate(const char *);
+unsigned long approxidate_relative(const char *date, const struct timeval *now);
 enum date_mode parse_date_format(const char *format);
 
 #define IDENT_WARN_ON_NO_NAME  1
@@ -889,6 +903,7 @@ extern unsigned long git_config_ulong(const char *, const char *);
 extern int git_config_bool_or_int(const char *, const char *, int *);
 extern int git_config_bool(const char *, const char *);
 extern int git_config_string(const char **, const char *, const char *);
+extern int git_config_pathname(const char **, const char *, const char *);
 extern int git_config_set(const char *, const char *);
 extern int git_config_set_multivar(const char *, const char *, const char *, int);
 extern int git_config_rename_section(const char *, const char *);
@@ -912,12 +927,18 @@ extern const char *git_mailmap_file;
 extern void maybe_flush_or_die(FILE *, const char *);
 extern int copy_fd(int ifd, int ofd);
 extern int copy_file(const char *dst, const char *src, int mode);
-extern ssize_t read_in_full(int fd, void *buf, size_t count);
-extern ssize_t write_in_full(int fd, const void *buf, size_t count);
+extern int copy_file_with_time(const char *dst, const char *src, int mode);
 extern void write_or_die(int fd, const void *buf, size_t count);
 extern int write_or_whine(int fd, const void *buf, size_t count, const char *msg);
 extern int write_or_whine_pipe(int fd, const void *buf, size_t count, const char *msg);
 extern void fsync_or_die(int fd, const char *);
+
+extern ssize_t read_in_full(int fd, void *buf, size_t count);
+extern ssize_t write_in_full(int fd, const void *buf, size_t count);
+static inline ssize_t write_str_in_full(int fd, const char *str)
+{
+	return write_in_full(fd, str, strlen(str));
+}
 
 /* pager.c */
 extern void setup_pager(void);
@@ -967,10 +988,12 @@ void shift_tree(const unsigned char *, const unsigned char *, unsigned char *, i
  * whitespace rules.
  * used by both diff and apply
  */
-#define WS_TRAILING_SPACE	01
+#define WS_BLANK_AT_EOL         01
 #define WS_SPACE_BEFORE_TAB	02
 #define WS_INDENT_WITH_NON_TAB	04
 #define WS_CR_AT_EOL           010
+#define WS_BLANK_AT_EOF        020
+#define WS_TRAILING_SPACE      (WS_BLANK_AT_EOL|WS_BLANK_AT_EOF)
 #define WS_DEFAULT_RULE (WS_TRAILING_SPACE|WS_SPACE_BEFORE_TAB)
 extern unsigned whitespace_rule_cfg;
 extern unsigned whitespace_rule(const char *);

@@ -38,9 +38,10 @@ static int pack_objects(int fd, struct ref *refs, struct extra_have_objects *ext
 	 */
 	const char *argv[] = {
 		"pack-objects",
-		"--all-progress",
+		"--all-progress-implied",
 		"--revs",
 		"--stdout",
+		NULL,
 		NULL,
 		NULL,
 		NULL,
@@ -53,6 +54,8 @@ static int pack_objects(int fd, struct ref *refs, struct extra_have_objects *ext
 		argv[i++] = "--thin";
 	if (args->use_ofs_delta)
 		argv[i++] = "--delta-base-offset";
+	if (args->quiet)
+		argv[i++] = "-q";
 	memset(&po, 0, sizeof(po));
 	po.argv = argv;
 	po.in = -1;

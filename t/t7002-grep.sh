@@ -14,6 +14,7 @@ int main(int argc, const char **argv)
 {
 	printf("Hello world.\n");
 	return 0;
+	/* char ?? */
 }
 EOF
 
@@ -25,13 +26,17 @@ test_expect_success setup '
 		echo foo mmap bar_mmap
 		echo foo_mmap bar mmap baz
 	} >file &&
+	echo vvv >v &&
 	echo ww w >w &&
 	echo x x xx x >x &&
 	echo y yy >y &&
 	echo zzz > z &&
 	mkdir t &&
 	echo test >t/t &&
-	git add file w x y z t/t hello.c &&
+	echo vvv >t/v &&
+	mkdir t/a &&
+	echo vvv >t/a/v &&
+	git add . &&
 	test_tick &&
 	git commit -m initial
 '
@@ -132,6 +137,51 @@ do
 		! git grep -c test $H | grep /dev/null
         '
 
+	test_expect_success "grep --max-depth -1 $L" '
+		{
+			echo ${HC}t/a/v:1:vvv
+			echo ${HC}t/v:1:vvv
+			echo ${HC}v:1:vvv
+		} >expected &&
+		git grep --max-depth -1 -n -e vvv $H >actual &&
+		test_cmp expected actual
+	'
+
+	test_expect_success "grep --max-depth 0 $L" '
+		{
+			echo ${HC}v:1:vvv
+		} >expected &&
+		git grep --max-depth 0 -n -e vvv $H >actual &&
+		test_cmp expected actual
+	'
+
+	test_expect_success "grep --max-depth 0 -- '*' $L" '
+		{
+			echo ${HC}t/a/v:1:vvv
+			echo ${HC}t/v:1:vvv
+			echo ${HC}v:1:vvv
+		} >expected &&
+		git grep --max-depth 0 -n -e vvv $H -- "*" >actual &&
+		test_cmp expected actual
+	'
+
+	test_expect_success "grep --max-depth 1 $L" '
+		{
+			echo ${HC}t/v:1:vvv
+			echo ${HC}v:1:vvv
+		} >expected &&
+		git grep --max-depth 1 -n -e vvv $H >actual &&
+		test_cmp expected actual
+	'
+
+	test_expect_success "grep --max-depth 0 -- t $L" '
+		{
+			echo ${HC}t/v:1:vvv
+		} >expected &&
+		git grep --max-depth 0 -n -e vvv $H -- t >actual &&
+		test_cmp expected actual
+	'
+
 done
 
 cat >expected <<EOF
@@ -161,6 +211,72 @@ EOF
 
 test_expect_success 'grep -e A --and --not -e B' '
 	git grep -e "foo mmap" --and --not -e bar_mmap >actual &&
+	test_cmp expected actual
+'
+
+test_expect_success 'grep -f, non-existent file' '
+	test_must_fail git grep -f patterns
+'
+
+cat >expected <<EOF
+file:foo mmap bar
+file:foo_mmap bar
+file:foo_mmap bar mmap
+file:foo mmap bar_mmap
+file:foo_mmap bar mmap baz
+EOF
+
+cat >pattern <<EOF
+mmap
+EOF
+
+test_expect_success 'grep -f, one pattern' '
+	git grep -f pattern >actual &&
+	test_cmp expected actual
+'
+
+cat >expected <<EOF
+file:foo mmap bar
+file:foo_mmap bar
+file:foo_mmap bar mmap
+file:foo mmap bar_mmap
+file:foo_mmap bar mmap baz
+t/a/v:vvv
+t/v:vvv
+v:vvv
+EOF
+
+cat >patterns <<EOF
+mmap
+vvv
+EOF
+
+test_expect_success 'grep -f, multiple patterns' '
+	git grep -f patterns >actual &&
+	test_cmp expected actual
+'
+
+cat >expected <<EOF
+file:foo mmap bar
+file:foo_mmap bar
+file:foo_mmap bar mmap
+file:foo mmap bar_mmap
+file:foo_mmap bar mmap baz
+t/a/v:vvv
+t/v:vvv
+v:vvv
+EOF
+
+cat >patterns <<EOF
+
+mmap
+
+vvv
+
+EOF
+
+test_expect_success 'grep -f, ignore empty lines' '
+	git grep -f patterns >actual &&
 	test_cmp expected actual
 '
 
@@ -294,6 +410,15 @@ test_expect_success 'grep from a subdirectory to search wider area (2)' '
 		! test -s out &&
 		test 1 = $(cat status)
 	)
+'
+
+cat >expected <<EOF
+hello.c:int main(int argc, const char **argv)
+EOF
+
+test_expect_success 'grep -Fi' '
+	git grep -Fi "CHAR *" >actual &&
+	test_cmp expected actual
 '
 
 test_done

@@ -234,7 +234,7 @@ int create_bundle(struct bundle_header *header, const char *path,
 	rls.git_cmd = 1;
 	if (start_command(&rls))
 		return -1;
-	rls_fout = fdopen(rls.out, "r");
+	rls_fout = xfdopen(rls.out, "r");
 	while (fgets(buffer, sizeof(buffer), rls_fout)) {
 		unsigned char sha1[20];
 		if (buffer[0] == '-') {
@@ -351,7 +351,7 @@ int create_bundle(struct bundle_header *header, const char *path,
 
 	/* write pack */
 	argv_pack[0] = "pack-objects";
-	argv_pack[1] = "--all-progress";
+	argv_pack[1] = "--all-progress-implied";
 	argv_pack[2] = "--stdout";
 	argv_pack[3] = "--thin";
 	argv_pack[4] = NULL;

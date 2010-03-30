@@ -1,9 +1,6 @@
 #include "cache.h"
 #include "transport.h"
 #include "run-command.h"
-#ifndef NO_CURL
-#include "http.h"
-#endif
 #include "pkt-line.h"
 #include "fetch-pack.h"
 #include "send-pack.h"
@@ -352,51 +349,11 @@ static int rsync_transport_push(struct transport *transport,
 	return result;
 }
 
-/* Generic functions for using commit walkers */
-
-#ifndef NO_CURL /* http fetch is the only user */
-static int fetch_objs_via_walker(struct transport *transport,
-				 int nr_objs, const struct ref **to_fetch)
-{
-	char *dest = xstrdup(transport->url);
-	struct walker *walker = transport->data;
-	char **objs = xmalloc(nr_objs * sizeof(*objs));
-	int i;
-
-	walker->get_all = 1;
-	walker->get_tree = 1;
-	walker->get_history = 1;
-	walker->get_verbosely = transport->verbose >= 0;
-	walker->get_recover = 0;
-
-	for (i = 0; i < nr_objs; i++)
-		objs[i] = xstrdup(sha1_to_hex(to_fetch[i]->old_sha1));
-
-	if (walker_fetch(walker, nr_objs, objs, NULL, NULL))
-		die("Fetch failed.");
-
-	for (i = 0; i < nr_objs; i++)
-		free(objs[i]);
-	free(objs);
-	free(dest);
-	return 0;
-}
-#endif /* NO_CURL */
-
-static int disconnect_walker(struct transport *transport)
-{
-	struct walker *walker = transport->data;
-	if (walker)
-		walker_free(walker);
-	return 0;
-}
-
 #ifndef NO_CURL
 static int curl_transport_push(struct transport *transport, int refspec_nr, const char **refspec, int flags)
 {
 	const char **argv;
 	int argc;
-	int err;
 
 	if (flags & TRANSPORT_PUSH_MIRROR)
 		return error("http transport does not support mirror mode");
@@ -416,110 +373,7 @@ static int curl_transport_push(struct transport *transport, int refspec_nr, cons
 	while (refspec_nr--)
 		argv[argc++] = *refspec++;
 	argv[argc] = NULL;
-	err = run_command_v_opt(argv, RUN_GIT_CMD);
-	switch (err) {
-	case -ERR_RUN_COMMAND_FORK:
-		error("unable to fork for %s", argv[0]);
-	case -ERR_RUN_COMMAND_EXEC:
-		error("unable to exec %s", argv[0]);
-		break;
-	case -ERR_RUN_COMMAND_WAITPID:
-	case -ERR_RUN_COMMAND_WAITPID_WRONG_PID:
-	case -ERR_RUN_COMMAND_WAITPID_SIGNAL:
-	case -ERR_RUN_COMMAND_WAITPID_NOEXIT:
-		error("%s died with strange error", argv[0]);
-	}
-	return !!err;
-}
-
-static struct ref *get_refs_via_curl(struct transport *transport, int for_push)
-{
-	struct strbuf buffer = STRBUF_INIT;
-	char *data, *start, *mid;
-	char *ref_name;
-	char *refs_url;
-	int i = 0;
-	int http_ret;
-
-	struct ref *refs = NULL;
-	struct ref *ref = NULL;
-	struct ref *last_ref = NULL;
-
-	struct walker *walker;
-
-	if (for_push)
-		return NULL;
-
-	if (!transport->data)
-		transport->data = get_http_walker(transport->url,
-						transport->remote);
-
-	walker = transport->data;
-
-	refs_url = xmalloc(strlen(transport->url) + 11);
-	sprintf(refs_url, "%s/info/refs", transport->url);
-
-	http_ret = http_get_strbuf(refs_url, &buffer, HTTP_NO_CACHE);
-	switch (http_ret) {
-	case HTTP_OK:
-		break;
-	case HTTP_MISSING_TARGET:
-		die("%s not found: did you run git update-server-info on the"
-		    " server?", refs_url);
-	default:
-		http_error(refs_url, http_ret);
-		die("HTTP request failed");
-	}
-
-	data = buffer.buf;
-	start = NULL;
-	mid = data;
-	while (i < buffer.len) {
-		if (!start)
-			start = &data[i];
-		if (data[i] == '\t')
-			mid = &data[i];
-		if (data[i] == '\n') {
-			data[i] = 0;
-			ref_name = mid + 1;
-			ref = xmalloc(sizeof(struct ref) +
-				      strlen(ref_name) + 1);
-			memset(ref, 0, sizeof(struct ref));
-			strcpy(ref->name, ref_name);
-			get_sha1_hex(start, ref->old_sha1);
-			if (!refs)
-				refs = ref;
-			if (last_ref)
-				last_ref->next = ref;
-			last_ref = ref;
-			start = NULL;
-		}
-		i++;
-	}
-
-	strbuf_release(&buffer);
-
-	ref = alloc_ref("HEAD");
-	if (!walker->fetch_ref(walker, ref) &&
-	    !resolve_remote_symref(ref, refs)) {
-		ref->next = refs;
-		refs = ref;
-	} else {
-		free(ref);
-	}
-
-	strbuf_release(&buffer);
-	free(refs_url);
-	return refs;
-}
-
-static int fetch_objs_via_curl(struct transport *transport,
-				 int nr_objs, const struct ref **to_fetch)
-{
-	if (!transport->data)
-		transport->data = get_http_walker(transport->url,
-						transport->remote);
-	return fetch_objs_via_walker(transport, nr_objs, to_fetch);
+	return !!run_command_v_opt(argv, RUN_GIT_CMD);
 }
 
 #endif
@@ -679,6 +533,21 @@ static int fetch_refs_via_pack(struct transport *transport,
 	free(heads);
 	free(dest);
 	return (refs ? 0 : -1);
+}
+
+static int push_had_errors(struct ref *ref)
+{
+	for (; ref; ref = ref->next) {
+		switch (ref->status) {
+		case REF_STATUS_NONE:
+		case REF_STATUS_UPTODATE:
+		case REF_STATUS_OK:
+			break;
+		default:
+			return 1;
+		}
+	}
+	return 0;
 }
 
 static int refs_pushed(struct ref *ref)
@@ -895,6 +764,7 @@ static int git_transport_push(struct transport *transport, struct ref *remote_re
 	args.force_update = !!(flags & TRANSPORT_PUSH_FORCE);
 	args.use_thin_pack = data->thin;
 	args.verbose = !!(flags & TRANSPORT_PUSH_VERBOSE);
+	args.quiet = !!(flags & TRANSPORT_PUSH_QUIET);
 	args.dry_run = !!(flags & TRANSPORT_PUSH_DRY_RUN);
 
 	ret = send_pack(&args, data->fd, data->conn, remote_refs,
@@ -942,6 +812,9 @@ struct transport *transport_get(struct remote *remote, const char *url)
 {
 	struct transport *ret = xcalloc(1, sizeof(*ret));
 
+	if (!remote)
+		die("No remote provided to transport_get()");
+
 	ret->remote = remote;
 	ret->url = url;
 
@@ -953,14 +826,12 @@ struct transport *transport_get(struct remote *remote, const char *url)
 	} else if (!prefixcmp(url, "http://")
 	        || !prefixcmp(url, "https://")
 	        || !prefixcmp(url, "ftp://")) {
+		transport_helper_init(ret, "curl");
 #ifdef NO_CURL
 		error("git was compiled without libcurl support.");
 #else
-		ret->get_refs_list = get_refs_via_curl;
-		ret->fetch = fetch_objs_via_curl;
 		ret->push = curl_transport_push;
 #endif
-		ret->disconnect = disconnect_walker;
 
 	} else if (is_local(url) && is_file(url)) {
 		struct bundle_transport_data *data = xcalloc(1, sizeof(*data));
@@ -981,10 +852,10 @@ struct transport *transport_get(struct remote *remote, const char *url)
 		data->thin = 1;
 		data->conn = NULL;
 		data->uploadpack = "git-upload-pack";
-		if (remote && remote->uploadpack)
+		if (remote->uploadpack)
 			data->uploadpack = remote->uploadpack;
 		data->receivepack = "git-receive-pack";
-		if (remote && remote->receivepack)
+		if (remote->receivepack)
 			data->receivepack = remote->receivepack;
 	}
 
@@ -1001,8 +872,9 @@ int transport_set_option(struct transport *transport,
 
 int transport_push(struct transport *transport,
 		   int refspec_nr, const char **refspec, int flags,
-		   int * nonfastforward)
+		   int *nonfastforward)
 {
+	*nonfastforward = 0;
 	verify_remote_names(refspec_nr, refspec);
 
 	if (transport->push)
@@ -1013,6 +885,7 @@ int transport_push(struct transport *transport,
 		struct ref *local_refs = get_local_heads();
 		int match_flags = MATCH_REFS_NONE;
 		int verbose = flags & TRANSPORT_PUSH_VERBOSE;
+		int quiet = flags & TRANSPORT_PUSH_QUIET;
 		int porcelain = flags & TRANSPORT_PUSH_PORCELAIN;
 		int ret;
 
@@ -1028,7 +901,10 @@ int transport_push(struct transport *transport,
 
 		ret = transport->push_refs(transport, remote_refs, flags);
 
-		print_push_status(transport->url, remote_refs, verbose | porcelain, porcelain, nonfastforward);
+		if (!quiet || push_had_errors(remote_refs))
+			print_push_status(transport->url, remote_refs,
+					verbose | porcelain, porcelain,
+					nonfastforward);
 
 		if (!(flags & TRANSPORT_PUSH_DRY_RUN)) {
 			struct ref *ref;
@@ -1036,7 +912,7 @@ int transport_push(struct transport *transport,
 				update_tracking_ref(transport->remote, ref, verbose);
 		}
 
-		if (!ret && !refs_pushed(remote_refs))
+		if (!quiet && !ret && !refs_pushed(remote_refs))
 			fprintf(stderr, "Everything up-to-date\n");
 		return ret;
 	}
@@ -1053,16 +929,30 @@ const struct ref *transport_get_remote_refs(struct transport *transport)
 int transport_fetch_refs(struct transport *transport, const struct ref *refs)
 {
 	int rc;
-	int nr_heads = 0, nr_alloc = 0;
+	int nr_heads = 0, nr_alloc = 0, nr_refs = 0;
 	const struct ref **heads = NULL;
 	const struct ref *rm;
 
 	for (rm = refs; rm; rm = rm->next) {
+		nr_refs++;
 		if (rm->peer_ref &&
 		    !hashcmp(rm->peer_ref->old_sha1, rm->old_sha1))
 			continue;
 		ALLOC_GROW(heads, nr_heads + 1, nr_alloc);
 		heads[nr_heads++] = rm;
+	}
+
+	if (!nr_heads) {
+		/*
+		 * When deepening of a shallow repository is requested,
+		 * then local and remote refs are likely to still be equal.
+		 * Just feed them all to the fetch method in that case.
+		 * This condition shouldn't be met in a non-deepening fetch
+		 * (see builtin-fetch.c:quickfetch()).
+		 */
+		heads = xmalloc(nr_refs * sizeof(*heads));
+		for (rm = refs; rm; rm = rm->next)
+			heads[nr_heads++] = rm;
 	}
 
 	rc = transport->fetch(transport, nr_heads, heads);

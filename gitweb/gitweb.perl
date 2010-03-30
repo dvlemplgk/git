@@ -160,7 +160,8 @@ our %known_snapshot_formats = (
 	# 	'suffix' => filename suffix,
 	# 	'format' => --format for git-archive,
 	# 	'compressor' => [compressor command and arguments]
-	# 	                (array reference, optional)}
+	# 	                (array reference, optional)
+	# 	'disabled' => boolean (optional)}
 	#
 	'tgz' => {
 		'display' => 'tar.gz',
@@ -176,6 +177,14 @@ our %known_snapshot_formats = (
 		'format' => 'tar',
 		'compressor' => ['bzip2']},
 
+	'txz' => {
+		'display' => 'tar.xz',
+		'type' => 'application/x-xz',
+		'suffix' => '.tar.xz',
+		'format' => 'tar',
+		'compressor' => ['xz'],
+		'disabled' => 1},
+
 	'zip' => {
 		'display' => 'zip',
 		'type' => 'application/x-zip',
@@ -188,6 +197,7 @@ our %known_snapshot_formats = (
 our %known_snapshot_format_aliases = (
 	'gzip'  => 'tgz',
 	'bzip2' => 'tbz2',
+	'xz'    => 'txz',
 
 	# backward compatibility: legacy gitweb config support
 	'x-gzip' => undef, 'gz' => undef,
@@ -494,7 +504,8 @@ sub filter_snapshot_fmts {
 		exists $known_snapshot_format_aliases{$_} ?
 		       $known_snapshot_format_aliases{$_} : $_} @fmts;
 	@fmts = grep {
-		exists $known_snapshot_formats{$_} } @fmts;
+		exists $known_snapshot_formats{$_} &&
+		!$known_snapshot_formats{$_}{'disabled'}} @fmts;
 }
 
 our $GITWEB_CONFIG = $ENV{'GITWEB_CONFIG'} || "++GITWEB_CONFIG++";
@@ -940,10 +951,13 @@ sub href {
 			if (defined $params{'hash_parent_base'}) {
 				$href .= esc_url($params{'hash_parent_base'});
 				# skip the file_parent if it's the same as the file_name
-				delete $params{'file_parent'} if $params{'file_parent'} eq $params{'file_name'};
-				if (defined $params{'file_parent'} && $params{'file_parent'} !~ /\.\./) {
-					$href .= ":/".esc_url($params{'file_parent'});
-					delete $params{'file_parent'};
+				if (defined $params{'file_parent'}) {
+					if (defined $params{'file_name'} && $params{'file_parent'} eq $params{'file_name'}) {
+						delete $params{'file_parent'};
+					} elsif ($params{'file_parent'} !~ /\.\./) {
+						$href .= ":/".esc_url($params{'file_parent'});
+						delete $params{'file_parent'};
+					}
 				}
 				$href .= "..";
 				delete $params{'hash_parent'};
@@ -1069,8 +1083,7 @@ sub to_utf8 {
 # correct, but quoted slashes look too horrible in bookmarks
 sub esc_param {
 	my $str = shift;
-	$str =~ s/([^A-Za-z0-9\-_.~()\/:@])/sprintf("%%%02X", ord($1))/eg;
-	$str =~ s/\+/%2B/g;
+	$str =~ s/([^A-Za-z0-9\-_.~()\/:@ ]+)/CGI::escape($1)/eg;
 	$str =~ s/ /\+/g;
 	return $str;
 }
@@ -1510,10 +1523,10 @@ sub format_subject_html {
 		$long =~ s/[[:cntrl:]]/?/g;
 		return $cgi->a({-href => $href, -class => "list subject",
 		                -title => to_utf8($long)},
-		       esc_html($short) . $extra);
+		       esc_html($short)) . $extra;
 	} else {
 		return $cgi->a({-href => $href, -class => "list subject"},
-		       esc_html($long)  . $extra);
+		       esc_html($long)) . $extra;
 	}
 }
 
@@ -4800,7 +4813,7 @@ sub git_blame {
 	git_print_page_path($file_name, $ftype, $hash_base);
 
 	# page body
-	my @rev_color = qw(light2 dark2);
+	my @rev_color = qw(light dark);
 	my $num_colors = scalar(@rev_color);
 	my $current_color = 0;
 	my %metainfo = ();
@@ -4818,15 +4831,18 @@ HTML
 		my ($full_rev, $orig_lineno, $lineno, $group_size) =
 		   ($line =~ /^([0-9a-f]{40}) (\d+) (\d+)(?: (\d+))?$/);
 		if (!exists $metainfo{$full_rev}) {
-			$metainfo{$full_rev} = {};
+			$metainfo{$full_rev} = { 'nprevious' => 0 };
 		}
 		my $meta = $metainfo{$full_rev};
 		my $data;
 		while ($data = <$fd>) {
 			chomp $data;
 			last if ($data =~ s/^\t//); # contents of line
-			if ($data =~ /^(\S+) (.*)$/) {
-				$meta->{$1} = $2;
+			if ($data =~ /^(\S+)(?: (.*))?$/) {
+				$meta->{$1} = $2 unless exists $meta->{$1};
+			}
+			if ($data =~ /^previous /) {
+				$meta->{'nprevious'}++;
 			}
 		}
 		my $short_rev = substr($full_rev, 0, 8);
@@ -4837,7 +4853,11 @@ HTML
 		if ($group_size) {
 			$current_color = ($current_color + 1) % $num_colors;
 		}
-		print "<tr id=\"l$lineno\" class=\"$rev_color[$current_color]\">\n";
+		my $tr_class = $rev_color[$current_color];
+		$tr_class .= ' boundary' if (exists $meta->{'boundary'});
+		$tr_class .= ' no-previous' if ($meta->{'nprevious'} == 0);
+		$tr_class .= ' multiple-previous' if ($meta->{'nprevious'} > 1);
+		print "<tr id=\"l$lineno\" class=\"$tr_class\">\n";
 		if ($group_size) {
 			print "<td class=\"sha1\"";
 			print " title=\"". esc_html($author) . ", $date\"";
@@ -4847,22 +4867,31 @@ HTML
 			                             hash=>$full_rev,
 			                             file_name=>$file_name)},
 			              esc_html($short_rev));
+			if ($group_size >= 2) {
+				my @author_initials = ($author =~ /\b([[:upper:]])\B/g);
+				if (@author_initials) {
+					print "<br />" .
+					      esc_html(join('', @author_initials));
+					#           or join('.', ...)
+				}
+			}
 			print "</td>\n";
 		}
-		my $parent_commit;
-		if (!exists $meta->{'parent'}) {
-			open (my $dd, "-|", git_cmd(), "rev-parse", "$full_rev^")
-				or die_error(500, "Open git-rev-parse failed");
-			$parent_commit = <$dd>;
-			close $dd;
-			chomp($parent_commit);
-			$meta->{'parent'} = $parent_commit;
-		} else {
-			$parent_commit = $meta->{'parent'};
+		# 'previous' <sha1 of parent commit> <filename at commit>
+		if (exists $meta->{'previous'} &&
+		    $meta->{'previous'} =~ /^([a-fA-F0-9]{40}) (.*)$/) {
+			$meta->{'parent'} = $1;
+			$meta->{'file_parent'} = unquote($2);
 		}
+		my $linenr_commit =
+			exists($meta->{'parent'}) ?
+			$meta->{'parent'} : $full_rev;
+		my $linenr_filename =
+			exists($meta->{'file_parent'}) ?
+			$meta->{'file_parent'} : unquote($meta->{'filename'});
 		my $blamed = href(action => 'blame',
-		                  file_name => $meta->{'filename'},
-		                  hash_base => $parent_commit);
+		                  file_name => $linenr_filename,
+		                  hash_base => $linenr_commit);
 		print "<td class=\"linenr\">";
 		print $cgi->a({ -href => "$blamed#l$orig_lineno",
 		                -class => "linenr" },
@@ -5035,7 +5064,8 @@ sub git_blob {
 			chomp $line;
 			$nr++;
 			$line = untabify($line);
-			printf "<div class=\"pre\"><a id=\"l%i\" href=\"#l%i\" class=\"linenr\">%4i</a> %s</div>\n",
+			printf "<div class=\"pre\"><a id=\"l%i\" href=\"" . href(-replay => 1)
+				. "#l%i\" class=\"linenr\">%4i</a> %s</div>\n",
 			       $nr, $nr, $nr, esc_html($line, -nbsp=>1);
 		}
 	}
@@ -5160,6 +5190,8 @@ sub git_snapshot {
 		die_error(400, "Invalid snapshot format parameter");
 	} elsif (!exists($known_snapshot_formats{$format})) {
 		die_error(400, "Unknown snapshot format");
+	} elsif ($known_snapshot_formats{$format}{'disabled'}) {
+		die_error(403, "Snapshot format not allowed");
 	} elsif (!grep($_ eq $format, @snapshot_fmts)) {
 		die_error(403, "Unsupported snapshot format");
 	}
@@ -5296,7 +5328,7 @@ sub git_commit {
 			} @$parents ) .
 			')';
 	}
-	if (gitweb_check_feature('patches')) {
+	if (gitweb_check_feature('patches') && @$parents <= 1) {
 		$formats_nav .= " | " .
 			$cgi->a({-href => href(action=>"patch", -replay=>1)},
 				"patch");
@@ -5584,7 +5616,7 @@ sub git_commitdiff {
 		$formats_nav =
 			$cgi->a({-href => href(action=>"commitdiff_plain", -replay=>1)},
 			        "raw");
-		if ($patch_max) {
+		if ($patch_max && @{$co{'parents'}} <= 1) {
 			$formats_nav .= " | " .
 				$cgi->a({-href => href(action=>"patch", -replay=>1)},
 					"patch");
@@ -5792,7 +5824,7 @@ sub git_commitdiff_plain {
 
 # format-patch-style patches
 sub git_patch {
-	git_commitdiff(-format => 'patch', -single=> 1);
+	git_commitdiff(-format => 'patch', -single => 1);
 }
 
 sub git_patches {

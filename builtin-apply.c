@@ -61,6 +61,13 @@ static enum ws_error_action {
 static int whitespace_error;
 static int squelch_whitespace_errors = 5;
 static int applied_after_fixing_ws;
+
+static enum ws_ignore {
+	ignore_ws_none,
+	ignore_ws_change,
+} ws_ignore_action = ignore_ws_none;
+
+
 static const char *patch_input_file;
 static const char *root;
 static int root_len;
@@ -97,6 +104,21 @@ static void parse_whitespace_option(const char *option)
 	die("unrecognized whitespace option '%s'", option);
 }
 
+static void parse_ignorewhitespace_option(const char *option)
+{
+	if (!option || !strcmp(option, "no") ||
+	    !strcmp(option, "false") || !strcmp(option, "never") ||
+	    !strcmp(option, "none")) {
+		ws_ignore_action = ignore_ws_none;
+		return;
+	}
+	if (!strcmp(option, "change")) {
+		ws_ignore_action = ignore_ws_change;
+		return;
+	}
+	die("unrecognized whitespace ignore option '%s'", option);
+}
+
 static void set_default_whitespace_mode(const char *whitespace_option)
 {
 	if (!whitespace_option && !apply_default_whitespace)
@@ -131,6 +153,7 @@ struct fragment {
 	const char *patch;
 	int size;
 	int rejected;
+	int linenr;
 	struct fragment *next;
 };
 
@@ -212,6 +235,62 @@ static uint32_t hash_line(const char *cp, size_t len)
 		}
 	}
 	return h;
+}
+
+/*
+ * Compare lines s1 of length n1 and s2 of length n2, ignoring
+ * whitespace difference. Returns 1 if they match, 0 otherwise
+ */
+static int fuzzy_matchlines(const char *s1, size_t n1,
+			    const char *s2, size_t n2)
+{
+	const char *last1 = s1 + n1 - 1;
+	const char *last2 = s2 + n2 - 1;
+	int result = 0;
+
+	if (n1 < 0 || n2 < 0)
+		return 0;
+
+	/* ignore line endings */
+	while ((*last1 == '\r') || (*last1 == '\n'))
+		last1--;
+	while ((*last2 == '\r') || (*last2 == '\n'))
+		last2--;
+
+	/* skip leading whitespace */
+	while (isspace(*s1) && (s1 <= last1))
+		s1++;
+	while (isspace(*s2) && (s2 <= last2))
+		s2++;
+	/* early return if both lines are empty */
+	if ((s1 > last1) && (s2 > last2))
+		return 1;
+	while (!result) {
+		result = *s1++ - *s2++;
+		/*
+		 * Skip whitespace inside. We check for whitespace on
+		 * both buffers because we don't want "a b" to match
+		 * "ab"
+		 */
+		if (isspace(*s1) && isspace(*s2)) {
+			while (isspace(*s1) && s1 <= last1)
+				s1++;
+			while (isspace(*s2) && s2 <= last2)
+				s2++;
+		}
+		/*
+		 * If we reached the end on one side only,
+		 * lines don't match
+		 */
+		if (
+		    ((s2 > last2) && (s1 <= last1)) ||
+		    ((s1 > last1) && (s2 <= last2)))
+			return 0;
+		if ((s1 > last1) && (s2 > last2))
+			break;
+	}
+
+	return !result;
 }
 
 static void add_line_info(struct image *img, const char *bol, size_t len, unsigned flag)
@@ -744,12 +823,13 @@ static int gitdiff_unrecognized(const char *line, struct patch *patch)
 
 static const char *stop_at_slash(const char *line, int llen)
 {
+	int nslash = p_value;
 	int i;
 
 	for (i = 0; i < llen; i++) {
 		int ch = line[i];
-		if (ch == '/')
-			return line + i;
+		if (ch == '/' && --nslash <= 0)
+			return &line[i];
 	}
 	return NULL;
 }
@@ -1149,23 +1229,29 @@ static int find_header(char *line, unsigned long size, int *hdrsize, struct patc
 	return -1;
 }
 
-static void check_whitespace(const char *line, int len, unsigned ws_rule)
+static void record_ws_error(unsigned result, const char *line, int len, int linenr)
 {
 	char *err;
-	unsigned result = ws_check(line + 1, len - 1, ws_rule);
+
 	if (!result)
 		return;
 
 	whitespace_error++;
 	if (squelch_whitespace_errors &&
 	    squelch_whitespace_errors < whitespace_error)
-		;
-	else {
-		err = whitespace_error_string(result);
-		fprintf(stderr, "%s:%d: %s.\n%.*s\n",
-			patch_input_file, linenr, err, len - 2, line + 1);
-		free(err);
-	}
+		return;
+
+	err = whitespace_error_string(result);
+	fprintf(stderr, "%s:%d: %s.\n%.*s\n",
+		patch_input_file, linenr, err, len, line);
+	free(err);
+}
+
+static void check_whitespace(const char *line, int len, unsigned ws_rule)
+{
+	unsigned result = ws_check(line + 1, len - 1, ws_rule);
+
+	record_ws_error(result, line + 1, len - 2, linenr);
 }
 
 /*
@@ -1281,6 +1367,7 @@ static int parse_single_patch(char *line, unsigned long size, struct patch *patc
 		int len;
 
 		fragment = xcalloc(1, sizeof(*fragment));
+		fragment->linenr = linenr;
 		len = parse_fragment(line, size, patch, fragment);
 		if (len <= 0)
 			die("corrupt patch at line %d", linenr);
@@ -1672,10 +1759,17 @@ static int read_old_data(struct stat *st, const char *path, struct strbuf *buf)
 	}
 }
 
+/*
+ * Update the preimage, and the common lines in postimage,
+ * from buffer buf of length len. If postlen is 0 the postimage
+ * is updated in place, otherwise it's updated on a new buffer
+ * of length postlen
+ */
+
 static void update_pre_post_images(struct image *preimage,
 				   struct image *postimage,
 				   char *buf,
-				   size_t len)
+				   size_t len, size_t postlen)
 {
 	int i, ctx;
 	char *new, *old, *fixed;
@@ -1694,11 +1788,19 @@ static void update_pre_post_images(struct image *preimage,
 	*preimage = fixed_preimage;
 
 	/*
-	 * Adjust the common context lines in postimage, in place.
-	 * This is possible because whitespace fixing does not make
-	 * the string grow.
+	 * Adjust the common context lines in postimage. This can be
+	 * done in-place when we are just doing whitespace fixing,
+	 * which does not make the string grow, but needs a new buffer
+	 * when ignoring whitespace causes the update, since in this case
+	 * we could have e.g. tabs converted to multiple spaces.
+	 * We trust the caller to tell us if the update can be done
+	 * in place (postlen==0) or not.
 	 */
-	new = old = postimage->buf;
+	old = postimage->buf;
+	if (postlen)
+		new = postimage->buf = xmalloc(postlen);
+	else
+		new = old;
 	fixed = preimage->buf;
 	for (i = ctx = 0; i < postimage->nr; i++) {
 		size_t len = postimage->line[i].len;
@@ -1773,12 +1875,56 @@ static int match_fragment(struct image *img,
 	    !memcmp(img->buf + try, preimage->buf, preimage->len))
 		return 1;
 
+	/*
+	 * No exact match. If we are ignoring whitespace, run a line-by-line
+	 * fuzzy matching. We collect all the line length information because
+	 * we need it to adjust whitespace if we match.
+	 */
+	if (ws_ignore_action == ignore_ws_change) {
+		size_t imgoff = 0;
+		size_t preoff = 0;
+		size_t postlen = postimage->len;
+		for (i = 0; i < preimage->nr; i++) {
+			size_t prelen = preimage->line[i].len;
+			size_t imglen = img->line[try_lno+i].len;
+
+			if (!fuzzy_matchlines(img->buf + try + imgoff, imglen,
+					      preimage->buf + preoff, prelen))
+				return 0;
+			if (preimage->line[i].flag & LINE_COMMON)
+				postlen += imglen - prelen;
+			imgoff += imglen;
+			preoff += prelen;
+		}
+
+		/*
+		 * Ok, the preimage matches with whitespace fuzz. Update it and
+		 * the common postimage lines to use the same whitespace as the
+		 * target. imgoff now holds the true length of the target that
+		 * matches the preimage, and we need to update the line lengths
+		 * of the preimage to match the target ones.
+		 */
+		fixed_buf = xmalloc(imgoff);
+		memcpy(fixed_buf, img->buf + try, imgoff);
+		for (i = 0; i < preimage->nr; i++)
+			preimage->line[i].len = img->line[try_lno+i].len;
+
+		/*
+		 * Update the preimage buffer and the postimage context lines.
+		 */
+		update_pre_post_images(preimage, postimage,
+				fixed_buf, imgoff, postlen);
+		return 1;
+	}
+
 	if (ws_error_action != correct_ws_error)
 		return 0;
 
 	/*
 	 * The hunk does not apply byte-by-byte, but the hash says
-	 * it might with whitespace fuzz.
+	 * it might with whitespace fuzz. We haven't been asked to
+	 * ignore whitespace, we were asked to correct whitespace
+	 * errors, so let's try matching after whitespace correction.
 	 */
 	fixed_buf = xmalloc(preimage->len + 1);
 	buf = fixed_buf;
@@ -1830,7 +1976,7 @@ static int match_fragment(struct image *img,
 	 * hunk match.  Update the context lines in the postimage.
 	 */
 	update_pre_post_images(preimage, postimage,
-			       fixed_buf, buf - fixed_buf);
+			       fixed_buf, buf - fixed_buf, 0);
 	return 1;
 
  unmatch_exit:
@@ -2005,6 +2151,7 @@ static int apply_one_fragment(struct image *img, struct fragment *frag,
 		int len = linelen(patch, size);
 		int plen, added;
 		int added_blank_line = 0;
+		int is_blank_context = 0;
 
 		if (!len)
 			break;
@@ -2037,8 +2184,12 @@ static int apply_one_fragment(struct image *img, struct fragment *frag,
 			*new++ = '\n';
 			add_line_info(&preimage, "\n", 1, LINE_COMMON);
 			add_line_info(&postimage, "\n", 1, LINE_COMMON);
+			is_blank_context = 1;
 			break;
 		case ' ':
+			if (plen && (ws_rule & WS_BLANK_AT_EOF) &&
+			    ws_blank_line(patch + 1, plen, ws_rule))
+				is_blank_context = 1;
 		case '-':
 			memcpy(old, patch + 1, plen);
 			add_line_info(&preimage, old, plen,
@@ -2065,7 +2216,8 @@ static int apply_one_fragment(struct image *img, struct fragment *frag,
 				      (first == '+' ? 0 : LINE_COMMON));
 			new += added;
 			if (first == '+' &&
-			    added == 1 && new[-1] == '\n')
+			    (ws_rule & WS_BLANK_AT_EOF) &&
+			    ws_blank_line(patch + 1, plen, ws_rule))
 				added_blank_line = 1;
 			break;
 		case '@': case '\\':
@@ -2078,6 +2230,8 @@ static int apply_one_fragment(struct image *img, struct fragment *frag,
 		}
 		if (added_blank_line)
 			new_blank_lines_at_end++;
+		else if (is_blank_context)
+			;
 		else
 			new_blank_lines_at_end = 0;
 		patch += len;
@@ -2159,17 +2313,24 @@ static int apply_one_fragment(struct image *img, struct fragment *frag,
 	}
 
 	if (applied_pos >= 0) {
-		if (ws_error_action == correct_ws_error &&
-		    new_blank_lines_at_end &&
-		    postimage.nr + applied_pos == img->nr) {
+		if (new_blank_lines_at_end &&
+		    preimage.nr + applied_pos == img->nr &&
+		    (ws_rule & WS_BLANK_AT_EOF) &&
+		    ws_error_action != nowarn_ws_error) {
+			record_ws_error(WS_BLANK_AT_EOF, "+", 1, frag->linenr);
+			if (ws_error_action == correct_ws_error) {
+				while (new_blank_lines_at_end--)
+					remove_last_line(&postimage);
+			}
 			/*
-			 * If the patch application adds blank lines
-			 * at the end, and if the patch applies at the
-			 * end of the image, remove those added blank
-			 * lines.
+			 * We would want to prevent write_out_results()
+			 * from taking place in apply_patch() that follows
+			 * the callchain led us here, which is:
+			 * apply_patch->check_patch_list->check_patch->
+			 * apply_data->apply_fragments->apply_one_fragment
 			 */
-			while (new_blank_lines_at_end--)
-				remove_last_line(&postimage);
+			if (ws_error_action == die_on_ws_error)
+				apply = 0;
 		}
 
 		/*
@@ -3272,6 +3433,8 @@ static int git_apply_config(const char *var, const char *value, void *cb)
 {
 	if (!strcmp(var, "apply.whitespace"))
 		return git_config_string(&apply_default_whitespace, var, value);
+	else if (!strcmp(var, "apply.ignorewhitespace"))
+		return git_config_string(&apply_default_ignorewhitespace, var, value);
 	return git_default_config(var, value, cb);
 }
 
@@ -3305,6 +3468,16 @@ static int option_parse_z(const struct option *opt,
 		line_termination = '\n';
 	else
 		line_termination = 0;
+	return 0;
+}
+
+static int option_parse_space_change(const struct option *opt,
+			  const char *arg, int unset)
+{
+	if (unset)
+		ws_ignore_action = ignore_ws_none;
+	else
+		ws_ignore_action = ignore_ws_change;
 	return 0;
 }
 
@@ -3384,6 +3557,12 @@ int cmd_apply(int argc, const char **argv, const char *unused_prefix)
 		{ OPTION_CALLBACK, 0, "whitespace", &whitespace_option, "action",
 			"detect new or modified lines that have whitespace errors",
 			0, option_parse_whitespace },
+		{ OPTION_CALLBACK, 0, "ignore-space-change", NULL, NULL,
+			"ignore changes in whitespace when finding context",
+			PARSE_OPT_NOARG, option_parse_space_change },
+		{ OPTION_CALLBACK, 0, "ignore-whitespace", NULL, NULL,
+			"ignore changes in whitespace when finding context",
+			PARSE_OPT_NOARG, option_parse_space_change },
 		OPT_BOOLEAN('R', "reverse", &apply_in_reverse,
 			"apply the patch in reverse"),
 		OPT_BOOLEAN(0, "unidiff-zero", &unidiff_zero,
@@ -3408,6 +3587,8 @@ int cmd_apply(int argc, const char **argv, const char *unused_prefix)
 	git_config(git_apply_config, NULL);
 	if (apply_default_whitespace)
 		parse_whitespace_option(apply_default_whitespace);
+	if (apply_default_ignorewhitespace)
+		parse_ignorewhitespace_option(apply_default_ignorewhitespace);
 
 	argc = parse_options(argc, argv, prefix, builtin_apply_options,
 			apply_usage, 0);

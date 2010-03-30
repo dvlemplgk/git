@@ -104,7 +104,9 @@ git-receive-pack
 git-reflog
 git-relink
 git-remote
+git-remote-curl
 git-repack
+git-replace
 git-repo-config
 git-request-pull
 git-rerere
@@ -166,6 +168,7 @@ git.spec
 *.exe
 *.[aos]
 *.py[co]
+*+
 config.mak
 autom4te.cache
 config.cache
@@ -177,3 +180,14 @@ configure
 tags
 TAGS
 cscope*
+*.obj
+*.lib
+*.sln
+*.suo
+*.ncb
+*.vcproj
+*.user
+*.idb
+*.pdb
+Debug/
+Release/

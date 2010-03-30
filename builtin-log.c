@@ -27,6 +27,10 @@ static int default_show_root = 1;
 static const char *fmt_patch_subject_prefix = "PATCH";
 static const char *fmt_pretty;
 
+static const char * const builtin_log_usage =
+	"git log [<options>] [<since>..<until>] [[--] <path>...]\n"
+	"   or: git show [options] <object>...";
+
 static void cmd_log_init(int argc, const char **argv, const char *prefix,
 		      struct rev_info *rev)
 {
@@ -69,6 +73,8 @@ static void cmd_log_init(int argc, const char **argv, const char *prefix,
 				die("invalid --decorate option: %s", arg);
 		} else if (!strcmp(arg, "--source")) {
 			rev->show_source = 1;
+		} else if (!strcmp(arg, "-h")) {
+			usage(builtin_log_usage);
 		} else
 			die("unrecognized argument: %s", arg);
 	}
@@ -885,6 +891,7 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 	struct patch_ids ids;
 	char *add_signoff = NULL;
 	struct strbuf buf = STRBUF_INIT;
+	int use_patch_format = 0;
 	const struct option builtin_format_patch_options[] = {
 		{ OPTION_CALLBACK, 'n', "numbered", &numbered, NULL,
 			    "use [PATCH n/m] even with a single patch",
@@ -914,6 +921,8 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 			    PARSE_OPT_NOARG | PARSE_OPT_NONEG, keep_callback },
 		OPT_BOOLEAN(0, "no-binary", &no_binary_diff,
 			    "don't output binary diffs"),
+		OPT_BOOLEAN('p', NULL, &use_patch_format,
+			"show patch format instead of default (patch + stat)"),
 		OPT_BOOLEAN(0, "ignore-if-in-upstream", &ignore_if_in_upstream,
 			    "don't include a patch matching a commit upstream"),
 		OPT_GROUP("Messaging"),
@@ -960,7 +969,8 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 	 */
 	argc = parse_options(argc, argv, prefix, builtin_format_patch_options,
 			     builtin_format_patch_usage,
-			     PARSE_OPT_KEEP_ARGV0 | PARSE_OPT_KEEP_UNKNOWN);
+			     PARSE_OPT_KEEP_ARGV0 | PARSE_OPT_KEEP_UNKNOWN |
+			     PARSE_OPT_KEEP_DASHDASH);
 
 	if (do_signoff) {
 		const char *committer;
@@ -1021,8 +1031,10 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 	if (argc > 1)
 		die ("unrecognized argument: %s", argv[1]);
 
-	if (!rev.diffopt.output_format
-		|| rev.diffopt.output_format == DIFF_FORMAT_PATCH)
+	if (use_patch_format)
+		rev.diffopt.output_format |= DIFF_FORMAT_PATCH;
+	else if (!rev.diffopt.output_format ||
+		  rev.diffopt.output_format == DIFF_FORMAT_PATCH)
 		rev.diffopt.output_format = DIFF_FORMAT_DIFFSTAT | DIFF_FORMAT_SUMMARY | DIFF_FORMAT_PATCH;
 
 	if (!DIFF_OPT_TST(&rev.diffopt, TEXT) && !no_binary_diff)

@@ -197,6 +197,25 @@ intent is that if someone unsets the filter driver definition,
 or does not have the appropriate filter program, the project
 should still be usable.
 
+For example, in .gitattributes, you would assign the `filter`
+attribute for paths.
+
+------------------------
+*.c	filter=indent
+------------------------
+
+Then you would define a "filter.indent.clean" and "filter.indent.smudge"
+configuration in your .git/config to specify a pair of commands to
+modify the contents of C programs when the source files are checked
+in ("clean" is run) and checked out (no change is made because the
+command is "cat").
+
+------------------------
+[filter "indent"]
+	clean = indent
+	smudge = cat
+------------------------
+
 
 Interaction between checkin/checkout attributes
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -558,6 +577,16 @@ as those for the option `--pretty=format:` of linkgit:git-log[1],
 except that they need to be wrapped like this: `$Format:PLACEHOLDERS$`
 in the file.  E.g. the string `$Format:%H$` will be replaced by the
 commit hash.
+
+
+Packing objects
+~~~~~~~~~~~~~~~
+
+`delta`
+^^^^^^^
+
+Delta compression will not be attempted for blobs for paths with the
+attribute `delta` set to false.
 
 
 Viewing files in GUI tools

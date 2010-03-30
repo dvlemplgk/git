@@ -11,9 +11,9 @@ SYNOPSIS
 [verse]
 'git am' [--signoff] [--keep] [--utf8 | --no-utf8]
 	 [--3way] [--interactive] [--committer-date-is-author-date]
-	 [--ignore-date]
+	 [--ignore-date] [--ignore-space-change | --ignore-whitespace]
 	 [--whitespace=<option>] [-C<n>] [-p<n>] [--directory=<dir>]
-	 [--reject] [-q | --quiet]
+	 [--reject] [-q | --quiet] [--scissors | --no-scissors]
 	 [<mbox> | <Maildir>...]
 'git am' (--skip | --resolved | --abort)
 
@@ -38,6 +38,14 @@ OPTIONS
 -k::
 --keep::
 	Pass `-k` flag to 'git-mailinfo' (see linkgit:git-mailinfo[1]).
+
+-c::
+--scissors::
+	Remove everything in body before a scissors line (see
+	linkgit:git-mailinfo[1]).
+
+---no-scissors::
+	Ignore scissors lines (see linkgit:git-mailinfo[1]).
 
 -q::
 --quiet::
@@ -65,6 +73,9 @@ default.   You can use `--no-utf8` to override this.
 	it is supposed to apply to and we have those blobs
 	available locally.
 
+--ignore-date::
+--ignore-space-change::
+--ignore-whitespace::
 --whitespace=<option>::
 -C<n>::
 -p<n>::
@@ -125,10 +136,8 @@ the commit, after stripping common prefix "[PATCH <anything>]".
 The "Subject: " line is supposed to concisely describe what the
 commit is about in one line of text.
 
-"From: " and "Subject: " lines starting the body (the rest of the
-message after the blank line terminating the RFC2822 headers)
-override the respective commit author name and title values taken
-from the headers.
+"From: " and "Subject: " lines starting the body override the respective
+commit author name and title values taken from the headers.
 
 The commit message is formed by the title taken from the
 "Subject: ", a blank line and the body of the message up to

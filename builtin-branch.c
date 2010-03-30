@@ -65,7 +65,7 @@ static int parse_branch_color_slot(const char *var, int ofs)
 		return BRANCH_COLOR_LOCAL;
 	if (!strcasecmp(var+ofs, "current"))
 		return BRANCH_COLOR_CURRENT;
-	die("bad config variable '%s'", var);
+	return -1;
 }
 
 static int git_branch_config(const char *var, const char *value, void *cb)
@@ -76,6 +76,8 @@ static int git_branch_config(const char *var, const char *value, void *cb)
 	}
 	if (!prefixcmp(var, "color.branch.")) {
 		int slot = parse_branch_color_slot(var, 13);
+		if (slot < 0)
+			return 0;
 		if (!value)
 			return config_error_nonbool(var);
 		color_parse(value, var, branch_colors[slot]);
@@ -586,7 +588,7 @@ int cmd_branch(int argc, const char **argv, const char *prefix)
 		OPT_BIT('m', NULL, &rename, "move/rename a branch and its reflog", 1),
 		OPT_BIT('M', NULL, &rename, "move/rename a branch, even if target exists", 2),
 		OPT_BOOLEAN('l', NULL, &reflog, "create the branch's reflog"),
-		OPT_BOOLEAN('f', NULL, &force_create, "force creation (when already exists)"),
+		OPT_BOOLEAN('f', "force", &force_create, "force creation (when already exists)"),
 		{
 			OPTION_CALLBACK, 0, "no-merged", &merge_filter_ref,
 			"commit", "print only not merged branches",
@@ -635,10 +637,12 @@ int cmd_branch(int argc, const char **argv, const char *prefix)
 		rename_branch(head, argv[0], rename > 1);
 	else if (rename && (argc == 2))
 		rename_branch(argv[0], argv[1], rename > 1);
-	else if (argc <= 2)
+	else if (argc <= 2) {
+		if (kinds != REF_LOCAL_BRANCH)
+			die("-a and -r options to 'git branch' do not make sense with a branch name");
 		create_branch(head, argv[0], (argc == 2) ? argv[1] : head,
 			      force_create, reflog, track);
-	else
+	} else
 		usage_with_options(builtin_branch_usage, options);
 
 	return 0;

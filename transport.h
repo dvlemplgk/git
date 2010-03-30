@@ -36,6 +36,7 @@ struct transport {
 #define TRANSPORT_PUSH_MIRROR 8
 #define TRANSPORT_PUSH_VERBOSE 16
 #define TRANSPORT_PUSH_PORCELAIN 32
+#define TRANSPORT_PUSH_QUIET 64
 
 /* Returns a transport suitable for the url */
 struct transport *transport_get(struct remote *, const char *);
@@ -77,5 +78,8 @@ int transport_fetch_refs(struct transport *transport, const struct ref *refs);
 void transport_unlock_pack(struct transport *transport);
 int transport_disconnect(struct transport *transport);
 char *transport_anonymize_url(const char *url);
+
+/* Transport methods defined outside transport.c */
+int transport_helper_init(struct transport *transport, const char *name);
 
 #endif

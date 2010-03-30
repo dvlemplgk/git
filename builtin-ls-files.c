@@ -171,8 +171,8 @@ static void show_files(struct dir_struct *dir, const char *prefix)
 		for (i = 0; i < active_nr; i++) {
 			struct cache_entry *ce = active_cache[i];
 			int dtype = ce_to_dtype(ce);
-			if (excluded(dir, ce->name, &dtype) !=
-					!!(dir->flags & DIR_SHOW_IGNORED))
+			if (dir->flags & DIR_SHOW_IGNORED &&
+			    !excluded(dir, ce->name, &dtype))
 				continue;
 			if (show_unmerged && !ce_stage(ce))
 				continue;
@@ -187,8 +187,8 @@ static void show_files(struct dir_struct *dir, const char *prefix)
 			struct stat st;
 			int err;
 			int dtype = ce_to_dtype(ce);
-			if (excluded(dir, ce->name, &dtype) !=
-					!!(dir->flags & DIR_SHOW_IGNORED))
+			if (dir->flags & DIR_SHOW_IGNORED &&
+			    !excluded(dir, ce->name, &dtype))
 				continue;
 			if (ce->ce_flags & CE_UPDATE)
 				continue;
@@ -524,11 +524,8 @@ int cmd_ls_files(int argc, const char **argv, const char *prefix)
 		ps_matched = xcalloc(1, num);
 	}
 
-	if ((dir.flags & DIR_SHOW_IGNORED) && !exc_given) {
-		fprintf(stderr, "%s: --ignored needs some exclude pattern\n",
-			argv[0]);
-		exit(1);
-	}
+	if ((dir.flags & DIR_SHOW_IGNORED) && !exc_given)
+		die("ls-files --ignored needs some exclude pattern");
 
 	/* With no flags, we default to showing the cached files */
 	if (!(show_stage | show_deleted | show_others | show_unmerged |

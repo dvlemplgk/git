@@ -351,6 +351,16 @@ int git_config_string(const char **dest, const char *var, const char *value)
 	return 0;
 }
 
+int git_config_pathname(const char **dest, const char *var, const char *value)
+{
+	if (!value)
+		return config_error_nonbool(var);
+	*dest = expand_user_path(value);
+	if (!*dest)
+		die("Failed to expand user dir in: '%s'", value);
+	return 0;
+}
+
 static int git_default_core_config(const char *var, const char *value)
 {
 	/* This needs a better name */
@@ -474,7 +484,7 @@ static int git_default_core_config(const char *var, const char *value)
 		return git_config_string(&editor_program, var, value);
 
 	if (!strcmp(var, "core.excludesfile"))
-		return git_config_string(&excludes_file, var, value);
+		return git_config_pathname(&excludes_file, var, value);
 
 	if (!strcmp(var, "core.whitespace")) {
 		if (!value)
@@ -626,6 +636,9 @@ int git_default_config(const char *var, const char *value, void *dummy)
 
 	if (!prefixcmp(var, "mailmap."))
 		return git_default_mailmap_config(var, value);
+
+	if (!prefixcmp(var, "advice."))
+		return git_default_advice_config(var, value);
 
 	if (!strcmp(var, "pager.color") || !strcmp(var, "color.pager")) {
 		pager_use_color = git_config_bool(var,value);
@@ -1116,7 +1129,7 @@ int git_config_set_multivar(const char *key, const char *value,
 				    copy_end - copy_begin)
 					goto write_err_out;
 				if (new_line &&
-				    write_in_full(fd, "\n", 1) != 1)
+				    write_str_in_full(fd, "\n") != 1)
 					goto write_err_out;
 			}
 			copy_begin = store.offset[i];

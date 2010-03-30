@@ -225,7 +225,12 @@ struct git_graph *graph_init(struct rev_info *opt)
 	graph->num_columns = 0;
 	graph->num_new_columns = 0;
 	graph->mapping_size = 0;
-	graph->default_column_color = 0;
+	/*
+	 * Start the column color at the maximum value, since we'll
+	 * always increment it for the first commit we output.
+	 * This way we start at 0 for the first commit.
+	 */
+	graph->default_column_color = COLUMN_COLORS_MAX - 1;
 
 	/*
 	 * Allocate a reasonably large default number of columns
@@ -286,9 +291,10 @@ static int graph_is_interesting(struct git_graph *graph, struct commit *commit)
 	}
 
 	/*
-	 * Uninteresting and pruned commits won't be printed
+	 * Otherwise, use get_commit_action() to see if this commit is
+	 * interesting
 	 */
-	return (commit->object.flags & (UNINTERESTING | TREESAME)) ? 0 : 1;
+	return get_commit_action(graph->revs, commit) == commit_show;
 }
 
 static struct commit_list *next_interesting_parent(struct git_graph *graph,
@@ -499,11 +505,14 @@ static void graph_update_columns(struct git_graph *graph)
 			     parent;
 			     parent = next_interesting_parent(graph, parent)) {
 				/*
-				 * If this is a merge increment the current
+				 * If this is a merge, or the start of a new
+				 * childless column, increment the current
 				 * color.
 				 */
-				if (graph->num_parents > 1)
+				if (graph->num_parents > 1 ||
+				    !is_commit_in_columns) {
 					graph_increment_column_color(graph);
+				}
 				graph_insert_into_new_columns(graph,
 							      parent->item,
 							      &mapping_idx);

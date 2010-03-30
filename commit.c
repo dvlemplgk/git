@@ -132,8 +132,8 @@ struct commit_graft *read_graft_line(char *buf, int len)
 	int i;
 	struct commit_graft *graft = NULL;
 
-	if (buf[len-1] == '\n')
-		buf[--len] = 0;
+	while (len && isspace(buf[len-1]))
+		buf[--len] = '\0';
 	if (buf[0] == '#' || buf[0] == '\0')
 		return NULL;
 	if ((len + 1) % 41) {
@@ -212,7 +212,7 @@ int write_shallow_commits(int fd, int use_pack_protocol)
 			else {
 				if (write_in_full(fd, hex,  40) != 40)
 					break;
-				if (write_in_full(fd, "\n", 1) != 1)
+				if (write_str_in_full(fd, "\n") != 1)
 					break;
 			}
 		}
@@ -564,13 +564,13 @@ static struct commit_list *merge_bases_many(struct commit *one, int n, struct co
 	while (interesting(list)) {
 		struct commit *commit;
 		struct commit_list *parents;
-		struct commit_list *n;
+		struct commit_list *next;
 		int flags;
 
 		commit = list->item;
-		n = list->next;
+		next = list->next;
 		free(list);
-		list = n;
+		list = next;
 
 		flags = commit->object.flags & (PARENT1 | PARENT2 | STALE);
 		if (flags == (PARENT1 | PARENT2)) {
@@ -598,11 +598,11 @@ static struct commit_list *merge_bases_many(struct commit *one, int n, struct co
 	free_commit_list(list);
 	list = result; result = NULL;
 	while (list) {
-		struct commit_list *n = list->next;
+		struct commit_list *next = list->next;
 		if (!(list->item->object.flags & STALE))
 			insert_by_date(list->item, &result);
 		free(list);
-		list = n;
+		list = next;
 	}
 	return result;
 }

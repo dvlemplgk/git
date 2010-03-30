@@ -3,7 +3,7 @@
 #include <conio.h>
 #include "../strbuf.h"
 
-unsigned int _CRT_fmode = _O_BINARY;
+#include <shellapi.h>
 
 static int err_win_to_posix(DWORD winerr)
 {
@@ -123,13 +123,17 @@ int mingw_open (const char *filename, int oflags, ...)
 {
 	va_list args;
 	unsigned mode;
+	int fd;
+
 	va_start(args, oflags);
 	mode = va_arg(args, int);
 	va_end(args);
 
 	if (!strcmp(filename, "/dev/null"))
 		filename = "nul";
-	int fd = open(filename, oflags, mode);
+
+	fd = open(filename, oflags, mode);
+
 	if (fd < 0 && (oflags & O_CREAT) && errno == EACCES) {
 		DWORD attrs = GetFileAttributes(filename);
 		if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY))
@@ -580,10 +584,11 @@ static char **get_path_split(void)
 
 static void free_path_split(char **path)
 {
+	char **p = path;
+
 	if (!path)
 		return;
 
-	char **p = path;
 	while (*p)
 		free(*p++);
 	free(path);
@@ -824,7 +829,7 @@ void mingw_execvp(const char *cmd, char *const *argv)
 	free_path_split(path);
 }
 
-char **copy_environ()
+static char **copy_environ(void)
 {
 	char **env;
 	int i = 0;
@@ -861,7 +866,7 @@ static int lookup_env(char **env, const char *name, size_t nmln)
 /*
  * If name contains '=', then sets the variable, otherwise it unsets it
  */
-char **env_setenv(char **env, const char *name)
+static char **env_setenv(char **env, const char *name)
 {
 	char *eq = strchrnul(name, '=');
 	int i = lookup_env(env, name, eq-name);
@@ -883,6 +888,18 @@ char **env_setenv(char **env, const char *name)
 			for (; env[i]; i++)
 				env[i] = env[i+1];
 	}
+	return env;
+}
+
+/*
+ * Copies global environ and adjusts variables as specified by vars.
+ */
+char **make_augmented_environ(const char *const *vars)
+{
+	char **env = copy_environ();
+
+	while (*vars)
+		env = env_setenv(env, *vars++);
 	return env;
 }
 
@@ -1012,7 +1029,7 @@ static sig_handler_t timer_fn = SIG_DFL;
  * length to call the signal handler.
  */
 
-static __stdcall unsigned ticktack(void *dummy)
+static unsigned __stdcall ticktack(void *dummy)
 {
 	while (WaitForSingleObject(timer_event, timer_interval) == WAIT_TIMEOUT) {
 		if (timer_fn == SIG_DFL)
@@ -1108,9 +1125,9 @@ int sigaction(int sig, struct sigaction *in, struct sigaction *out)
 #undef signal
 sig_handler_t mingw_signal(int sig, sig_handler_t handler)
 {
+	sig_handler_t old = timer_fn;
 	if (sig != SIGALRM)
 		return signal(sig, handler);
-	sig_handler_t old = timer_fn;
 	timer_fn = handler;
 	return old;
 }
@@ -1139,7 +1156,7 @@ void mingw_open_html(const char *unixpath)
 
 int link(const char *oldpath, const char *newpath)
 {
-	typedef BOOL WINAPI (*T)(const char*, const char*, LPSECURITY_ATTRIBUTES);
+	typedef BOOL (WINAPI *T)(const char*, const char*, LPSECURITY_ATTRIBUTES);
 	static T create_hard_link = NULL;
 	if (!create_hard_link) {
 		create_hard_link = (T) GetProcAddress(
@@ -1197,8 +1214,9 @@ struct dirent *mingw_readdir(DIR *dir)
 
 	if (dir->dd_handle == (long)INVALID_HANDLE_VALUE && dir->dd_stat == 0)
 	{
+		DWORD lasterr;
 		handle = FindFirstFileA(dir->dd_name, &buf);
-		DWORD lasterr = GetLastError();
+		lasterr = GetLastError();
 		dir->dd_handle = (long)handle;
 		if (handle == INVALID_HANDLE_VALUE && (lasterr != ERROR_NO_MORE_FILES)) {
 			errno = err_win_to_posix(lasterr);

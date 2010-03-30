@@ -5,7 +5,10 @@
 #include "run-command.h"
 
 const char git_usage_string[] =
-	"git [--version] [--exec-path[=GIT_EXEC_PATH]] [--html-path] [-p|--paginate|--no-pager] [--bare] [--git-dir=GIT_DIR] [--work-tree=GIT_WORK_TREE] [--help] COMMAND [ARGS]";
+	"git [--version] [--exec-path[=GIT_EXEC_PATH]] [--html-path]\n"
+	"           [-p|--paginate|--no-pager]\n"
+	"           [--bare] [--git-dir=GIT_DIR] [--work-tree=GIT_WORK_TREE]\n"
+	"           [--help] COMMAND [ARGS]";
 
 const char git_more_info_string[] =
 	"See 'git help COMMAND' for more information on a specific command.";
@@ -309,9 +312,6 @@ static void handle_internal_command(int argc, const char **argv)
 		{ "get-tar-commit-id", cmd_get_tar_commit_id },
 		{ "grep", cmd_grep, RUN_SETUP | USE_PAGER },
 		{ "help", cmd_help },
-#ifndef NO_CURL
-		{ "http-fetch", cmd_http_fetch, RUN_SETUP },
-#endif
 		{ "init", cmd_init_db },
 		{ "init-db", cmd_init_db },
 		{ "log", cmd_log, RUN_SETUP | USE_PAGER },
@@ -339,6 +339,7 @@ static void handle_internal_command(int argc, const char **argv)
 		{ "receive-pack", cmd_receive_pack },
 		{ "reflog", cmd_reflog, RUN_SETUP },
 		{ "remote", cmd_remote, RUN_SETUP },
+		{ "replace", cmd_replace, RUN_SETUP },
 		{ "repo-config", cmd_config },
 		{ "rerere", cmd_rerere, RUN_SETUP },
 		{ "reset", cmd_reset, RUN_SETUP },
@@ -358,6 +359,7 @@ static void handle_internal_command(int argc, const char **argv)
 		{ "unpack-objects", cmd_unpack_objects, RUN_SETUP },
 		{ "update-index", cmd_update_index, RUN_SETUP },
 		{ "update-ref", cmd_update_ref, RUN_SETUP },
+		{ "update-server-info", cmd_update_server_info, RUN_SETUP },
 		{ "upload-archive", cmd_upload_archive },
 		{ "verify-tag", cmd_verify_tag, RUN_SETUP },
 		{ "version", cmd_version },
@@ -416,13 +418,9 @@ static void execv_dashed_external(const char **argv)
 	 * if we fail because the command is not found, it is
 	 * OK to return. Otherwise, we just pass along the status code.
 	 */
-	status = run_command_v_opt(argv, 0);
-	if (status != -ERR_RUN_COMMAND_EXEC) {
-		if (IS_RUN_COMMAND_ERR(status))
-			die("unable to run '%s'", argv[0]);
-		exit(-status);
-	}
-	errno = ENOENT; /* as if we called execvp */
+	status = run_command_v_opt(argv, RUN_SILENT_EXEC_FAILURE);
+	if (status >= 0 || errno != ENOENT)
+		exit(status);
 
 	argv[0] = tmp;
 

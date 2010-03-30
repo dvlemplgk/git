@@ -9,7 +9,7 @@
 
 static int spawned_pager;
 
-#ifndef __MINGW32__
+#ifndef WIN32
 static void pager_preexec(void)
 {
 	/*
@@ -21,8 +21,6 @@ static void pager_preexec(void)
 	FD_ZERO(&in);
 	FD_SET(0, &in);
 	select(1, &in, NULL, &in, NULL);
-
-	setenv("LESS", "FRSX", 0);
 }
 #endif
 
@@ -70,7 +68,11 @@ void setup_pager(void)
 	pager_argv[2] = pager;
 	pager_process.argv = pager_argv;
 	pager_process.in = -1;
-#ifndef __MINGW32__
+	if (!getenv("LESS")) {
+		static const char *env[] = { "LESS=FRSX", NULL };
+		pager_process.env = env;
+	}
+#ifndef WIN32
 	pager_process.preexec_cb = pager_preexec;
 #endif
 	if (start_command(&pager_process))

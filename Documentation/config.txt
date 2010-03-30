@@ -113,6 +113,25 @@ For command-specific variables, you will find a more detailed description
 in the appropriate manual page. You will find a description of non-core
 porcelain configuration variables in the respective porcelain documentation.
 
+advice.*::
+	When set to 'true', display the given optional help message.
+	When set to 'false', do not display. The configuration variables
+	are:
++
+--
+	pushNonFastForward::
+		Advice shown when linkgit:git-push[1] refuses
+		non-fast-forward refs. Default: true.
+	statusHints::
+		Directions on how to stage/unstage/add shown in the
+		output of linkgit:git-status[1] and the template shown
+		when writing commit messages. Default: true.
+	commitBeforeMerge::
+		Advice shown when linkgit:git-merge[1] refuses to
+		merge to avoid overwritting local changes.
+		Default: true.
+--
+
 core.fileMode::
 	If false, the executable bit differences between the index and
 	the working copy are ignored; useful on broken filesystems like FAT.
@@ -154,9 +173,10 @@ core.autocrlf::
 	writing to the filesystem.  The variable can be set to
 	'input', in which case the conversion happens only while
 	reading from the filesystem but files are written out with
-	`LF` at the end of lines.  Currently, which paths to consider
-	"text" (i.e. be subjected to the autocrlf mechanism) is
-	decided purely based on the contents.
+	`LF` at the end of lines.  A file is considered
+	"text" (i.e. be subjected to the autocrlf mechanism) based on
+	the file's `crlf` attribute, or if `crlf` is unspecified,
+	based on the file's contents.  See linkgit:gitattributes[5].
 
 core.safecrlf::
 	If true, makes git check if converting `CRLF` as controlled by
@@ -365,8 +385,9 @@ Common unit suffixes of 'k', 'm', or 'g' are supported.
 core.excludesfile::
 	In addition to '.gitignore' (per-directory) and
 	'.git/info/exclude', git looks into this file for patterns
-	of files which are not meant to be tracked.  See
-	linkgit:gitignore[5].
+	of files which are not meant to be tracked.  "{tilde}/" is expanded
+	to the value of `$HOME` and "{tilde}user/" to the specified user's
+	home directory.  See linkgit:gitignore[5].
 
 core.editor::
 	Commands such as `commit` and `tag` that lets you edit
@@ -401,13 +422,17 @@ core.whitespace::
 	consider them as errors.  You can prefix `-` to disable
 	any of them (e.g. `-trailing-space`):
 +
-* `trailing-space` treats trailing whitespaces at the end of the line
+* `blank-at-eol` treats trailing whitespaces at the end of the line
   as an error (enabled by default).
 * `space-before-tab` treats a space character that appears immediately
   before a tab character in the initial indent part of the line as an
   error (enabled by default).
 * `indent-with-non-tab` treats a line that is indented with 8 or more
   space characters as an error (not enabled by default).
+* `blank-at-eof` treats blank lines added at the end of file as an error
+  (enabled by default).
+* `trailing-space` is a short-hand to cover both `blank-at-eol` and
+  `blank-at-eof`.
 * `cr-at-eol` treats a carriage-return at the end of line as
   part of the line terminator, i.e. with it, `trailing-space`
   does not trigger if the character before such a carriage-return
@@ -460,6 +485,14 @@ it will be treated as a shell command.  For example, defining
 "gitk --all --not ORIG_HEAD".  Note that shell commands will be
 executed from the top-level directory of a repository, which may
 not necessarily be the current directory.
+
+apply.ignorewhitespace::
+	When set to 'change', tells 'git-apply' to ignore changes in
+	whitespace, in the same way as the '--ignore-space-change'
+	option.
+	When set to one of: no, none, never, false tells 'git-apply' to
+	respect all whitespace differences.
+	See linkgit:git-apply[1].
 
 apply.whitespace::
 	Tells 'git-apply' how to handle whitespaces, in the same way
@@ -516,7 +549,7 @@ branch.<name>.merge::
 
 branch.<name>.mergeoptions::
 	Sets default options for merging into branch <name>. The syntax and
-	supported options are equal to that of linkgit:git-merge[1], but
+	supported options are the same as those of linkgit:git-merge[1], but
 	option values containing whitespace characters are currently not
 	supported.
 
@@ -643,6 +676,8 @@ color.ui::
 
 commit.template::
 	Specify a file to use as the template for new commit messages.
+	"{tilde}/" is expanded to the value of `$HOME` and "{tilde}user/" to the
+	specified user's home directory.
 
 diff.autorefreshindex::
 	When using 'git-diff' to compare with work tree
@@ -1297,6 +1332,11 @@ rebase.stat::
 	Whether to show a diffstat of what changed upstream since the last
 	rebase. False by default.
 
+receive.autogc::
+	By default, git-receive-pack will run "git-gc --auto" after
+	receiving data from git-push and updating refs.  You can stop
+	it by setting this variable to false.
+
 receive.fsckObjects::
 	If it is set to true, git-receive-pack will check all received
 	objects. It will abort in the case of a malformed object or a
@@ -1331,6 +1371,10 @@ receive.denyNonFastForwards::
 	not a fast forward. Use this to prevent such an update via a push,
 	even if that push is forced. This configuration variable is
 	set when initializing a shared repository.
+
+receive.updateserverinfo::
+	If set to true, git-receive-pack will run git-update-server-info
+	after receiving data from git-push and updating refs.
 
 remote.<name>.url::
 	The URL of a remote repository.  See linkgit:git-fetch[1] or
@@ -1491,6 +1535,19 @@ url.<base>.insteadOf::
 	the best alternative for the particular user, even for a
 	never-before-seen repository on the site.  When more than one
 	insteadOf strings match a given URL, the longest match is used.
+
+url.<base>.pushInsteadOf::
+	Any URL that starts with this value will not be pushed to;
+	instead, it will be rewritten to start with <base>, and the
+	resulting URL will be pushed to. In cases where some site serves
+	a large number of repositories, and serves them with multiple
+	access methods, some of which do not allow push, this feature
+	allows people to specify a pull-only URL and have git
+	automatically use an appropriate URL to push, even for a
+	never-before-seen repository on the site.  When more than one
+	pushInsteadOf strings match a given URL, the longest match is
+	used.  If a remote has an explicit pushurl, git will ignore this
+	setting for that remote.
 
 user.email::
 	Your email address to be recorded in any newly created commits.

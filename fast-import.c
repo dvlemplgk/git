@@ -1744,10 +1744,12 @@ static int validate_raw_date(const char *src, char *result, int maxlen)
 {
 	const char *orig_src = src;
 	char *endp;
+	unsigned long num;
 
 	errno = 0;
 
-	strtoul(src, &endp, 10);
+	num = strtoul(src, &endp, 10);
+	/* NEEDSWORK: perhaps check for reasonable values? */
 	if (errno || endp == src || *endp != ' ')
 		return -1;
 
@@ -1755,8 +1757,9 @@ static int validate_raw_date(const char *src, char *result, int maxlen)
 	if (*src != '-' && *src != '+')
 		return -1;
 
-	strtoul(src + 1, &endp, 10);
-	if (errno || endp == src || *endp || (endp - orig_src) >= maxlen)
+	num = strtoul(src + 1, &endp, 10);
+	if (errno || endp == src + 1 || *endp || (endp - orig_src) >= maxlen ||
+	    1400 < num)
 		return -1;
 
 	strcpy(result, orig_src);
@@ -2222,6 +2225,7 @@ static void parse_new_tag(void)
 	struct tag *t;
 	uintmax_t from_mark = 0;
 	unsigned char sha1[20];
+	enum object_type type;
 
 	/* Obtain the new tag name from the rest of our command */
 	sp = strchr(command_buf.buf, ' ') + 1;
@@ -2242,19 +2246,18 @@ static void parse_new_tag(void)
 	s = lookup_branch(from);
 	if (s) {
 		hashcpy(sha1, s->sha1);
+		type = OBJ_COMMIT;
 	} else if (*from == ':') {
 		struct object_entry *oe;
 		from_mark = strtoumax(from + 1, NULL, 10);
 		oe = find_mark(from_mark);
-		if (oe->type != OBJ_COMMIT)
-			die("Mark :%" PRIuMAX " not a commit", from_mark);
+		type = oe->type;
 		hashcpy(sha1, oe->sha1);
 	} else if (!get_sha1(from, sha1)) {
 		unsigned long size;
 		char *buf;
 
-		buf = read_object_with_reference(sha1,
-			commit_type, &size, sha1);
+		buf = read_sha1_file(sha1, &type, &size);
 		if (!buf || size < 46)
 			die("Not a valid commit: %s", from);
 		free(buf);
@@ -2279,7 +2282,7 @@ static void parse_new_tag(void)
 		    "object %s\n"
 		    "type %s\n"
 		    "tag %s\n",
-		    sha1_to_hex(sha1), commit_type, t->name);
+		    sha1_to_hex(sha1), typename(type), t->name);
 	if (tagger)
 		strbuf_addf(&new_data,
 			    "tagger %s\n", tagger);

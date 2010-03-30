@@ -455,6 +455,27 @@ test_expect_success 'format-patch respects -U' '
 
 '
 
+cat > expect << EOF
+
+diff --git a/file b/file
+index 40f36c6..2dc5c23 100644
+--- a/file
++++ b/file
+@@ -14,3 +14,19 @@ C
+ D
+ E
+ F
++5
+EOF
+
+test_expect_success 'format-patch -p suppresses stat' '
+
+	git format-patch -p -2 &&
+	sed -e "1,/^$/d" -e "/^+5/q" < 0001-This-is-an-excessively-long-subject-line-for-a-messa.patch > output &&
+	test_cmp expect output
+
+'
+
 test_expect_success 'format-patch from a subdirectory (1)' '
 	filename=$(
 		rm -rf sub &&
@@ -493,13 +514,12 @@ test_expect_success 'format-patch from a subdirectory (2)' '
 '
 
 test_expect_success 'format-patch from a subdirectory (3)' '
-	here="$TEST_DIRECTORY/$test" &&
 	rm -f 0* &&
 	filename=$(
 		rm -rf sub &&
 		mkdir -p sub/dir &&
 		cd sub/dir &&
-		git format-patch -1 -o "$here"
+		git format-patch -1 -o "$TRASH_DIRECTORY"
 	) &&
 	basename=$(expr "$filename" : ".*/\(.*\)") &&
 	test -f "$basename"
@@ -514,6 +534,11 @@ test_expect_success 'format-patch --in-reply-to' '
 test_expect_success 'format-patch --signoff' '
 	git format-patch -1 --signoff --stdout |
 	grep "^Signed-off-by: $GIT_COMMITTER_NAME <$GIT_COMMITTER_EMAIL>"
+'
+
+test_expect_success 'format-patch -- <path>' '
+	git format-patch master..side -- file 2>error &&
+	! grep "Use .--" error
 '
 
 test_done

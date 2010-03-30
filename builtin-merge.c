@@ -70,7 +70,7 @@ static int option_parse_message(const struct option *opt,
 	if (unset)
 		strbuf_setlen(buf, 0);
 	else if (arg) {
-		strbuf_addf(buf, "%s\n\n", arg);
+		strbuf_addf(buf, "%s%s", buf->len ? "\n\n" : "", arg);
 		have_message = 1;
 	} else
 		return error("switch `m' requires a value");
@@ -106,8 +106,8 @@ static struct strategy *get_strategy(const char *name)
 					found = 1;
 			if (!found)
 				add_cmdname(&not_strategies, ent->name, ent->len);
-			exclude_cmds(&main_cmds, &not_strategies);
 		}
+		exclude_cmds(&main_cmds, &not_strategies);
 	}
 	if (!is_in_cmdlist(&main_cmds, name) && !is_in_cmdlist(&other_cmds, name)) {
 		fprintf(stderr, "Could not find merge strategy '%s'.\n", name);
@@ -598,7 +598,7 @@ static int try_merge_strategy(const char *strategy, struct commit_list *common,
 		discard_cache();
 		if (read_cache() < 0)
 			die("failed to read the cache");
-		return -ret;
+		return ret;
 	}
 }
 
@@ -650,6 +650,7 @@ static int checkout_fast_forward(unsigned char *head, unsigned char *remote)
 	opts.verbose_update = 1;
 	opts.merge = 1;
 	opts.fn = twoway_merge;
+	opts.msgs = get_porcelain_error_msgs();
 
 	trees[nr_trees] = parse_tree_indirect(head);
 	if (!trees[nr_trees++])
@@ -792,7 +793,7 @@ static int suggest_conflicts(void)
 static struct commit *is_old_style_invocation(int argc, const char **argv)
 {
 	struct commit *second_token = NULL;
-	if (argc > 1) {
+	if (argc > 2) {
 		unsigned char second_sha1[20];
 
 		if (get_sha1(argv[1], second_sha1))
@@ -840,7 +841,6 @@ int cmd_merge(int argc, const char **argv, const char *prefix)
 	const char *best_strategy = NULL, *wt_strategy = NULL;
 	struct commit_list **remotes = &remoteheads;
 
-	setup_work_tree();
 	if (file_exists(git_path("MERGE_HEAD")))
 		die("You have not concluded your merge. (MERGE_HEAD exists)");
 	if (read_cache_unmerged())
@@ -928,11 +928,13 @@ int cmd_merge(int argc, const char **argv, const char *prefix)
 		 * codepath so we discard the error in this
 		 * loop.
 		 */
-		for (i = 0; i < argc; i++)
-			merge_name(argv[i], &msg);
-		fmt_merge_msg(option_log, &msg, &merge_msg);
-		if (merge_msg.len)
-			strbuf_setlen(&merge_msg, merge_msg.len-1);
+		if (!have_message) {
+			for (i = 0; i < argc; i++)
+				merge_name(argv[i], &msg);
+			fmt_merge_msg(option_log, &msg, &merge_msg);
+			if (merge_msg.len)
+				strbuf_setlen(&merge_msg, merge_msg.len-1);
+		}
 	}
 
 	if (head_invalid || !argc)

@@ -333,6 +333,9 @@ do
 			;;
 		esac
 		;;
+	--ignore-whitespace)
+		git_am_opt="$git_am_opt $1"
+		;;
 	--committer-date-is-author-date|--ignore-date)
 		git_am_opt="$git_am_opt $1"
 		force_rebase=t
@@ -382,8 +385,10 @@ else
 fi
 
 # The tree must be really really clean.
-if ! git update-index --ignore-submodules --refresh; then
-	die "cannot rebase: you have unstaged changes"
+if ! git update-index --ignore-submodules --refresh > /dev/null; then
+	echo >&2 "cannot rebase: you have unstaged changes"
+	git diff-files --name-status -r --ignore-submodules -- >&2
+	exit 1
 fi
 diff=$(git diff-index --cached --name-status -r --ignore-submodules HEAD --)
 case "$diff" in
@@ -462,7 +467,7 @@ orig_head=$branch
 mb=$(git merge-base "$onto" "$branch")
 if test "$upstream" = "$onto" && test "$mb" = "$onto" &&
 	# linear history?
-	! (git rev-list --parents "$onto".."$branch" | grep " .* ") > /dev/null
+	! (git rev-list --parents "$onto".."$branch" | sane_grep " .* ") > /dev/null
 then
 	if test -z "$force_rebase"
 	then

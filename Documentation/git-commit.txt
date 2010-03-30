@@ -8,7 +8,7 @@ git-commit - Record changes to the repository
 SYNOPSIS
 --------
 [verse]
-'git commit' [-a | --interactive] [-s] [-v] [-u<mode>] [--amend]
+'git commit' [-a | --interactive] [-s] [-v] [-u<mode>] [--amend] [--dry-run]
 	   [(-c | -C) <commit>] [-F <file> | -m <msg>]
 	   [--allow-empty] [--no-verify] [-e] [--author=<author>]
 	   [--cleanup=<mode>] [--] [[-i | -o ]<file>...]
@@ -42,10 +42,9 @@ The content to be added can be specified in several ways:
    by one which files should be part of the commit, before finalizing the
    operation.  Currently, this is done by invoking 'git-add --interactive'.
 
-The 'git-status' command can be used to obtain a
+The `--dry-run` option can be used to obtain a
 summary of what is included by any of the above for the next
-commit by giving the same set of parameters you would give to
-this command.
+commit by giving the same set of parameters (options and paths).
 
 If you make a commit and then find a mistake immediately after
 that, you can recover from it with 'git-reset'.
@@ -197,6 +196,11 @@ specified.
 -q::
 --quiet::
 	Suppress commit summary message.
+
+--dry-run::
+	Do not create a commit, but show a list of paths that are
+	to be committed, paths with local changes that will be left
+	uncommitted and paths that are untracked.
 
 \--::
 	Do not interpret any more arguments as options.

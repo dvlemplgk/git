@@ -28,6 +28,8 @@ static int transfer_unpack_limit = -1;
 static int unpack_limit = 100;
 static int report_status;
 static int prefer_ofs_delta = 1;
+static int auto_update_server_info;
+static int auto_gc = 1;
 static const char *head_name;
 static char *capabilities_to_send;
 
@@ -88,6 +90,16 @@ static int receive_pack_config(const char *var, const char *value, void *cb)
 		return 0;
 	}
 
+	if (strcmp(var, "receive.updateserverinfo") == 0) {
+		auto_update_server_info = git_config_bool(var, value);
+		return 0;
+	}
+
+	if (strcmp(var, "receive.autogc") == 0) {
+		auto_gc = git_config_bool(var, value);
+		return 0;
+	}
+
 	return git_default_config(var, value, cb);
 }
 
@@ -123,31 +135,6 @@ static struct command *commands;
 static const char pre_receive_hook[] = "hooks/pre-receive";
 static const char post_receive_hook[] = "hooks/post-receive";
 
-static int run_status(int code, const char *cmd_name)
-{
-	switch (code) {
-	case 0:
-		return 0;
-	case -ERR_RUN_COMMAND_FORK:
-		return error("fork of %s failed", cmd_name);
-	case -ERR_RUN_COMMAND_EXEC:
-		return error("execute of %s failed", cmd_name);
-	case -ERR_RUN_COMMAND_PIPE:
-		return error("pipe failed");
-	case -ERR_RUN_COMMAND_WAITPID:
-		return error("waitpid failed");
-	case -ERR_RUN_COMMAND_WAITPID_WRONG_PID:
-		return error("waitpid is confused");
-	case -ERR_RUN_COMMAND_WAITPID_SIGNAL:
-		return error("%s died of signal", cmd_name);
-	case -ERR_RUN_COMMAND_WAITPID_NOEXIT:
-		return error("%s died strangely", cmd_name);
-	default:
-		error("%s exited with error code %d", cmd_name, -code);
-		return -code;
-	}
-}
-
 static int run_receive_hook(const char *hook_name)
 {
 	static char buf[sizeof(commands->old_sha1) * 2 + PATH_MAX + 4];
@@ -174,7 +161,7 @@ static int run_receive_hook(const char *hook_name)
 
 	code = start_command(&proc);
 	if (code)
-		return run_status(code, hook_name);
+		return code;
 	for (cmd = commands; cmd; cmd = cmd->next) {
 		if (!cmd->error_string) {
 			size_t n = snprintf(buf, sizeof(buf), "%s %s %s\n",
@@ -186,7 +173,7 @@ static int run_receive_hook(const char *hook_name)
 		}
 	}
 	close(proc.in);
-	return run_status(finish_command(&proc), hook_name);
+	return finish_command(&proc);
 }
 
 static int run_update_hook(struct command *cmd)
@@ -203,9 +190,8 @@ static int run_update_hook(struct command *cmd)
 	argv[3] = sha1_to_hex(cmd->new_sha1);
 	argv[4] = NULL;
 
-	return run_status(run_command_v_opt(argv, RUN_COMMAND_NO_STDIN |
-					RUN_COMMAND_STDOUT_TO_STDERR),
-			update_hook);
+	return run_command_v_opt(argv, RUN_COMMAND_NO_STDIN |
+					RUN_COMMAND_STDOUT_TO_STDERR);
 }
 
 static int is_ref_checked_out(const char *ref)
@@ -419,7 +405,6 @@ static void run_update_post_hook(struct command *cmd)
 	argv[argc] = NULL;
 	status = run_command_v_opt(argv, RUN_COMMAND_NO_STDIN
 			| RUN_COMMAND_STDOUT_TO_STDERR);
-	run_status(status, update_post_hook);
 }
 
 static void execute_commands(const char *unpacker_error)
@@ -537,7 +522,6 @@ static const char *unpack(void)
 		code = run_command_v_opt(unpacker, RUN_GIT_CMD);
 		if (!code)
 			return NULL;
-		run_status(code, unpacker[0]);
 		return "unpack-objects abnormal exit";
 	} else {
 		const char *keeper[7];
@@ -563,7 +547,6 @@ static const char *unpack(void)
 		ip.git_cmd = 1;
 		status = start_command(&ip);
 		if (status) {
-			run_status(status, keeper[0]);
 			return "index-pack fork failed";
 		}
 		pack_lockfile = index_pack_lockfile(ip.out);
@@ -573,7 +556,6 @@ static const char *unpack(void)
 			reprepare_packed_git();
 			return NULL;
 		}
-		run_status(status, keeper[0]);
 		return "index-pack abnormal exit";
 	}
 }
@@ -702,6 +684,14 @@ int cmd_receive_pack(int argc, const char **argv, const char *prefix)
 			report(unpack_status);
 		run_receive_hook(post_receive_hook);
 		run_update_post_hook(commands);
+		if (auto_gc) {
+			const char *argv_gc_auto[] = {
+				"gc", "--auto", "--quiet", NULL,
+			};
+			run_command_v_opt(argv_gc_auto, RUN_GIT_CMD);
+		}
+		if (auto_update_server_info)
+			update_server_info(0);
 	}
 	return 0;
 }
