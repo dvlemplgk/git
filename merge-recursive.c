@@ -38,7 +38,7 @@ static struct tree *shift_tree_object(struct tree *one, struct tree *two)
  * A virtual commit has (const char *)commit->util set to the name.
  */
 
-struct commit *make_virtual_commit(struct tree *tree, const char *comment)
+static struct commit *make_virtual_commit(struct tree *tree, const char *comment)
 {
 	struct commit *commit = xcalloc(1, sizeof(struct commit));
 	commit->tree = tree;
@@ -438,7 +438,7 @@ static void flush_buffer(int fd, const char *buf, unsigned long size)
 			/* Ignore epipe */
 			if (errno == EPIPE)
 				break;
-			die("merge-recursive: %s", strerror(errno));
+			die_errno("merge-recursive");
 		} else if (!ret) {
 			die("merge-recursive: disk full?");
 		}
@@ -554,7 +554,7 @@ static void update_file_flags(struct merge_options *o,
 				mode = 0666;
 			fd = open(path, O_WRONLY | O_TRUNC | O_CREAT, mode);
 			if (fd < 0)
-				die("failed to open %s: %s", path, strerror(errno));
+				die_errno("failed to open '%s'", path);
 			flush_buffer(fd, buf, size);
 			close(fd);
 		} else if (S_ISLNK(mode)) {
@@ -562,7 +562,7 @@ static void update_file_flags(struct merge_options *o,
 			safe_create_leading_directories_const(path);
 			unlink(path);
 			if (symlink(lnk, path))
-				die("failed to symlink %s: %s", path, strerror(errno));
+				die_errno("failed to symlink '%s'", path);
 			free(lnk);
 		} else
 			die("do not know what to do with %06o %s '%s'",
@@ -622,8 +622,13 @@ static int merge_3way(struct merge_options *o,
 	char *name1, *name2;
 	int merge_status;
 
-	name1 = xstrdup(mkpath("%s:%s", branch1, a->path));
-	name2 = xstrdup(mkpath("%s:%s", branch2, b->path));
+	if (strcmp(a->path, b->path)) {
+		name1 = xstrdup(mkpath("%s:%s", branch1, a->path));
+		name2 = xstrdup(mkpath("%s:%s", branch2, b->path));
+	} else {
+		name1 = xstrdup(mkpath("%s", branch1));
+		name2 = xstrdup(mkpath("%s", branch2));
+	}
 
 	fill_mm(one->sha1, &orig);
 	fill_mm(a->sha1, &src1);
@@ -947,9 +952,31 @@ static int process_renames(struct merge_options *o,
 				       "%s added in %s",
 				       ren1_src, ren1_dst, branch1,
 				       ren1_dst, branch2);
-				new_path = unique_path(o, ren1_dst, branch2);
-				output(o, 1, "Adding as %s instead", new_path);
-				update_file(o, 0, dst_other.sha1, dst_other.mode, new_path);
+				if (o->call_depth) {
+					struct merge_file_info mfi;
+					struct diff_filespec one, a, b;
+
+					one.path = a.path = b.path =
+						(char *)ren1_dst;
+					hashcpy(one.sha1, null_sha1);
+					one.mode = 0;
+					hashcpy(a.sha1, ren1->pair->two->sha1);
+					a.mode = ren1->pair->two->mode;
+					hashcpy(b.sha1, dst_other.sha1);
+					b.mode = dst_other.mode;
+					mfi = merge_file(o, &one, &a, &b,
+							 branch1,
+							 branch2);
+					output(o, 1, "Adding merged %s", ren1_dst);
+					update_file(o, 0,
+						    mfi.sha,
+						    mfi.mode,
+						    ren1_dst);
+				} else {
+					new_path = unique_path(o, ren1_dst, branch2);
+					output(o, 1, "Adding as %s instead", new_path);
+					update_file(o, 0, dst_other.sha1, dst_other.mode, new_path);
+				}
 			} else if ((item = string_list_lookup(ren1_dst, renames2Dst))) {
 				ren2 = item->util;
 				clean_merge = 0;

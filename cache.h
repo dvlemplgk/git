@@ -468,6 +468,9 @@ extern int index_fd(unsigned char *sha1, int fd, struct stat *st, int write_obje
 extern int index_path(unsigned char *sha1, const char *path, struct stat *st, int write_object);
 extern void fill_stat_cache_info(struct cache_entry *ce, struct stat *st);
 
+/* "careful lstat()" */
+extern int check_path(const char *path, int len, struct stat *st, int skiplen);
+
 #define REFRESH_REALLY		0x0001	/* ignore_valid */
 #define REFRESH_UNMERGED	0x0002	/* allow unmerged */
 #define REFRESH_QUIET		0x0004	/* be quiet about it */
@@ -543,7 +546,6 @@ enum rebase_setup_type {
 };
 
 enum push_default_type {
-	PUSH_DEFAULT_UNSPECIFIED = -1,
 	PUSH_DEFAULT_NOTHING = 0,
 	PUSH_DEFAULT_MATCHING,
 	PUSH_DEFAULT_TRACKING,
@@ -560,6 +562,8 @@ enum object_creation_mode {
 };
 
 extern enum object_creation_mode object_creation_mode;
+
+extern int grafts_replace_parents;
 
 #define GIT_REPO_VERSION 0
 extern int repository_format_version;
@@ -613,6 +617,8 @@ extern int is_empty_blob_sha1(const unsigned char *sha1);
 	 "\xe5\x4b\xf8\xd6\x92\x88\xfb\xee\x49\x04"
 
 int git_mkstemp(char *path, size_t n, const char *template);
+
+int git_mkstemps(char *path, size_t n, const char *template, int suffix_len);
 
 /*
  * NOTE NOTE NOTE!!
@@ -742,7 +748,17 @@ struct checkout {
 };
 
 extern int checkout_entry(struct cache_entry *ce, const struct checkout *state, char *topath);
+
+struct cache_def {
+	char path[PATH_MAX + 1];
+	int len;
+	int flags;
+	int track_flags;
+	int prefix_len_stat_func;
+};
+
 extern int has_symlink_leading_path(const char *name, int len);
+extern int threaded_has_symlink_leading_path(struct cache_def *, const char *, int);
 extern int has_symlink_or_noent_leading_path(const char *name, int len);
 extern int has_dirs_only_path(const char *name, int len, int prefix_len);
 extern void invalidate_lstat_cache(const char *name, int len);

@@ -106,6 +106,12 @@ static void add_url_alias(struct remote *remote, const char *url)
 	add_url(remote, alias_url(url));
 }
 
+static void add_pushurl(struct remote *remote, const char *pushurl)
+{
+	ALLOC_GROW(remote->pushurl, remote->pushurl_nr + 1, remote->pushurl_alloc);
+	remote->pushurl[remote->pushurl_nr++] = pushurl;
+}
+
 static struct remote *make_remote(const char *name, int len)
 {
 	struct remote *ret;
@@ -301,7 +307,7 @@ static void read_branches_file(struct remote *remote)
 		strbuf_addstr(&branch, "HEAD:");
 	}
 	add_url_alias(remote, p);
-	add_fetch_refspec(remote, strbuf_detach(&branch, 0));
+	add_fetch_refspec(remote, strbuf_detach(&branch, NULL));
 	/*
 	 * Cogito compatible push: push current HEAD to remote #branch
 	 * (master if missing)
@@ -312,7 +318,7 @@ static void read_branches_file(struct remote *remote)
 		strbuf_addf(&branch, ":refs/heads/%s", frag);
 	else
 		strbuf_addstr(&branch, ":refs/heads/master");
-	add_push_refspec(remote, strbuf_detach(&branch, 0));
+	add_push_refspec(remote, strbuf_detach(&branch, NULL));
 	remote->fetch_tags = 1; /* always auto-follow */
 }
 
@@ -379,6 +385,11 @@ static int handle_config(const char *key, const char *value, void *cb)
 		if (git_config_string(&v, key, value))
 			return -1;
 		add_url(remote, v);
+	} else if (!strcmp(subkey, ".pushurl")) {
+		const char *v;
+		if (git_config_string(&v, key, value))
+			return -1;
+		add_pushurl(remote, v);
 	} else if (!strcmp(subkey, ".push")) {
 		const char *v;
 		if (git_config_string(&v, key, value))
@@ -423,6 +434,9 @@ static void alias_all_urls(void)
 			continue;
 		for (j = 0; j < remotes[i]->url_nr; j++) {
 			remotes[i]->url[j] = alias_url(remotes[i]->url[j]);
+		}
+		for (j = 0; j < remotes[i]->pushurl_nr; j++) {
+			remotes[i]->pushurl[j] = alias_url(remotes[i]->pushurl[j]);
 		}
 	}
 }
@@ -1085,26 +1099,35 @@ static const struct refspec *check_pattern_match(const struct refspec *rs,
 		return NULL;
 }
 
+static struct ref **tail_ref(struct ref **head)
+{
+	struct ref **tail = head;
+	while (*tail)
+		tail = &((*tail)->next);
+	return tail;
+}
+
 /*
  * Note. This is used only by "push"; refspec matching rules for
  * push and fetch are subtly different, so do not try to reuse it
  * without thinking.
  */
-int match_refs(struct ref *src, struct ref *dst, struct ref ***dst_tail,
+int match_refs(struct ref *src, struct ref **dst,
 	       int nr_refspec, const char **refspec, int flags)
 {
 	struct refspec *rs;
 	int send_all = flags & MATCH_REFS_ALL;
 	int send_mirror = flags & MATCH_REFS_MIRROR;
 	int errs;
-	static const char *default_refspec[] = { ":", 0 };
+	static const char *default_refspec[] = { ":", NULL };
+	struct ref **dst_tail = tail_ref(dst);
 
 	if (!nr_refspec) {
 		nr_refspec = 1;
 		refspec = default_refspec;
 	}
 	rs = parse_push_refspec(nr_refspec, (const char **) refspec);
-	errs = match_explicit_refs(src, dst, dst_tail, rs, nr_refspec);
+	errs = match_explicit_refs(src, *dst, &dst_tail, rs, nr_refspec);
 
 	/* pick the remainder */
 	for ( ; src; src = src->next) {
@@ -1134,7 +1157,7 @@ int match_refs(struct ref *src, struct ref *dst, struct ref ***dst_tail,
 						     dst_side, &dst_name))
 				die("Didn't think it matches any more");
 		}
-		dst_peer = find_ref_by_name(dst, dst_name);
+		dst_peer = find_ref_by_name(*dst, dst_name);
 		if (dst_peer) {
 			if (dst_peer->peer_ref)
 				/* We're already sending something to this ref. */
@@ -1150,7 +1173,7 @@ int match_refs(struct ref *src, struct ref *dst, struct ref ***dst_tail,
 				goto free_name;
 
 			/* Create a new one and link it */
-			dst_peer = make_linked_ref(dst_name, dst_tail);
+			dst_peer = make_linked_ref(dst_name, &dst_tail);
 			hashcpy(dst_peer->new_sha1, src->new_sha1);
 		}
 		dst_peer->peer_ref = copy_ref(src);
@@ -1399,13 +1422,13 @@ int stat_tracking_info(struct branch *branch, int *num_ours, int *num_theirs)
 	base = branch->merge[0]->dst;
 	if (!resolve_ref(base, sha1, 1, NULL))
 		return 0;
-	theirs = lookup_commit(sha1);
+	theirs = lookup_commit_reference(sha1);
 	if (!theirs)
 		return 0;
 
 	if (!resolve_ref(branch->refname, sha1, 1, NULL))
 		return 0;
-	ours = lookup_commit(sha1);
+	ours = lookup_commit_reference(sha1);
 	if (!ours)
 		return 0;
 

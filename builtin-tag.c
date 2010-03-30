@@ -308,8 +308,7 @@ static void create_tag(const unsigned char *object, const char *tag,
 		path = git_pathdup("TAG_EDITMSG");
 		fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
 		if (fd < 0)
-			die("could not create file '%s': %s",
-						path, strerror(errno));
+			die_errno("could not create file '%s'", path);
 
 		if (!is_null_sha1(prev))
 			write_tag_body(fd, prev);
@@ -376,8 +375,8 @@ int cmd_tag(int argc, const char **argv, const char *prefix)
 	struct commit_list *with_commit = NULL;
 	struct option options[] = {
 		OPT_BOOLEAN('l', NULL, &list, "list tag names"),
-		{ OPTION_INTEGER, 'n', NULL, &lines, NULL,
-				"print n lines of each tag message",
+		{ OPTION_INTEGER, 'n', NULL, &lines, "n",
+				"print <n> lines of each tag message",
 				PARSE_OPT_OPTARG, NULL, 1 },
 		OPT_BOOLEAN('d', NULL, &delete, "delete tags"),
 		OPT_BOOLEAN('v', NULL, &verify, "verify tags"),
@@ -387,7 +386,7 @@ int cmd_tag(int argc, const char **argv, const char *prefix)
 					"annotated tag, needs a message"),
 		OPT_CALLBACK('m', NULL, &msg, "msg",
 			     "message for the tag", parse_msg_arg),
-		OPT_STRING('F', NULL, &msgfile, "file", "message in a file"),
+		OPT_FILENAME('F', NULL, &msgfile, "message in a file"),
 		OPT_BOOLEAN('s', NULL, &sign, "annotated and GPG-signed tag"),
 		OPT_STRING('u', NULL, &keyid, "key-id",
 					"use another key to sign the tag"),
@@ -405,8 +404,7 @@ int cmd_tag(int argc, const char **argv, const char *prefix)
 
 	git_config(git_tag_config, NULL);
 
-	argc = parse_options(argc, argv, options, git_tag_usage, 0);
-	msgfile = parse_options_fix_filename(prefix, msgfile);
+	argc = parse_options(argc, argv, prefix, options, git_tag_usage, 0);
 
 	if (keyid) {
 		sign = 1;
@@ -444,11 +442,11 @@ int cmd_tag(int argc, const char **argv, const char *prefix)
 		else {
 			if (!strcmp(msgfile, "-")) {
 				if (strbuf_read(&buf, 0, 1024) < 0)
-					die("cannot read %s", msgfile);
+					die_errno("cannot read '%s'", msgfile);
 			} else {
 				if (strbuf_read_file(&buf, msgfile, 1024) < 0)
-					die("could not open or read '%s': %s",
-						msgfile, strerror(errno));
+					die_errno("could not open or read '%s'",
+						msgfile);
 			}
 		}
 	}

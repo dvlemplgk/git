@@ -68,7 +68,7 @@ static void *fill(int min)
 		if (ret <= 0) {
 			if (!ret)
 				die("early EOF");
-			die("read error on input: %s", strerror(errno));
+			die_errno("read error on input");
 		}
 		len += ret;
 	} while (len < min);
@@ -158,7 +158,7 @@ struct obj_info {
 #define FLAG_WRITTEN (1u<<21)
 
 static struct obj_info *obj_list;
-unsigned nr_objects;
+static unsigned nr_objects;
 
 /*
  * Called only from check_object() after it verified this object
@@ -181,10 +181,10 @@ static void write_cached_object(struct object *obj)
 static int check_object(struct object *obj, int type, void *data)
 {
 	if (!obj)
-		return 0;
+		return 1;
 
 	if (obj->flags & FLAG_WRITTEN)
-		return 1;
+		return 0;
 
 	if (type != OBJ_ANY && obj->type != type)
 		die("object type mismatch");
@@ -195,22 +195,24 @@ static int check_object(struct object *obj, int type, void *data)
 		if (type != obj->type || type <= 0)
 			die("object of unexpected type");
 		obj->flags |= FLAG_WRITTEN;
-		return 1;
+		return 0;
 	}
 
 	if (fsck_object(obj, 1, fsck_error_function))
 		die("Error in object");
-	if (!fsck_walk(obj, check_object, 0))
+	if (fsck_walk(obj, check_object, NULL))
 		die("Error on reachable objects of %s", sha1_to_hex(obj->sha1));
 	write_cached_object(obj);
-	return 1;
+	return 0;
 }
 
 static void write_rest(void)
 {
 	unsigned i;
-	for (i = 0; i < nr_objects; i++)
-		check_object(obj_list[i].obj, OBJ_ANY, 0);
+	for (i = 0; i < nr_objects; i++) {
+		if (obj_list[i].obj)
+			check_object(obj_list[i].obj, OBJ_ANY, NULL);
+	}
 }
 
 static void added_object(unsigned nr, enum object_type type,

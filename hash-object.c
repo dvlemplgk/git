@@ -29,7 +29,7 @@ static void hash_object(const char *path, const char *type, int write_object,
 	int fd;
 	fd = open(path, O_RDONLY);
 	if (fd < 0)
-		die("Cannot open %s", path);
+		die_errno("Cannot open '%s'", path);
 	hash_fd(fd, type, write_object, vpath);
 }
 
@@ -84,7 +84,8 @@ int main(int argc, const char **argv)
 
 	git_extract_argv0_path(argv[0]);
 
-	argc = parse_options(argc, argv, hash_object_options, hash_object_usage, 0);
+	argc = parse_options(argc, argv, NULL, hash_object_options,
+			     hash_object_usage, 0);
 
 	if (write_object) {
 		prefix = setup_git_directory();

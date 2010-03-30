@@ -104,11 +104,12 @@ static char *get_repo_path(const char *repo, int *is_bundle)
 static char *guess_dir_name(const char *repo, int is_bundle, int is_bare)
 {
 	const char *end = repo + strlen(repo), *start;
+	char *dir;
 
 	/*
-	 * Strip trailing slashes and /.git
+	 * Strip trailing spaces, slashes and /.git
 	 */
-	while (repo < end && is_dir_sep(end[-1]))
+	while (repo < end && (is_dir_sep(end[-1]) || isspace(end[-1])))
 		end--;
 	if (end - repo > 5 && is_dir_sep(end[-5]) &&
 	    !strncmp(end - 4, ".git", 4)) {
@@ -140,10 +141,33 @@ static char *guess_dir_name(const char *repo, int is_bundle, int is_bare)
 	if (is_bare) {
 		struct strbuf result = STRBUF_INIT;
 		strbuf_addf(&result, "%.*s.git", (int)(end - start), start);
-		return strbuf_detach(&result, 0);
+		dir = strbuf_detach(&result, NULL);
+	} else
+		dir = xstrndup(start, end - start);
+	/*
+	 * Replace sequences of 'control' characters and whitespace
+	 * with one ascii space, remove leading and trailing spaces.
+	 */
+	if (*dir) {
+		char *out = dir;
+		int prev_space = 1 /* strip leading whitespace */;
+		for (end = dir; *end; ++end) {
+			char ch = *end;
+			if ((unsigned char)ch < '\x20')
+				ch = '\x20';
+			if (isspace(ch)) {
+				if (prev_space)
+					continue;
+				prev_space = 1;
+			} else
+				prev_space = 0;
+			*out++ = ch;
+		}
+		*out = '\0';
+		if (out > dir && prev_space)
+			out[-1] = '\0';
 	}
-
-	return xstrndup(start, end - start);
+	return dir;
 }
 
 static void strip_trailing_slashes(char *dir)
@@ -196,13 +220,13 @@ static void copy_or_link_directory(struct strbuf *src, struct strbuf *dest)
 
 	dir = opendir(src->buf);
 	if (!dir)
-		die("failed to open %s", src->buf);
+		die_errno("failed to open '%s'", src->buf);
 
 	if (mkdir(dest->buf, 0777)) {
 		if (errno != EEXIST)
-			die("failed to create directory %s", dest->buf);
+			die_errno("failed to create directory '%s'", dest->buf);
 		else if (stat(dest->buf, &buf))
-			die("failed to stat %s", dest->buf);
+			die_errno("failed to stat '%s'", dest->buf);
 		else if (!S_ISDIR(buf.st_mode))
 			die("%s exists and is not a directory", dest->buf);
 	}
@@ -228,17 +252,16 @@ static void copy_or_link_directory(struct strbuf *src, struct strbuf *dest)
 		}
 
 		if (unlink(dest->buf) && errno != ENOENT)
-			die("failed to unlink %s: %s",
-			    dest->buf, strerror(errno));
+			die_errno("failed to unlink '%s'", dest->buf);
 		if (!option_no_hardlinks) {
 			if (!link(src->buf, dest->buf))
 				continue;
 			if (option_local)
-				die("failed to create link %s", dest->buf);
+				die_errno("failed to create link '%s'", dest->buf);
 			option_no_hardlinks = 1;
 		}
 		if (copy_file(dest->buf, src->buf, 0666))
-			die("failed to copy file to %s", dest->buf);
+			die_errno("failed to copy file to '%s'", dest->buf);
 	}
 	closedir(dir);
 }
@@ -336,7 +359,7 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 
 	junk_pid = getpid();
 
-	argc = parse_options(argc, argv, builtin_clone_options,
+	argc = parse_options(argc, argv, prefix, builtin_clone_options,
 			     builtin_clone_usage, 0);
 
 	if (argc == 0)
@@ -396,11 +419,11 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 	if (!option_bare) {
 		junk_work_tree = work_tree;
 		if (safe_create_leading_directories_const(work_tree) < 0)
-			die("could not create leading directories of '%s': %s",
-					work_tree, strerror(errno));
+			die_errno("could not create leading directories of '%s'",
+				  work_tree);
 		if (!dest_exists && mkdir(work_tree, 0755))
-			die("could not create work tree dir '%s': %s.",
-					work_tree, strerror(errno));
+			die_errno("could not create work tree dir '%s'.",
+				  work_tree);
 		set_git_work_tree(work_tree);
 	}
 	junk_git_dir = git_dir;
@@ -551,8 +574,10 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 		option_no_checkout = 1;
 	}
 
-	if (transport)
+	if (transport) {
 		transport_unlock_pack(transport);
+		transport_disconnect(transport);
+	}
 
 	if (!option_no_checkout) {
 		struct lock_file *lock_file = xcalloc(1, sizeof(struct lock_file));

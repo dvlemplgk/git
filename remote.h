@@ -15,6 +15,10 @@ struct remote {
 	int url_nr;
 	int url_alloc;
 
+	const char **pushurl;
+	int pushurl_nr;
+	int pushurl_alloc;
+
 	const char **push_refspec;
 	struct refspec *push;
 	int push_refspec_nr;
@@ -85,7 +89,7 @@ void ref_remove_duplicates(struct ref *ref_map);
 int valid_fetch_refspec(const char *refspec);
 struct refspec *parse_fetch_refspec(int nr_refspec, const char **refspec);
 
-int match_refs(struct ref *src, struct ref *dst, struct ref ***dst_tail,
+int match_refs(struct ref *src, struct ref **dst,
 	       int nr_refspec, const char **refspec, int all);
 
 /*

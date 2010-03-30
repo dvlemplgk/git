@@ -3,6 +3,11 @@ all::
 
 # Define V=1 to have a more verbose compile.
 #
+# Define SHELL_PATH to a POSIX shell if your /bin/sh is broken.
+#
+# Define SANE_TOOL_PATH to a colon-separated list of paths to prepend
+# to PATH if your tools in /usr/bin are broken.
+#
 # Define SNPRINTF_RETURNS_BOGUS if your are on a system which snprintf()
 # or vsnprintf() return -1 instead of number of characters which would
 # have been written to the final string if enough space had been available.
@@ -52,6 +57,12 @@ all::
 #
 # Define NO_MKDTEMP if you don't have mkdtemp in the C library.
 #
+# Define NO_MKSTEMPS if you don't have mkstemps in the C library.
+#
+# Define NO_LIBGEN_H if you don't have libgen.h.
+#
+# Define NEEDS_LIBGEN if your libgen needs -lgen when linking
+#
 # Define NO_SYS_SELECT_H if you don't have sys/select.h.
 #
 # Define NO_SYMLINK_HEAD if you never want .git/HEAD to be a symbolic link.
@@ -90,6 +101,10 @@ all::
 #
 # Define NEEDS_SOCKET if linking with libc is not enough (SunOS,
 # Patrick Mauritz).
+#
+# Define NEEDS_RESOLV if linking with -lnsl and/or -lsocket is not enough.
+# Notably on Solaris hstrerror resides in libresolv and on Solaris 7
+# inet_ntop and inet_pton additionally reside there.
 #
 # Define NO_MMAP if you want to avoid mmap.
 #
@@ -178,6 +193,11 @@ all::
 #
 # Define NO_CROSS_DIRECTORY_HARDLINKS if you plan to distribute the installed
 # programs as a tar, where bin/ and libexec/ might be on different file systems.
+#
+# Define USE_NED_ALLOCATOR if you want to replace the platforms default
+# memory allocators with the nedmalloc allocator written by Niall Douglas.
+#
+# Define NO_REGEX if you have no or inferior regex support in your C library.
 
 GIT-VERSION-FILE: .FORCE-GIT-VERSION-FILE
 	@$(SHELL_PATH) ./GIT-VERSION-GEN
@@ -228,6 +248,7 @@ ETC_GITCONFIG = etc/gitconfig
 endif
 lib = lib
 # DESTDIR=
+pathsep = :
 
 # default configuration for gitweb
 GITWEB_CONFIG = gitweb_config.perl
@@ -335,7 +356,6 @@ PROGRAMS += git-index-pack$X
 PROGRAMS += git-merge-index$X
 PROGRAMS += git-merge-tree$X
 PROGRAMS += git-mktag$X
-PROGRAMS += git-mktree$X
 PROGRAMS += git-pack-redundant$X
 PROGRAMS += git-patch-id$X
 PROGRAMS += git-shell$X
@@ -589,6 +609,7 @@ BUILTIN_OBJS += builtin-merge-base.o
 BUILTIN_OBJS += builtin-merge-file.o
 BUILTIN_OBJS += builtin-merge-ours.o
 BUILTIN_OBJS += builtin-merge-recursive.o
+BUILTIN_OBJS += builtin-mktree.o
 BUILTIN_OBJS += builtin-mv.o
 BUILTIN_OBJS += builtin-name-rev.o
 BUILTIN_OBJS += builtin-pack-objects.o
@@ -635,10 +656,12 @@ EXTLIBS =
 
 ifeq ($(uname_S),Linux)
 	NO_STRLCPY = YesPlease
+	NO_MKSTEMPS = YesPlease
 	THREADED_DELTA_SEARCH = YesPlease
 endif
 ifeq ($(uname_S),GNU/kFreeBSD)
 	NO_STRLCPY = YesPlease
+	NO_MKSTEMPS = YesPlease
 	THREADED_DELTA_SEARCH = YesPlease
 endif
 ifeq ($(uname_S),UnixWare)
@@ -650,6 +673,7 @@ ifeq ($(uname_S),UnixWare)
 	SHELL_PATH = /usr/local/bin/bash
 	NO_IPV6 = YesPlease
 	NO_HSTRERROR = YesPlease
+	NO_MKSTEMPS = YesPlease
 	BASIC_CFLAGS += -Kthread
 	BASIC_CFLAGS += -I/usr/local/include
 	BASIC_LDFLAGS += -L/usr/local/lib
@@ -673,6 +697,7 @@ ifeq ($(uname_S),SCO_SV)
 	SHELL_PATH = /usr/bin/bash
 	NO_IPV6 = YesPlease
 	NO_HSTRERROR = YesPlease
+	NO_MKSTEMPS = YesPlease
 	BASIC_CFLAGS += -I/usr/local/include
 	BASIC_LDFLAGS += -L/usr/local/lib
 	NO_STRCASESTR = YesPlease
@@ -697,12 +722,23 @@ ifeq ($(uname_S),SunOS)
 	NEEDS_SOCKET = YesPlease
 	NEEDS_NSL = YesPlease
 	SHELL_PATH = /bin/bash
+	SANE_TOOL_PATH = /usr/xpg6/bin:/usr/xpg4/bin
 	NO_STRCASESTR = YesPlease
 	NO_MEMMEM = YesPlease
-	NO_HSTRERROR = YesPlease
 	NO_MKDTEMP = YesPlease
-	OLD_ICONV = UnfortunatelyYes
+	NO_MKSTEMPS = YesPlease
+	NO_REGEX = YesPlease
 	NO_EXTERNAL_GREP = YesPlease
+	ifeq ($(uname_R),5.7)
+		NEEDS_RESOLV = YesPlease
+		NO_IPV6 = YesPlease
+		NO_SOCKADDR_STORAGE = YesPlease
+		NO_UNSETENV = YesPlease
+		NO_SETENV = YesPlease
+		NO_STRLCPY = YesPlease
+		NO_C99_FORMAT = YesPlease
+		NO_STRTOUMAX = YesPlease
+	endif
 	ifeq ($(uname_R),5.8)
 		NO_UNSETENV = YesPlease
 		NO_SETENV = YesPlease
@@ -715,15 +751,19 @@ ifeq ($(uname_S),SunOS)
 		NO_C99_FORMAT = YesPlease
 		NO_STRTOUMAX = YesPlease
 	endif
-	INSTALL = ginstall
+	ifdef NO_IPV6
+		NEEDS_RESOLV = YesPlease
+	endif
+	INSTALL = /usr/ucb/install
 	TAR = gtar
-	BASIC_CFLAGS += -D__EXTENSIONS__
+	BASIC_CFLAGS += -D__EXTENSIONS__ -D__sun__ -DHAVE_ALLOCA_H
 endif
 ifeq ($(uname_O),Cygwin)
 	NO_D_TYPE_IN_DIRENT = YesPlease
 	NO_D_INO_IN_DIRENT = YesPlease
 	NO_STRCASESTR = YesPlease
 	NO_MEMMEM = YesPlease
+	NO_MKSTEMPS = YesPlease
 	NO_SYMLINK_HEAD = YesPlease
 	NEEDS_LIBICONV = YesPlease
 	NO_FAST_WORKING_DIRECTORY = UnfortunatelyYes
@@ -767,11 +807,13 @@ ifeq ($(uname_S),NetBSD)
 	BASIC_LDFLAGS += -L/usr/pkg/lib $(CC_LD_DYNPATH)/usr/pkg/lib
 	THREADED_DELTA_SEARCH = YesPlease
 	USE_ST_TIMESPEC = YesPlease
+	NO_MKSTEMPS = YesPlease
 endif
 ifeq ($(uname_S),AIX)
 	NO_STRCASESTR=YesPlease
 	NO_MEMMEM = YesPlease
 	NO_MKDTEMP = YesPlease
+	NO_MKSTEMPS = YesPlease
 	NO_STRLCPY = YesPlease
 	NO_NSEC = YesPlease
 	FREAD_READS_DIRECTORIES = UnfortunatelyYes
@@ -787,24 +829,40 @@ endif
 ifeq ($(uname_S),GNU)
 	# GNU/Hurd
 	NO_STRLCPY=YesPlease
+	NO_MKSTEMPS = YesPlease
+endif
+ifeq ($(uname_S),IRIX)
+	NO_SETENV = YesPlease
+	NO_UNSETENV = YesPlease
+	NO_STRCASESTR = YesPlease
+	NO_MEMMEM = YesPlease
+	NO_MKSTEMPS = YesPlease
+	NO_MKDTEMP = YesPlease
+	NO_MMAP = YesPlease
+	NO_EXTERNAL_GREP = UnfortunatelyYes
+	SNPRINTF_RETURNS_BOGUS = YesPlease
+	SHELL_PATH = /usr/gnu/bin/bash
+	NEEDS_LIBGEN = YesPlease
 endif
 ifeq ($(uname_S),IRIX64)
-	NO_IPV6=YesPlease
 	NO_SETENV=YesPlease
+	NO_UNSETENV = YesPlease
 	NO_STRCASESTR=YesPlease
 	NO_MEMMEM = YesPlease
-	NO_STRLCPY = YesPlease
-	NO_SOCKADDR_STORAGE=YesPlease
+	NO_MKSTEMPS = YesPlease
+	NO_MKDTEMP = YesPlease
+	NO_MMAP = YesPlease
+	NO_EXTERNAL_GREP = UnfortunatelyYes
+	SNPRINTF_RETURNS_BOGUS = YesPlease
 	SHELL_PATH=/usr/gnu/bin/bash
-	BASIC_CFLAGS += -DPATH_MAX=1024
-	# for now, build 32-bit version
-	BASIC_LDFLAGS += -L/usr/lib32
+	NEEDS_LIBGEN = YesPlease
 endif
 ifeq ($(uname_S),HP-UX)
 	NO_IPV6=YesPlease
 	NO_SETENV=YesPlease
 	NO_STRCASESTR=YesPlease
 	NO_MEMMEM = YesPlease
+	NO_MKSTEMPS = YesPlease
 	NO_STRLCPY = YesPlease
 	NO_MKDTEMP = YesPlease
 	NO_UNSETENV = YesPlease
@@ -817,9 +875,10 @@ ifneq (,$(findstring CYGWIN,$(uname_S)))
 	UNRELIABLE_FSTAT = UnfortunatelyYes
 endif
 ifneq (,$(findstring MINGW,$(uname_S)))
+	pathsep = ;
 	NO_PREAD = YesPlease
 	NO_OPENSSL = YesPlease
-	NO_CURL = YesPlease
+	NO_LIBGEN_H = YesPlease
 	NO_SYMLINK_HEAD = YesPlease
 	NO_IPV6 = YesPlease
 	NO_SETENV = YesPlease
@@ -827,12 +886,12 @@ ifneq (,$(findstring MINGW,$(uname_S)))
 	NO_STRCASESTR = YesPlease
 	NO_STRLCPY = YesPlease
 	NO_MEMMEM = YesPlease
-	NO_PTHREADS = YesPlease
 	NEEDS_LIBICONV = YesPlease
 	OLD_ICONV = YesPlease
 	NO_C99_FORMAT = YesPlease
 	NO_STRTOUMAX = YesPlease
 	NO_MKDTEMP = YesPlease
+	NO_MKSTEMPS = YesPlease
 	SNPRINTF_RETURNS_BOGUS = YesPlease
 	NO_SVN_TESTS = YesPlease
 	NO_PERL_MAKEMAKER = YesPlease
@@ -841,21 +900,43 @@ ifneq (,$(findstring MINGW,$(uname_S)))
 	NO_ST_BLOCKS_IN_STRUCT_STAT = YesPlease
 	NO_NSEC = YesPlease
 	USE_WIN32_MMAP = YesPlease
+	USE_NED_ALLOCATOR = YesPlease
 	UNRELIABLE_FSTAT = UnfortunatelyYes
 	OBJECT_CREATION_USES_RENAMES = UnfortunatelyNeedsTo
-	COMPAT_CFLAGS += -D__USE_MINGW_ACCESS -DNOGDI -Icompat -Icompat/regex -Icompat/fnmatch
-	COMPAT_CFLAGS += -DSNPRINTF_SIZE_CORR=1
+	NO_REGEX = YesPlease
+	COMPAT_CFLAGS += -D__USE_MINGW_ACCESS -DNOGDI -Icompat -Icompat/fnmatch
 	COMPAT_CFLAGS += -DSTRIP_EXTENSION=\".exe\"
-	COMPAT_OBJS += compat/mingw.o compat/fnmatch/fnmatch.o compat/regex/regex.o compat/winansi.o
+	COMPAT_OBJS += compat/mingw.o compat/fnmatch/fnmatch.o compat/winansi.o
 	EXTLIBS += -lws2_32
 	X = .exe
+ifneq (,$(wildcard ../THIS_IS_MSYSGIT))
+	htmldir=doc/git/html/
+	prefix =
+	INSTALL = /bin/install
+	EXTLIBS += /mingw/lib/libz.a
+	NO_R_TO_GCC_LINKER = YesPlease
+	INTERNAL_QSORT = YesPlease
+	THREADED_DELTA_SEARCH = YesPlease
+else
+	NO_CURL = YesPlease
+	NO_PTHREADS = YesPlease
+endif
 endif
 ifneq (,$(findstring arm,$(uname_M)))
 	ARM_SHA1 = YesPlease
+	NO_MKSTEMPS = YesPlease
 endif
 
 -include config.mak.autogen
 -include config.mak
+
+ifdef SANE_TOOL_PATH
+SANE_TOOL_PATH_SQ = $(subst ','\'',$(SANE_TOOL_PATH))
+BROKEN_PATH_FIX = 's|^\# @@BROKEN_PATH_FIX@@$$|git_broken_path_fix $(SANE_TOOL_PATH_SQ)|'
+PATH := $(SANE_TOOL_PATH):${PATH}
+else
+BROKEN_PATH_FIX = '/^\# @@BROKEN_PATH_FIX@@$$/d'
+endif
 
 ifeq ($(uname_S),Darwin)
 	ifndef NO_FINK
@@ -881,6 +962,11 @@ ifndef CC_LD_DYNPATH
 	else
 		CC_LD_DYNPATH = -R
 	endif
+endif
+
+ifdef NO_LIBGEN_H
+	COMPAT_CFLAGS += -DNO_LIBGEN_H
+	COMPAT_OBJS += compat/basename.o
 endif
 
 ifdef NO_CURL
@@ -949,11 +1035,17 @@ ifdef NEEDS_LIBICONV
 	endif
 	EXTLIBS += $(ICONV_LINK) -liconv
 endif
+ifdef NEEDS_LIBGEN
+	EXTLIBS += -lgen
+endif
 ifdef NEEDS_SOCKET
 	EXTLIBS += -lsocket
 endif
 ifdef NEEDS_NSL
 	EXTLIBS += -lnsl
+endif
+ifdef NEEDS_RESOLV
+	EXTLIBS += -lresolv
 endif
 ifdef NO_D_TYPE_IN_DIRENT
 	BASIC_CFLAGS += -DNO_D_TYPE_IN_DIRENT
@@ -1009,6 +1101,10 @@ endif
 ifdef NO_MKDTEMP
 	COMPAT_CFLAGS += -DNO_MKDTEMP
 	COMPAT_OBJS += compat/mkdtemp.o
+endif
+ifdef NO_MKSTEMPS
+	COMPAT_CFLAGS += -DNO_MKSTEMPS
+	COMPAT_OBJS += compat/mkstemps.o
 endif
 ifdef NO_UNSETENV
 	COMPAT_CFLAGS += -DNO_UNSETENV
@@ -1127,6 +1223,15 @@ endif
 ifdef UNRELIABLE_FSTAT
 	BASIC_CFLAGS += -DUNRELIABLE_FSTAT
 endif
+ifdef NO_REGEX
+	COMPAT_CFLAGS += -Icompat/regex
+	COMPAT_OBJS += compat/regex/regex.o
+endif
+
+ifdef USE_NED_ALLOCATOR
+       COMPAT_CFLAGS += -DUSE_NED_ALLOCATOR -DOVERRIDE_STRDUP -DNDEBUG -DREPLACE_SYSTEM_ALLOCATOR -Icompat/nedmalloc
+       COMPAT_OBJS += compat/nedmalloc/nedmalloc.o
+endif
 
 ifeq ($(TCLTK_PATH),)
 NO_TCLTK=NoThanks
@@ -1202,7 +1307,7 @@ SHELL = $(SHELL_PATH)
 
 all:: shell_compatibility_test $(ALL_PROGRAMS) $(BUILT_INS) $(OTHER_PROGRAMS) GIT-BUILD-OPTIONS
 ifneq (,$X)
-	$(foreach p,$(patsubst %$X,%,$(filter %$X,$(ALL_PROGRAMS) $(BUILT_INS) git$X)), test '$p' -ef '$p$X' || $(RM) '$p';)
+	$(QUIET_BUILT_IN)$(foreach p,$(patsubst %$X,%,$(filter %$X,$(ALL_PROGRAMS) $(BUILT_INS) git$X)), test '$p' -ef '$p$X' || $(RM) '$p';)
 endif
 
 all::
@@ -1253,9 +1358,9 @@ $(patsubst %.sh,%,$(SCRIPT_SH)) : % : %.sh
 	$(QUIET_GEN)$(RM) $@ $@+ && \
 	sed -e '1s|#!.*/sh|#!$(SHELL_PATH_SQ)|' \
 	    -e 's|@SHELL_PATH@|$(SHELL_PATH_SQ)|' \
-	    -e 's|@@PERL@@|$(PERL_PATH_SQ)|g' \
 	    -e 's/@@GIT_VERSION@@/$(GIT_VERSION)/g' \
 	    -e 's/@@NO_CURL@@/$(NO_CURL)/g' \
+	    -e $(BROKEN_PATH_FIX) \
 	    $@.sh >$@+ && \
 	chmod +x $@+ && \
 	mv $@+ $@
@@ -1272,7 +1377,7 @@ $(patsubst %.perl,%,$(SCRIPT_PERL)): % : %.perl
 	sed -e '1{' \
 	    -e '	s|#!.*perl|#!$(PERL_PATH_SQ)|' \
 	    -e '	h' \
-	    -e '	s=.*=use lib (split(/:/, $$ENV{GITPERLLIB} || "@@INSTLIBDIR@@"));=' \
+	    -e '	s=.*=use lib (split(/$(pathsep)/, $$ENV{GITPERLLIB} || "@@INSTLIBDIR@@"));=' \
 	    -e '	H' \
 	    -e '	x' \
 	    -e '}' \
@@ -1495,6 +1600,8 @@ test-delta$X: diff-delta.o patch-delta.o
 
 test-parse-options$X: parse-options.o
 
+test-parse-options.o: parse-options.h
+
 .PRECIOUS: $(patsubst test-%$X,test-%.o,$(TEST_PROGRAMS))
 
 test-%$X: test-%.o $(GITLIBS)
@@ -1553,15 +1660,16 @@ ifneq (,$X)
 endif
 	bindir=$$(cd '$(DESTDIR_SQ)$(bindir_SQ)' && pwd) && \
 	execdir=$$(cd '$(DESTDIR_SQ)$(gitexec_instdir_SQ)' && pwd) && \
-	{ $(RM) "$$execdir/git-add$X" && \
+	{ test "$$bindir/" = "$$execdir/" || \
+		{ $(RM) "$$execdir/git$X" && \
 		test -z "$(NO_CROSS_DIRECTORY_HARDLINKS)" && \
-		ln "$$bindir/git$X" "$$execdir/git-add$X" 2>/dev/null || \
-		cp "$$bindir/git$X" "$$execdir/git-add$X"; } && \
-	{ for p in $(filter-out git-add$X,$(BUILT_INS)); do \
+		ln "$$bindir/git$X" "$$execdir/git$X" 2>/dev/null || \
+		cp "$$bindir/git$X" "$$execdir/git$X"; } ; } && \
+	{ for p in $(BUILT_INS); do \
 		$(RM) "$$execdir/$$p" && \
-		ln "$$execdir/git-add$X" "$$execdir/$$p" 2>/dev/null || \
-		ln -s "git-add$X" "$$execdir/$$p" 2>/dev/null || \
-		cp "$$execdir/git-add$X" "$$execdir/$$p" || exit; \
+		ln "$$execdir/git$X" "$$execdir/$$p" 2>/dev/null || \
+		ln -s "git$X" "$$execdir/$$p" 2>/dev/null || \
+		cp "$$execdir/git$X" "$$execdir/$$p" || exit; \
 	  done; } && \
 	./check_bindir "z$$bindir" "z$$execdir" "$$bindir/git-add$X"
 
@@ -1642,7 +1750,7 @@ distclean: clean
 	$(RM) configure
 
 clean:
-	$(RM) *.o mozilla-sha1/*.o arm/*.o ppc/*.o compat/*.o xdiff/*.o \
+	$(RM) *.o mozilla-sha1/*.o arm/*.o ppc/*.o compat/*.o compat/*/*.o xdiff/*.o \
 		$(LIB_FILE) $(XDIFF_LIB)
 	$(RM) $(ALL_PROGRAMS) $(BUILT_INS) git$X
 	$(RM) $(TEST_PROGRAMS)

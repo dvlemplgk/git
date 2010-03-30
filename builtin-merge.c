@@ -268,7 +268,7 @@ static void squash_message(void)
 	printf("Squash commit -- not updating HEAD\n");
 	fd = open(git_path("SQUASH_MSG"), O_WRONLY | O_CREAT, 0666);
 	if (fd < 0)
-		die("Could not write to %s", git_path("SQUASH_MSG"));
+		die_errno("Could not write to '%s'", git_path("SQUASH_MSG"));
 
 	init_revisions(&rev, NULL);
 	rev.ignore_merges = 1;
@@ -294,9 +294,9 @@ static void squash_message(void)
 			NULL, NULL, rev.date_mode, 0);
 	}
 	if (write(fd, out.buf, out.len) < 0)
-		die("Writing SQUASH_MSG: %s", strerror(errno));
+		die_errno("Writing SQUASH_MSG");
 	if (close(fd))
-		die("Finishing SQUASH_MSG: %s", strerror(errno));
+		die_errno("Finishing SQUASH_MSG");
 	strbuf_release(&out);
 }
 
@@ -358,6 +358,7 @@ static void merge_name(const char *remote, struct strbuf *msg)
 	struct strbuf buf = STRBUF_INIT;
 	struct strbuf bname = STRBUF_INIT;
 	const char *ptr;
+	char *found_ref;
 	int len, early;
 
 	strbuf_branchname(&bname, remote);
@@ -368,14 +369,17 @@ static void merge_name(const char *remote, struct strbuf *msg)
 	if (!remote_head)
 		die("'%s' does not point to a commit", remote);
 
-	strbuf_addstr(&buf, "refs/heads/");
-	strbuf_addstr(&buf, remote);
-	resolve_ref(buf.buf, branch_head, 0, 0);
-
-	if (!hashcmp(remote_head->sha1, branch_head)) {
-		strbuf_addf(msg, "%s\t\tbranch '%s' of .\n",
-			sha1_to_hex(branch_head), remote);
-		goto cleanup;
+	if (dwim_ref(remote, strlen(remote), branch_head, &found_ref) > 0) {
+		if (!prefixcmp(found_ref, "refs/heads/")) {
+			strbuf_addf(msg, "%s\t\tbranch '%s' of .\n",
+				    sha1_to_hex(branch_head), remote);
+			goto cleanup;
+		}
+		if (!prefixcmp(found_ref, "refs/remotes/")) {
+			strbuf_addf(msg, "%s\t\tremote branch '%s' of .\n",
+				    sha1_to_hex(branch_head), remote);
+			goto cleanup;
+		}
 	}
 
 	/* See if remote matches <name>^^^.. or <name>~<number> */
@@ -409,7 +413,7 @@ static void merge_name(const char *remote, struct strbuf *msg)
 		strbuf_addstr(&truname, "refs/heads/");
 		strbuf_addstr(&truname, remote);
 		strbuf_setlen(&truname, truname.len - len);
-		if (resolve_ref(truname.buf, buf_sha, 0, 0)) {
+		if (resolve_ref(truname.buf, buf_sha, 0, NULL)) {
 			strbuf_addf(msg,
 				    "%s\t\tbranch '%s'%s of .\n",
 				    sha1_to_hex(remote_head->sha1),
@@ -428,8 +432,8 @@ static void merge_name(const char *remote, struct strbuf *msg)
 
 		fp = fopen(git_path("FETCH_HEAD"), "r");
 		if (!fp)
-			die("could not open %s for reading: %s",
-				git_path("FETCH_HEAD"), strerror(errno));
+			die_errno("could not open '%s' for reading",
+				  git_path("FETCH_HEAD"));
 		strbuf_getline(&line, fp, '\n');
 		fclose(fp);
 		ptr = strstr(line.buf, "\tnot-for-merge\t");
@@ -462,7 +466,7 @@ static int git_merge_config(const char *k, const char *v, void *cb)
 		argv = xrealloc(argv, sizeof(*argv) * (argc + 2));
 		memmove(argv + 1, argv, sizeof(*argv) * (argc + 1));
 		argc++;
-		parse_options(argc, argv, builtin_merge_options,
+		parse_options(argc, argv, NULL, builtin_merge_options,
 			      builtin_merge_usage, 0);
 		free(buf);
 	}
@@ -764,7 +768,8 @@ static int suggest_conflicts(void)
 
 	fp = fopen(git_path("MERGE_MSG"), "a");
 	if (!fp)
-		die("Could not open %s for writing", git_path("MERGE_MSG"));
+		die_errno("Could not open '%s' for writing",
+			  git_path("MERGE_MSG"));
 	fprintf(fp, "\nConflicts:\n");
 	for (pos = 0; pos < active_nr; pos++) {
 		struct cache_entry *ce = active_cache[pos];
@@ -858,7 +863,7 @@ int cmd_merge(int argc, const char **argv, const char *prefix)
 	if (diff_use_color_default == -1)
 		diff_use_color_default = git_use_color_default;
 
-	argc = parse_options(argc, argv, builtin_merge_options,
+	argc = parse_options(argc, argv, prefix, builtin_merge_options,
 			builtin_merge_usage, 0);
 	if (verbosity < 0)
 		show_diffstat = 0;
@@ -1189,27 +1194,29 @@ int cmd_merge(int argc, const char **argv, const char *prefix)
 				sha1_to_hex(j->item->object.sha1));
 		fd = open(git_path("MERGE_HEAD"), O_WRONLY | O_CREAT, 0666);
 		if (fd < 0)
-			die("Could open %s for writing",
-				git_path("MERGE_HEAD"));
+			die_errno("Could not open '%s' for writing",
+				  git_path("MERGE_HEAD"));
 		if (write_in_full(fd, buf.buf, buf.len) != buf.len)
-			die("Could not write to %s", git_path("MERGE_HEAD"));
+			die_errno("Could not write to '%s'", git_path("MERGE_HEAD"));
 		close(fd);
 		strbuf_addch(&merge_msg, '\n');
 		fd = open(git_path("MERGE_MSG"), O_WRONLY | O_CREAT, 0666);
 		if (fd < 0)
-			die("Could open %s for writing", git_path("MERGE_MSG"));
+			die_errno("Could not open '%s' for writing",
+				  git_path("MERGE_MSG"));
 		if (write_in_full(fd, merge_msg.buf, merge_msg.len) !=
 			merge_msg.len)
-			die("Could not write to %s", git_path("MERGE_MSG"));
+			die_errno("Could not write to '%s'", git_path("MERGE_MSG"));
 		close(fd);
 		fd = open(git_path("MERGE_MODE"), O_WRONLY | O_CREAT | O_TRUNC, 0666);
 		if (fd < 0)
-			die("Could open %s for writing", git_path("MERGE_MODE"));
+			die_errno("Could not open '%s' for writing",
+				  git_path("MERGE_MODE"));
 		strbuf_reset(&buf);
 		if (!allow_fast_forward)
 			strbuf_addf(&buf, "no-ff");
 		if (write_in_full(fd, buf.buf, buf.len) != buf.len)
-			die("Could not write to %s", git_path("MERGE_MODE"));
+			die_errno("Could not write to '%s'", git_path("MERGE_MODE"));
 		close(fd);
 	}
 

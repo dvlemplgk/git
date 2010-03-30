@@ -316,7 +316,8 @@ int cmd_config(int argc, const char **argv, const char *unused_prefix)
 
 	config_exclusive_filename = getenv(CONFIG_ENVIRONMENT);
 
-	argc = parse_options(argc, argv, builtin_config_options, builtin_config_usage,
+	argc = parse_options(argc, argv, prefix, builtin_config_options,
+			     builtin_config_usage,
 			     PARSE_OPT_STOP_AT_NON_OPTION);
 
 	if (use_global_config + use_system_config + !!given_config_file > 1) {
@@ -382,8 +383,8 @@ int cmd_config(int argc, const char **argv, const char *unused_prefix)
 		check_argc(argc, 0, 0);
 		if (git_config(show_all_config, NULL) < 0) {
 			if (config_exclusive_filename)
-				die("unable to read config file %s: %s",
-				    config_exclusive_filename, strerror(errno));
+				die_errno("unable to read config file '%s'",
+					  config_exclusive_filename);
 			else
 				die("error processing config file(s)");
 		}

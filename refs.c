@@ -683,12 +683,13 @@ int for_each_rawref(each_ref_fn fn, void *cb_data)
  * - it has ASCII control character, "~", "^", ":" or SP, anywhere, or
  * - it ends with a "/".
  * - it ends with ".lock"
+ * - it contains a "\" (backslash)
  */
 
 static inline int bad_ref_char(int ch)
 {
 	if (((unsigned) ch) <= ' ' ||
-	    ch == '~' || ch == '^' || ch == ':')
+	    ch == '~' || ch == '^' || ch == ':' || ch == '\\')
 		return 1;
 	/* 2.13 Pattern Matching Notation */
 	if (ch == '?' || ch == '[') /* Unsupported */
@@ -751,9 +752,8 @@ int check_ref_format(const char *ref)
 	}
 }
 
-const char *prettify_ref(const struct ref *ref)
+const char *prettify_refname(const char *name)
 {
-	const char *name = ref->name;
 	return name + (
 		!prefixcmp(name, "refs/heads/") ? 11 :
 		!prefixcmp(name, "refs/tags/") ? 10 :
@@ -821,7 +821,7 @@ static int remove_empty_directories(const char *file)
 	strbuf_init(&path, 20);
 	strbuf_addstr(&path, file);
 
-	result = remove_dir_recursively(&path, 1);
+	result = remove_dir_recursively(&path, REMOVE_DIR_EMPTY_ONLY);
 
 	strbuf_release(&path);
 
@@ -1419,7 +1419,7 @@ int read_ref_at(const char *ref, unsigned long at_time, int cnt, unsigned char *
 	logfile = git_path("logs/%s", ref);
 	logfd = open(logfile, O_RDONLY, 0);
 	if (logfd < 0)
-		die("Unable to read log %s: %s", logfile, strerror(errno));
+		die_errno("Unable to read log '%s'", logfile);
 	fstat(logfd, &st);
 	if (!st.st_size)
 		die("Log %s is empty.", logfile);

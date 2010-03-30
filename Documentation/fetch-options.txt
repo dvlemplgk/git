@@ -1,11 +1,13 @@
+ifndef::git-pull[]
 -q::
 --quiet::
 	Pass --quiet to git-fetch-pack and silence any other internally
-	used programs.
+	used git commands.
 
 -v::
 --verbose::
 	Be verbose.
+endif::git-pull[]
 
 -a::
 --append::

@@ -124,13 +124,18 @@ test true = "$rebase" && {
 	git diff-index --ignore-submodules --cached --quiet HEAD -- ||
 	die "refusing to pull with rebase: your working tree is not up-to-date"
 
+	oldremoteref= &&
 	. git-parse-remote &&
-	origin="$1"
-	test -z "$origin" && origin=$(get_default_remote)
-	reflist="$(get_remote_refs_for_fetch "$@" 2>/dev/null |
-		sed "s|refs/heads/\(.*\):|\1|")" &&
-	oldremoteref="$(git rev-parse -q --verify \
-		"refs/remotes/$origin/$reflist")"
+	remoteref="$(get_remote_merge_branch "$@" 2>/dev/null)" &&
+	oldremoteref="$(git rev-parse -q --verify "$remoteref")" &&
+	for reflog in $(git rev-list -g $remoteref 2>/dev/null)
+	do
+		if test "$reflog" = "$(git merge-base $reflog $curr_branch)"
+		then
+			oldremoteref="$reflog"
+			break
+		fi
+	done
 }
 orig_head=$(git rev-parse -q --verify HEAD)
 git fetch $verbosity --update-head-ok "$@" || exit 1

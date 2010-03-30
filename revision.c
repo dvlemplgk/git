@@ -133,7 +133,7 @@ void mark_parents_uninteresting(struct commit *commit)
 static void add_pending_object_with_mode(struct rev_info *revs, struct object *obj, const char *name, unsigned mode)
 {
 	if (revs->no_walk && (obj->flags & UNINTERESTING))
-		die("object ranges do not make sense when not walking revisions");
+		revs->no_walk = 0;
 	if (revs->reflog_info && obj->type == OBJ_COMMIT &&
 			add_reflog_for_walk(revs->reflog_info,
 				(struct commit *)obj, name))
@@ -256,10 +256,12 @@ static int everybody_uninteresting(struct commit_list *orig)
 
 /*
  * The goal is to get REV_TREE_NEW as the result only if the
- * diff consists of all '+' (and no other changes), and
- * REV_TREE_DIFFERENT otherwise (of course if the trees are
- * the same we want REV_TREE_SAME).  That means that once we
- * get to REV_TREE_DIFFERENT, we do not have to look any further.
+ * diff consists of all '+' (and no other changes), REV_TREE_OLD
+ * if the whole diff is removal of old data, and otherwise
+ * REV_TREE_DIFFERENT (of course if the trees are the same we
+ * want REV_TREE_SAME).
+ * That means that once we get to REV_TREE_DIFFERENT, we do not
+ * have to look any further.
  */
 static int tree_difference = REV_TREE_SAME;
 
@@ -268,22 +270,9 @@ static void file_add_remove(struct diff_options *options,
 		    const unsigned char *sha1,
 		    const char *fullpath)
 {
-	int diff = REV_TREE_DIFFERENT;
+	int diff = addremove == '+' ? REV_TREE_NEW : REV_TREE_OLD;
 
-	/*
-	 * Is it an add of a new file? It means that the old tree
-	 * didn't have it at all, so we will turn "REV_TREE_SAME" ->
-	 * "REV_TREE_NEW", but leave any "REV_TREE_DIFFERENT" alone
-	 * (and if it already was "REV_TREE_NEW", we'll keep it
-	 * "REV_TREE_NEW" of course).
-	 */
-	if (addremove == '+') {
-		diff = tree_difference;
-		if (diff != REV_TREE_SAME)
-			return;
-		diff = REV_TREE_NEW;
-	}
-	tree_difference = diff;
+	tree_difference |= diff;
 	if (tree_difference == REV_TREE_DIFFERENT)
 		DIFF_OPT_SET(options, HAS_CHANGES);
 }
@@ -305,6 +294,8 @@ static int rev_compare_tree(struct rev_info *revs, struct commit *parent, struct
 
 	if (!t1)
 		return REV_TREE_NEW;
+	if (!t2)
+		return REV_TREE_OLD;
 
 	if (revs->simplify_by_decoration) {
 		/*
@@ -323,8 +314,7 @@ static int rev_compare_tree(struct rev_info *revs, struct commit *parent, struct
 		if (!revs->prune_data)
 			return REV_TREE_SAME;
 	}
-	if (!t2)
-		return REV_TREE_DIFFERENT;
+
 	tree_difference = REV_TREE_SAME;
 	DIFF_OPT_CLR(&revs->pruning, HAS_CHANGES);
 	if (diff_tree_sha1(t1->object.sha1, t2->object.sha1, "",
@@ -429,6 +419,7 @@ static void try_to_simplify_commit(struct rev_info *revs, struct commit *commit)
 				p->parents = NULL;
 			}
 		/* fallthrough */
+		case REV_TREE_OLD:
 		case REV_TREE_DIFFERENT:
 			tree_changed = 1;
 			pp = &parent->next;
@@ -1061,7 +1052,7 @@ static int handle_revision_opt(struct rev_info *revs, int argc, const char **arg
 		revs->simplify_by_decoration = 1;
 		revs->limited = 1;
 		revs->prune = 1;
-		load_ref_decorations();
+		load_ref_decorations(DECORATE_SHORT_REFS);
 	} else if (!strcmp(arg, "--date-order")) {
 		revs->lifo = 0;
 		revs->topo_order = 1;
@@ -1086,6 +1077,8 @@ static int handle_revision_opt(struct rev_info *revs, int argc, const char **arg
 		revs->show_all = 1;
 	} else if (!strcmp(arg, "--remove-empty")) {
 		revs->remove_empty_trees = 1;
+	} else if (!strcmp(arg, "--merges")) {
+		revs->merges_only = 1;
 	} else if (!strcmp(arg, "--no-merges")) {
 		revs->no_merges = 1;
 	} else if (!strcmp(arg, "--boundary")) {
@@ -1684,6 +1677,8 @@ enum commit_action simplify_commit(struct rev_info *revs, struct commit *commit)
 	if (revs->min_age != -1 && (commit->date > revs->min_age))
 		return commit_ignore;
 	if (revs->no_merges && commit->parents && commit->parents->next)
+		return commit_ignore;
+	if (revs->merges_only && !(commit->parents && commit->parents->next))
 		return commit_ignore;
 	if (!commit_match(commit, revs))
 		return commit_ignore;

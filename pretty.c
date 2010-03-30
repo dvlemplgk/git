@@ -86,6 +86,18 @@ int non_ascii(int ch)
 	return !isascii(ch) || ch == '\033';
 }
 
+int has_non_ascii(const char *s)
+{
+	int ch;
+	if (!s)
+		return 0;
+	while ((ch = *s++) != '\0') {
+		if (non_ascii(ch))
+			return 1;
+	}
+	return 0;
+}
+
 static int is_rfc2047_special(char ch)
 {
 	return (non_ascii(ch) || (ch == '=') || (ch == '?') || (ch == '_'));
@@ -284,7 +296,7 @@ static char *replace_encoding_header(char *buf, const char *encoding)
 static char *logmsg_reencode(const struct commit *commit,
 			     const char *output_encoding)
 {
-	static const char *utf8 = "utf-8";
+	static const char *utf8 = "UTF-8";
 	const char *use_encoding;
 	char *encoding;
 	char *out;
@@ -571,7 +583,7 @@ static void format_decoration(struct strbuf *sb, const struct commit *commit)
 	struct name_decoration *d;
 	const char *prefix = " (";
 
-	load_ref_decorations();
+	load_ref_decorations(DECORATE_SHORT_REFS);
 	d = lookup_decoration(&name_decoration, &commit->object);
 	while (d) {
 		strbuf_addstr(sb, prefix);
@@ -881,7 +893,7 @@ char *reencode_commit_message(const struct commit *commit, const char **encoding
 		    ? git_log_output_encoding
 		    : git_commit_encoding);
 	if (!encoding)
-		encoding = "utf-8";
+		encoding = "UTF-8";
 	if (encoding_p)
 		*encoding_p = encoding;
 	return logmsg_reencode(commit, encoding);

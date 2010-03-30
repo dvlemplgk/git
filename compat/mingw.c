@@ -1,5 +1,6 @@
 #include "../git-compat-util.h"
 #include "win32.h"
+#include <conio.h>
 #include "../strbuf.h"
 
 unsigned int _CRT_fmode = _O_BINARY;
@@ -525,8 +526,8 @@ static const char *parse_interpreter(const char *cmd)
 	if (buf[0] != '#' || buf[1] != '!')
 		return NULL;
 	buf[n] = '\0';
-	p = strchr(buf, '\n');
-	if (!p)
+	p = buf + strcspn(buf, "\r\n");
+	if (!*p)
 		return NULL;
 
 	*p = '\0';
@@ -1156,3 +1157,77 @@ int link(const char *oldpath, const char *newpath)
 	}
 	return 0;
 }
+
+char *getpass(const char *prompt)
+{
+	struct strbuf buf = STRBUF_INIT;
+
+	fputs(prompt, stderr);
+	for (;;) {
+		char c = _getch();
+		if (c == '\r' || c == '\n')
+			break;
+		strbuf_addch(&buf, c);
+	}
+	fputs("\n", stderr);
+	return strbuf_detach(&buf, NULL);
+}
+
+#ifndef NO_MINGW_REPLACE_READDIR
+/* MinGW readdir implementation to avoid extra lstats for Git */
+struct mingw_DIR
+{
+	struct _finddata_t	dd_dta;		/* disk transfer area for this dir */
+	struct mingw_dirent	dd_dir;		/* Our own implementation, including d_type */
+	long			dd_handle;	/* _findnext handle */
+	int			dd_stat; 	/* 0 = next entry to read is first entry, -1 = off the end, positive = 0 based index of next entry */
+	char			dd_name[1]; 	/* given path for dir with search pattern (struct is extended) */
+};
+
+struct dirent *mingw_readdir(DIR *dir)
+{
+	WIN32_FIND_DATAA buf;
+	HANDLE handle;
+	struct mingw_DIR *mdir = (struct mingw_DIR*)dir;
+
+	if (!dir->dd_handle) {
+		errno = EBADF; /* No set_errno for mingw */
+		return NULL;
+	}
+
+	if (dir->dd_handle == (long)INVALID_HANDLE_VALUE && dir->dd_stat == 0)
+	{
+		handle = FindFirstFileA(dir->dd_name, &buf);
+		DWORD lasterr = GetLastError();
+		dir->dd_handle = (long)handle;
+		if (handle == INVALID_HANDLE_VALUE && (lasterr != ERROR_NO_MORE_FILES)) {
+			errno = err_win_to_posix(lasterr);
+			return NULL;
+		}
+	} else if (dir->dd_handle == (long)INVALID_HANDLE_VALUE) {
+		return NULL;
+	} else if (!FindNextFileA((HANDLE)dir->dd_handle, &buf)) {
+		DWORD lasterr = GetLastError();
+		FindClose((HANDLE)dir->dd_handle);
+		dir->dd_handle = (long)INVALID_HANDLE_VALUE;
+		/* POSIX says you shouldn't set errno when readdir can't
+		   find any more files; so, if another error we leave it set. */
+		if (lasterr != ERROR_NO_MORE_FILES)
+			errno = err_win_to_posix(lasterr);
+		return NULL;
+	}
+
+	/* We get here if `buf' contains valid data.  */
+	strcpy(dir->dd_dir.d_name, buf.cFileName);
+	++dir->dd_stat;
+
+	/* Set file type, based on WIN32_FIND_DATA */
+	mdir->dd_dir.d_type = 0;
+	if (buf.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+		mdir->dd_dir.d_type |= DT_DIR;
+	else
+		mdir->dd_dir.d_type |= DT_REG;
+
+	return (struct dirent*)&dir->dd_dir;
+}
+#endif // !NO_MINGW_REPLACE_READDIR

@@ -256,7 +256,7 @@ apache2_conf () {
 	mkdir -p "$GIT_DIR/gitweb/logs"
 	bind=
 	test x"$local" = xtrue && bind='127.0.0.1:'
-	echo 'text/css css' > $fqgitdir/mime.types
+	echo 'text/css css' > "$fqgitdir/mime.types"
 	cat > "$conf" <<EOF
 ServerName "git-instaweb"
 ServerRoot "$fqgitdir/gitweb"
@@ -272,13 +272,13 @@ EOF
 		fi
 	done
 	cat >> "$conf" <<EOF
-TypesConfig $fqgitdir/mime.types
+TypesConfig "$fqgitdir/mime.types"
 DirectoryIndex gitweb.cgi
 EOF
 
 	# check to see if Dennis Stosberg's mod_perl compatibility patch
 	# (<20060621130708.Gcbc6e5c@leonov.stosberg.net>) has been applied
-	if test -f "$module_path/mod_perl.so" && grep '^our $gitbin' \
+	if test -f "$module_path/mod_perl.so" && grep 'MOD_PERL' \
 				"$GIT_DIR/gitweb/gitweb.cgi" >/dev/null
 	then
 		# favor mod_perl if available

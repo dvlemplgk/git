@@ -38,6 +38,8 @@ struct passwd {
 	char *pw_dir;
 };
 
+extern char *getpass(const char *prompt);
+
 struct pollfd {
 	int fd;           /* file descriptor */
 	short events;     /* requested events */
@@ -90,6 +92,8 @@ static inline int fcntl(int fd, int cmd, long arg)
 	errno = EINVAL;
 	return -1;
 }
+/* bash cannot reliably detect negative return codes as failure */
+#define exit(code) exit((code) & 0xff)
 
 /*
  * simple adaptors
@@ -109,7 +113,7 @@ static inline int mingw_unlink(const char *pathname)
 }
 #define unlink mingw_unlink
 
-static inline int waitpid(pid_t pid, unsigned *status, unsigned options)
+static inline int waitpid(pid_t pid, int *status, unsigned options)
 {
 	if (options == 0)
 		return _cwait(status, pid, 0);
@@ -233,3 +237,32 @@ int main(int argc, const char **argv) \
 	return mingw_main(argc, argv); \
 } \
 static int mingw_main(c,v)
+
+#ifndef NO_MINGW_REPLACE_READDIR
+/*
+ * A replacement of readdir, to ensure that it reads the file type at
+ * the same time. This avoid extra unneeded lstats in git on MinGW
+ */
+#undef DT_UNKNOWN
+#undef DT_DIR
+#undef DT_REG
+#undef DT_LNK
+#define DT_UNKNOWN	0
+#define DT_DIR		1
+#define DT_REG		2
+#define DT_LNK		3
+
+struct mingw_dirent
+{
+	long		d_ino;			/* Always zero. */
+	union {
+		unsigned short	d_reclen;	/* Always zero. */
+		unsigned char   d_type;		/* Reimplementation adds this */
+	};
+	unsigned short	d_namlen;		/* Length of name in d_name. */
+	char		d_name[FILENAME_MAX];	/* File name. */
+};
+#define dirent mingw_dirent
+#define readdir(x) mingw_readdir(x)
+struct dirent *mingw_readdir(DIR *dir);
+#endif // !NO_MINGW_REPLACE_READDIR

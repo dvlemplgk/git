@@ -9,10 +9,11 @@ SYNOPSIS
 --------
 [verse]
 'git stash' list [<options>]
-'git stash' (show | drop | pop ) [<stash>]
-'git stash' apply [--index] [<stash>]
+'git stash' show [<stash>]
+'git stash' drop [-q|--quiet] [<stash>]
+'git stash' ( pop | apply ) [--index] [-q|--quiet] [<stash>]
 'git stash' branch <branchname> [<stash>]
-'git stash' [save [--keep-index] [<message>]]
+'git stash' [save [--keep-index] [-q|--quiet] [<message>]]
 'git stash' clear
 'git stash' create
 
@@ -41,7 +42,7 @@ is also possible).
 OPTIONS
 -------
 
-save [--keep-index] [<message>]::
+save [--keep-index] [-q|--quiet] [<message>]::
 
 	Save your local modifications to a new 'stash', and run `git reset
 	--hard` to revert them.  This is the default action when no
@@ -75,7 +76,7 @@ show [<stash>]::
 	it will accept any format known to 'git-diff' (e.g., `git stash show
 	-p stash@\{1}` to view the second most recent stash in patch form).
 
-pop [<stash>]::
+pop [--index] [-q|--quiet] [<stash>]::
 
 	Remove a single stashed state from the stash list and apply it
 	on top of the current working tree state, i.e., do the inverse
@@ -86,16 +87,16 @@ Applying the state can fail with conflicts; in this case, it is not
 removed from the stash list. You need to resolve the conflicts by hand
 and call `git stash drop` manually afterwards.
 +
-When no `<stash>` is given, `stash@\{0}` is assumed. See also `apply`.
-
-apply [--index] [<stash>]::
-
-	Like `pop`, but do not remove the state from the stash list.
-+
 If the `--index` option is used, then tries to reinstate not only the working
 tree's changes, but also the index's ones. However, this can fail, when you
 have conflicts (which are stored in the index, where you therefore can no
 longer apply the changes as they were originally).
++
+When no `<stash>` is given, `stash@\{0}` is assumed.
+
+apply [--index] [-q|--quiet] [<stash>]::
+
+	Like `pop`, but do not remove the state from the stash list.
 
 branch <branchname> [<stash>]::
 
@@ -115,7 +116,7 @@ clear::
 	Remove all the stashed states. Note that those states will then
 	be subject to pruning, and may be difficult or impossible to recover.
 
-drop [<stash>]::
+drop [-q|--quiet] [<stash>]::
 
 	Remove a single stashed state from the stash list. When no `<stash>`
 	is given, it removes the latest one. i.e. `stash@\{0}`

@@ -88,13 +88,13 @@ static struct option builtin_commit_options[] = {
 	OPT__VERBOSE(&verbose),
 	OPT_GROUP("Commit message options"),
 
-	OPT_STRING('F', "file", &logfile, "FILE", "read log from file"),
+	OPT_FILENAME('F', "file", &logfile, "read log from file"),
 	OPT_STRING(0, "author", &force_author, "AUTHOR", "override author for commit"),
 	OPT_CALLBACK('m', "message", &message, "MESSAGE", "specify commit message", opt_parse_m),
 	OPT_STRING('c', "reedit-message", &edit_message, "COMMIT", "reuse and edit message from specified commit "),
 	OPT_STRING('C', "reuse-message", &use_message, "COMMIT", "reuse message from specified commit"),
 	OPT_BOOLEAN('s', "signoff", &signoff, "add Signed-off-by:"),
-	OPT_STRING('t', "template", &template_file, "FILE", "use specified template file"),
+	OPT_FILENAME('t', "template", &template_file, "use specified template file"),
 	OPT_BOOLEAN('e', "edit", &edit_flag, "force edit of commit"),
 
 	OPT_GROUP("Commit contents options"),
@@ -434,12 +434,12 @@ static int prepare_to_commit(const char *index_file, const char *prefix)
 		if (isatty(0))
 			fprintf(stderr, "(reading log message from standard input)\n");
 		if (strbuf_read(&sb, 0, 0) < 0)
-			die("could not read log from standard input");
+			die_errno("could not read log from standard input");
 		hook_arg1 = "message";
 	} else if (logfile) {
 		if (strbuf_read_file(&sb, logfile, 0) < 0)
-			die("could not read log file '%s': %s",
-			    logfile, strerror(errno));
+			die_errno("could not read log file '%s'",
+				  logfile);
 		hook_arg1 = "message";
 	} else if (use_message) {
 		buffer = strstr(use_message_buffer, "\n\n");
@@ -450,16 +450,15 @@ static int prepare_to_commit(const char *index_file, const char *prefix)
 		hook_arg2 = use_message;
 	} else if (!stat(git_path("MERGE_MSG"), &statbuf)) {
 		if (strbuf_read_file(&sb, git_path("MERGE_MSG"), 0) < 0)
-			die("could not read MERGE_MSG: %s", strerror(errno));
+			die_errno("could not read MERGE_MSG");
 		hook_arg1 = "merge";
 	} else if (!stat(git_path("SQUASH_MSG"), &statbuf)) {
 		if (strbuf_read_file(&sb, git_path("SQUASH_MSG"), 0) < 0)
-			die("could not read SQUASH_MSG: %s", strerror(errno));
+			die_errno("could not read SQUASH_MSG");
 		hook_arg1 = "squash";
 	} else if (template_file && !stat(template_file, &statbuf)) {
 		if (strbuf_read_file(&sb, template_file, 0) < 0)
-			die("could not read %s: %s",
-			    template_file, strerror(errno));
+			die_errno("could not read '%s'", template_file);
 		hook_arg1 = "template";
 	}
 
@@ -472,8 +471,7 @@ static int prepare_to_commit(const char *index_file, const char *prefix)
 
 	fp = fopen(git_path(commit_editmsg), "w");
 	if (fp == NULL)
-		die("could not open %s: %s",
-		    git_path(commit_editmsg), strerror(errno));
+		die_errno("could not open '%s'", git_path(commit_editmsg));
 
 	if (cleanup_mode != CLEANUP_NONE)
 		stripspace(&sb, 0);
@@ -497,7 +495,7 @@ static int prepare_to_commit(const char *index_file, const char *prefix)
 	}
 
 	if (fwrite(sb.buf, 1, sb.len, fp) < sb.len)
-		die("could not write commit template: %s", strerror(errno));
+		die_errno("could not write commit template");
 
 	strbuf_release(&sb);
 
@@ -697,13 +695,8 @@ static int parse_and_validate_options(int argc, const char *argv[],
 {
 	int f = 0;
 
-	argc = parse_options(argc, argv, builtin_commit_options, usage, 0);
-	logfile = parse_options_fix_filename(prefix, logfile);
-	if (logfile)
-		logfile = xstrdup(logfile);
-	template_file = parse_options_fix_filename(prefix, template_file);
-	if (template_file)
-		template_file = xstrdup(template_file);
+	argc = parse_options(argc, argv, prefix, builtin_commit_options, usage,
+			     0);
 
 	if (force_author && !strchr(force_author, '>'))
 		force_author = find_author_by_nickname(force_author);
@@ -945,8 +938,8 @@ int cmd_commit(int argc, const char **argv, const char *prefix)
 		pptr = &commit_list_insert(lookup_commit(head_sha1), pptr)->next;
 		fp = fopen(git_path("MERGE_HEAD"), "r");
 		if (fp == NULL)
-			die("could not open %s for reading: %s",
-			    git_path("MERGE_HEAD"), strerror(errno));
+			die_errno("could not open '%s' for reading",
+				  git_path("MERGE_HEAD"));
 		while (strbuf_getline(&m, fp, '\n') != EOF) {
 			unsigned char sha1[20];
 			if (get_sha1_hex(m.buf, sha1) < 0)
@@ -957,8 +950,7 @@ int cmd_commit(int argc, const char **argv, const char *prefix)
 		strbuf_release(&m);
 		if (!stat(git_path("MERGE_MODE"), &statbuf)) {
 			if (strbuf_read_file(&sb, git_path("MERGE_MODE"), 0) < 0)
-				die("could not read MERGE_MODE: %s",
-						strerror(errno));
+				die_errno("could not read MERGE_MODE");
 			if (!strcmp(sb.buf, "no-ff"))
 				allow_fast_forward = 0;
 		}
@@ -972,8 +964,9 @@ int cmd_commit(int argc, const char **argv, const char *prefix)
 	/* Finally, get the commit message */
 	strbuf_reset(&sb);
 	if (strbuf_read_file(&sb, git_path(commit_editmsg), 0) < 0) {
+		int saved_errno = errno;
 		rollback_index_files();
-		die("could not read commit message");
+		die("could not read commit message: %s", strerror(saved_errno));
 	}
 
 	/* Truncate the message just before the diff, if any. */

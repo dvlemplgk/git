@@ -161,12 +161,7 @@ static void show_files(struct dir_struct *dir, const char *prefix)
 
 	/* For cached/deleted files we don't need to even do the readdir */
 	if (show_others || show_killed) {
-		const char *path = ".", *base = "";
-		int baselen = prefix_len;
-
-		if (baselen)
-			path = base = prefix;
-		read_directory(dir, path, base, baselen, pathspec);
+		fill_directory(dir, pathspec);
 		if (show_others)
 			show_other_files(dir);
 		if (show_killed)
@@ -454,7 +449,7 @@ int cmd_ls_files(int argc, const char **argv, const char *prefix)
 		OPT_BIT(0, "directory", &dir.flags,
 			"show 'other' directories' name only",
 			DIR_SHOW_OTHER_DIRECTORIES),
-		OPT_BIT(0, "no-empty-directory", &dir.flags,
+		OPT_NEGBIT(0, "empty-directory", &dir.flags,
 			"don't show empty directories",
 			DIR_HIDE_EMPTY_DIRECTORIES),
 		OPT_BOOLEAN('u', "unmerged", &show_unmerged,
@@ -486,7 +481,7 @@ int cmd_ls_files(int argc, const char **argv, const char *prefix)
 		prefix_offset = strlen(prefix);
 	git_config(git_default_config, NULL);
 
-	argc = parse_options(argc, argv, builtin_ls_files_options,
+	argc = parse_options(argc, argv, prefix, builtin_ls_files_options,
 			ls_files_usage, 0);
 	if (show_tag || show_valid_bit) {
 		tag_cached = "H ";

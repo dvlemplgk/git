@@ -1170,7 +1170,7 @@ unsigned long unpack_object_header_buffer(const unsigned char *buf,
 	size = c & 15;
 	shift = 4;
 	while (c & 0x80) {
-		if (len <= used || sizeof(long) * 8 <= shift) {
+		if (len <= used || bitsizeof(long) <= shift) {
 			error("bad object header");
 			return 0;
 		}
@@ -2286,7 +2286,7 @@ static void close_sha1_file(int fd)
 	if (fsync_object_files)
 		fsync_or_die(fd, "sha1 file");
 	if (close(fd) != 0)
-		die("error when closing sha1 file (%s)", strerror(errno));
+		die_errno("error when closing sha1 file");
 }
 
 /* Size of directory component, including the ending '/' */

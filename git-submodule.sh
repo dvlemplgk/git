@@ -5,7 +5,7 @@
 # Copyright (c) 2007 Lars Hjemli
 
 USAGE="[--quiet] [--cached] \
-[add [-b branch] <repo> <path>]|[status|init|update [-i|--init] [-N|--no-fetch]|summary [-n|--summary-limit <n>] [<commit>]] \
+[add [-b branch] <repo> <path>]|[status|init|update [-i|--init] [-N|--no-fetch] [--rebase|--merge]|summary [-n|--summary-limit <n>] [<commit>]] \
 [--] [<path>...]|[foreach <command>]|[sync [--] [<path>...]]"
 OPTIONS_SPEC=
 . git-sh-setup
@@ -14,20 +14,10 @@ require_work_tree
 
 command=
 branch=
-quiet=
+reference=
 cached=
 nofetch=
-
-#
-# print stuff on stdout unless -q was specified
-#
-say()
-{
-	if test -z "$quiet"
-	then
-		echo "$@"
-	fi
-}
+update=
 
 # Resolve relative url by appending to parent's url
 resolve_relative_url ()
@@ -91,6 +81,7 @@ module_clone()
 {
 	path=$1
 	url=$2
+	reference="$3"
 
 	# If there already is a directory at the submodule path,
 	# expect it to be empty (since that is the default checkout
@@ -106,7 +97,12 @@ module_clone()
 	test -e "$path" &&
 	die "A file already exist at path '$path'"
 
-	git-clone -n "$url" "$path" ||
+	if test -n "$reference"
+	then
+		git-clone "$reference" -n "$url" "$path"
+	else
+		git-clone -n "$url" "$path"
+	fi ||
 	die "Clone of '$url' into submodule path '$path' failed"
 }
 
@@ -129,7 +125,16 @@ cmd_add()
 			shift
 			;;
 		-q|--quiet)
-			quiet=1
+			GIT_QUIET=1
+			;;
+		--reference)
+			case "$2" in '') usage ;; esac
+			reference="--reference=$2"
+			shift
+			;;
+		--reference=*)
+			reference="$1"
+			shift
 			;;
 		--)
 			shift
@@ -203,7 +208,7 @@ cmd_add()
 		git config submodule."$path".url "$url"
 	else
 
-		module_clone "$path" "$realrepo" || exit
+		module_clone "$path" "$realrepo" "$reference" || exit
 		(
 			unset GIT_DIR
 			cd "$path" &&
@@ -256,7 +261,7 @@ cmd_init()
 	do
 		case "$1" in
 		-q|--quiet)
-			quiet=1
+			GIT_QUIET=1
 			;;
 		--)
 			shift
@@ -294,6 +299,11 @@ cmd_init()
 		git config submodule."$name".url "$url" ||
 		die "Failed to register url for submodule path '$path'"
 
+		upd="$(git config -f .gitmodules submodule."$name".update)"
+		test -z "$upd" ||
+		git config submodule."$name".update "$upd" ||
+		die "Failed to register update mode for submodule path '$path'"
+
 		say "Submodule '$name' ($url) registered for path '$path'"
 	done
 }
@@ -311,15 +321,32 @@ cmd_update()
 		case "$1" in
 		-q|--quiet)
 			shift
-			quiet=1
+			GIT_QUIET=1
 			;;
 		-i|--init)
+			init=1
 			shift
-			cmd_init "$@" || return
 			;;
 		-N|--no-fetch)
 			shift
 			nofetch=1
+			;;
+		-r|--rebase)
+			shift
+			update="rebase"
+			;;
+		--reference)
+			case "$2" in '') usage ;; esac
+			reference="--reference=$2"
+			shift 2
+			;;
+		--reference=*)
+			reference="$1"
+			shift
+			;;
+		-m|--merge)
+			shift
+			update="merge"
 			;;
 		--)
 			shift
@@ -334,11 +361,17 @@ cmd_update()
 		esac
 	done
 
+	if test -n "$init"
+	then
+		cmd_init "--" "$@" || return
+	fi
+
 	module_list "$@" |
 	while read mode sha1 stage path
 	do
 		name=$(module_name "$path") || exit
 		url=$(git config submodule."$name".url)
+		update_module=$(git config submodule."$name".update)
 		if test -z "$url"
 		then
 			# Only mention uninitialized submodules when its
@@ -351,12 +384,17 @@ cmd_update()
 
 		if ! test -d "$path"/.git -o -f "$path"/.git
 		then
-			module_clone "$path" "$url" || exit
+			module_clone "$path" "$url" "$reference"|| exit
 			subsha1=
 		else
 			subsha1=$(unset GIT_DIR; cd "$path" &&
 				git rev-parse --verify HEAD) ||
 			die "Unable to find current revision in submodule path '$path'"
+		fi
+
+		if ! test -z "$update"
+		then
+			update_module=$update
 		fi
 
 		if test "$subsha1" != "$sha1"
@@ -374,11 +412,27 @@ cmd_update()
 				die "Unable to fetch in submodule path '$path'"
 			fi
 
-			(unset GIT_DIR; cd "$path" &&
-				  git-checkout $force -q "$sha1") ||
-			die "Unable to checkout '$sha1' in submodule path '$path'"
+			case "$update_module" in
+			rebase)
+				command="git rebase"
+				action="rebase"
+				msg="rebased onto"
+				;;
+			merge)
+				command="git merge"
+				action="merge"
+				msg="merged in"
+				;;
+			*)
+				command="git checkout $force -q"
+				action="checkout"
+				msg="checked out"
+				;;
+			esac
 
-			say "Submodule path '$path': checked out '$sha1'"
+			(unset GIT_DIR; cd "$path" && $command "$sha1") ||
+			die "Unable to $action '$sha1' in submodule path '$path'"
+			say "Submodule path '$path': $msg '$sha1'"
 		fi
 	done
 }
@@ -593,7 +647,7 @@ cmd_status()
 	do
 		case "$1" in
 		-q|--quiet)
-			quiet=1
+			GIT_QUIET=1
 			;;
 		--cached)
 			cached=1
@@ -647,7 +701,7 @@ cmd_sync()
 	do
 		case "$1" in
 		-q|--quiet)
-			quiet=1
+			GIT_QUIET=1
 			shift
 			;;
 		--)
@@ -702,7 +756,7 @@ do
 		command=$1
 		;;
 	-q|--quiet)
-		quiet=1
+		GIT_QUIET=1
 		;;
 	-b|--branch)
 		case "$2" in

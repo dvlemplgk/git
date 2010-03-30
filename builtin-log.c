@@ -18,6 +18,7 @@
 #include "shortlog.h"
 #include "remote.h"
 #include "string-list.h"
+#include "parse-options.h"
 
 /* Set a default date-time format for git log ("log.date" config variable) */
 static const char *default_date_mode = NULL;
@@ -30,6 +31,7 @@ static void cmd_log_init(int argc, const char **argv, const char *prefix,
 		      struct rev_info *rev)
 {
 	int i;
+	int decoration_style = 0;
 
 	rev->abbrev = DEFAULT_ABBREV;
 	rev->commit_format = CMIT_FMT_DEFAULT;
@@ -56,12 +58,23 @@ static void cmd_log_init(int argc, const char **argv, const char *prefix,
 	for (i = 1; i < argc; i++) {
 		const char *arg = argv[i];
 		if (!strcmp(arg, "--decorate")) {
-			load_ref_decorations();
-			rev->show_decorations = 1;
+			decoration_style = DECORATE_SHORT_REFS;
+		} else if (!prefixcmp(arg, "--decorate=")) {
+			const char *v = skip_prefix(arg, "--decorate=");
+			if (!strcmp(v, "full"))
+				decoration_style = DECORATE_FULL_REFS;
+			else if (!strcmp(v, "short"))
+				decoration_style = DECORATE_SHORT_REFS;
+			else
+				die("invalid --decorate option: %s", arg);
 		} else if (!strcmp(arg, "--source")) {
 			rev->show_source = 1;
 		} else
 			die("unrecognized argument: %s", arg);
+	}
+	if (decoration_style) {
+		rev->show_decorations = 1;
+		load_ref_decorations(decoration_style);
 	}
 }
 
@@ -93,7 +106,7 @@ static void show_early_header(struct rev_info *rev, const char *stage, int nr)
 	printf("Final output: %d %s\n", nr, stage);
 }
 
-struct itimerval early_output_timer;
+static struct itimerval early_output_timer;
 
 static void log_show_early(struct rev_info *revs, struct commit_list *list)
 {
@@ -256,7 +269,7 @@ static void show_tagger(char *buf, int len, struct rev_info *rev)
 	pp_user_info("Tagger", rev->commit_format, &out, buf, rev->date_mode,
 		git_log_output_encoding ?
 		git_log_output_encoding: git_commit_encoding);
-	printf("%s\n", out.buf);
+	printf("%s", out.buf);
 	strbuf_release(&out);
 }
 
@@ -328,11 +341,14 @@ int cmd_show(int argc, const char **argv, const char *prefix)
 		case OBJ_TAG: {
 			struct tag *t = (struct tag *)o;
 
+			if (rev.shown_one)
+				putchar('\n');
 			printf("%stag %s%s\n",
 					diff_get_color_opt(&rev.diffopt, DIFF_COMMIT),
 					t->tag,
 					diff_get_color_opt(&rev.diffopt, DIFF_RESET));
 			ret = show_object(o->sha1, 1, &rev);
+			rev.shown_one = 1;
 			if (ret)
 				break;
 			o = parse_object(t->tagged->sha1);
@@ -344,12 +360,15 @@ int cmd_show(int argc, const char **argv, const char *prefix)
 			break;
 		}
 		case OBJ_TREE:
+			if (rev.shown_one)
+				putchar('\n');
 			printf("%stree %s%s\n\n",
 					diff_get_color_opt(&rev.diffopt, DIFF_COMMIT),
 					name,
 					diff_get_color_opt(&rev.diffopt, DIFF_RESET));
 			read_tree_recursive((struct tree *)o, "", 0, 0, NULL,
 					show_tree_object, NULL);
+			rev.shown_one = 1;
 			break;
 		case OBJ_COMMIT:
 			rev.pending.nr = rev.pending.alloc = 0;
@@ -619,7 +638,7 @@ static void make_cover_letter(struct rev_info *rev, int use_stdout,
 	struct shortlog log;
 	struct strbuf sb = STRBUF_INIT;
 	int i;
-	const char *encoding = "utf-8";
+	const char *encoding = "UTF-8";
 	struct diff_options opts;
 	int need_8bit_cte = 0;
 	struct commit *commit = NULL;
@@ -656,6 +675,10 @@ static void make_cover_letter(struct rev_info *rev, int use_stdout,
 
 	log_write_email_headers(rev, head, &subject_start, &extra_headers,
 				&need_8bit_cte);
+
+	for (i = 0; !need_8bit_cte && i < nr; i++)
+		if (has_non_ascii(list[i]->buffer))
+			need_8bit_cte = 1;
 
 	msg = body;
 	pp_user_info(NULL, CMIT_FMT_EMAIL, &sb, committer, DATE_RFC2822,
@@ -740,27 +763,179 @@ static const char *set_outdir(const char *prefix, const char *output_directory)
 				       output_directory));
 }
 
+static const char * const builtin_format_patch_usage[] = {
+	"git format-patch [options] [<since> | <revision range>]",
+	NULL
+};
+
+static int keep_subject = 0;
+
+static int keep_callback(const struct option *opt, const char *arg, int unset)
+{
+	((struct rev_info *)opt->value)->total = -1;
+	keep_subject = 1;
+	return 0;
+}
+
+static int subject_prefix = 0;
+
+static int subject_prefix_callback(const struct option *opt, const char *arg,
+			    int unset)
+{
+	subject_prefix = 1;
+	((struct rev_info *)opt->value)->subject_prefix = arg;
+	return 0;
+}
+
+static int numbered_cmdline_opt = 0;
+
+static int numbered_callback(const struct option *opt, const char *arg,
+			     int unset)
+{
+	*(int *)opt->value = numbered_cmdline_opt = unset ? 0 : 1;
+	if (unset)
+		auto_number =  0;
+	return 0;
+}
+
+static int no_numbered_callback(const struct option *opt, const char *arg,
+				int unset)
+{
+	return numbered_callback(opt, arg, 1);
+}
+
+static int output_directory_callback(const struct option *opt, const char *arg,
+			      int unset)
+{
+	const char **dir = (const char **)opt->value;
+	if (*dir)
+		die("Two output directories?");
+	*dir = arg;
+	return 0;
+}
+
+static int thread_callback(const struct option *opt, const char *arg, int unset)
+{
+	int *thread = (int *)opt->value;
+	if (unset)
+		*thread = 0;
+	else if (!arg || !strcmp(arg, "shallow"))
+		*thread = THREAD_SHALLOW;
+	else if (!strcmp(arg, "deep"))
+		*thread = THREAD_DEEP;
+	else
+		return 1;
+	return 0;
+}
+
+static int attach_callback(const struct option *opt, const char *arg, int unset)
+{
+	struct rev_info *rev = (struct rev_info *)opt->value;
+	if (unset)
+		rev->mime_boundary = NULL;
+	else if (arg)
+		rev->mime_boundary = arg;
+	else
+		rev->mime_boundary = git_version_string;
+	rev->no_inline = unset ? 0 : 1;
+	return 0;
+}
+
+static int inline_callback(const struct option *opt, const char *arg, int unset)
+{
+	struct rev_info *rev = (struct rev_info *)opt->value;
+	if (unset)
+		rev->mime_boundary = NULL;
+	else if (arg)
+		rev->mime_boundary = arg;
+	else
+		rev->mime_boundary = git_version_string;
+	rev->no_inline = 0;
+	return 0;
+}
+
+static int header_callback(const struct option *opt, const char *arg, int unset)
+{
+	add_header(arg);
+	return 0;
+}
+
+static int cc_callback(const struct option *opt, const char *arg, int unset)
+{
+	ALLOC_GROW(extra_cc, extra_cc_nr + 1, extra_cc_alloc);
+	extra_cc[extra_cc_nr++] = xstrdup(arg);
+	return 0;
+}
+
 int cmd_format_patch(int argc, const char **argv, const char *prefix)
 {
 	struct commit *commit;
 	struct commit **list = NULL;
 	struct rev_info rev;
-	int nr = 0, total, i, j;
+	int nr = 0, total, i;
 	int use_stdout = 0;
 	int start_number = -1;
-	int keep_subject = 0;
 	int numbered_files = 0;		/* _just_ numbers */
-	int subject_prefix = 0;
 	int ignore_if_in_upstream = 0;
 	int cover_letter = 0;
 	int boundary_count = 0;
 	int no_binary_diff = 0;
-	int numbered_cmdline_opt = 0;
 	struct commit *origin = NULL, *head = NULL;
 	const char *in_reply_to = NULL;
 	struct patch_ids ids;
 	char *add_signoff = NULL;
 	struct strbuf buf = STRBUF_INIT;
+	const struct option builtin_format_patch_options[] = {
+		{ OPTION_CALLBACK, 'n', "numbered", &numbered, NULL,
+			    "use [PATCH n/m] even with a single patch",
+			    PARSE_OPT_NOARG, numbered_callback },
+		{ OPTION_CALLBACK, 'N', "no-numbered", &numbered, NULL,
+			    "use [PATCH] even with multiple patches",
+			    PARSE_OPT_NOARG, no_numbered_callback },
+		OPT_BOOLEAN('s', "signoff", &do_signoff, "add Signed-off-by:"),
+		OPT_BOOLEAN(0, "stdout", &use_stdout,
+			    "print patches to standard out"),
+		OPT_BOOLEAN(0, "cover-letter", &cover_letter,
+			    "generate a cover letter"),
+		OPT_BOOLEAN(0, "numbered-files", &numbered_files,
+			    "use simple number sequence for output file names"),
+		OPT_STRING(0, "suffix", &fmt_patch_suffix, "sfx",
+			    "use <sfx> instead of '.patch'"),
+		OPT_INTEGER(0, "start-number", &start_number,
+			    "start numbering patches at <n> instead of 1"),
+		{ OPTION_CALLBACK, 0, "subject-prefix", &rev, "prefix",
+			    "Use [<prefix>] instead of [PATCH]",
+			    PARSE_OPT_NONEG, subject_prefix_callback },
+		{ OPTION_CALLBACK, 'o', "output-directory", &output_directory,
+			    "dir", "store resulting files in <dir>",
+			    PARSE_OPT_NONEG, output_directory_callback },
+		{ OPTION_CALLBACK, 'k', "keep-subject", &rev, NULL,
+			    "don't strip/add [PATCH]",
+			    PARSE_OPT_NOARG | PARSE_OPT_NONEG, keep_callback },
+		OPT_BOOLEAN(0, "no-binary", &no_binary_diff,
+			    "don't output binary diffs"),
+		OPT_BOOLEAN(0, "ignore-if-in-upstream", &ignore_if_in_upstream,
+			    "don't include a patch matching a commit upstream"),
+		OPT_GROUP("Messaging"),
+		{ OPTION_CALLBACK, 0, "add-header", NULL, "header",
+			    "add email header", PARSE_OPT_NONEG,
+			    header_callback },
+		{ OPTION_CALLBACK, 0, "cc", NULL, "email", "add Cc: header",
+			    PARSE_OPT_NONEG, cc_callback },
+		OPT_STRING(0, "in-reply-to", &in_reply_to, "message-id",
+			    "make first mail a reply to <message-id>"),
+		{ OPTION_CALLBACK, 0, "attach", &rev, "boundary",
+			    "attach the patch", PARSE_OPT_OPTARG,
+			    attach_callback },
+		{ OPTION_CALLBACK, 0, "inline", &rev, "boundary",
+			    "inline the patch",
+			    PARSE_OPT_OPTARG | PARSE_OPT_NONEG,
+			    inline_callback },
+		{ OPTION_CALLBACK, 0, "thread", &thread, "style",
+			    "enable message threading, styles: shallow, deep",
+			    PARSE_OPT_OPTARG, thread_callback },
+		OPT_END()
+	};
 
 	git_config(git_format_config, NULL);
 	init_revisions(&rev, prefix);
@@ -783,102 +958,9 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 	 * like "git format-patch -o a123 HEAD^.." may fail; a123 is
 	 * possibly a valid SHA1.
 	 */
-	for (i = 1, j = 1; i < argc; i++) {
-		if (!strcmp(argv[i], "--stdout"))
-			use_stdout = 1;
-		else if (!strcmp(argv[i], "-n") ||
-				!strcmp(argv[i], "--numbered")) {
-			numbered = 1;
-			numbered_cmdline_opt = 1;
-		}
-		else if (!strcmp(argv[i], "-N") ||
-				!strcmp(argv[i], "--no-numbered")) {
-			numbered = 0;
-			auto_number = 0;
-		}
-		else if (!prefixcmp(argv[i], "--start-number="))
-			start_number = strtol(argv[i] + 15, NULL, 10);
-		else if (!strcmp(argv[i], "--numbered-files"))
-			numbered_files = 1;
-		else if (!strcmp(argv[i], "--start-number")) {
-			i++;
-			if (i == argc)
-				die("Need a number for --start-number");
-			start_number = strtol(argv[i], NULL, 10);
-		}
-		else if (!prefixcmp(argv[i], "--cc=")) {
-			ALLOC_GROW(extra_cc, extra_cc_nr + 1, extra_cc_alloc);
-			extra_cc[extra_cc_nr++] = xstrdup(argv[i] + 5);
-		}
-		else if (!strcmp(argv[i], "-k") ||
-				!strcmp(argv[i], "--keep-subject")) {
-			keep_subject = 1;
-			rev.total = -1;
-		}
-		else if (!strcmp(argv[i], "--output-directory") ||
-			 !strcmp(argv[i], "-o")) {
-			i++;
-			if (argc <= i)
-				die("Which directory?");
-			if (output_directory)
-				die("Two output directories?");
-			output_directory = argv[i];
-		}
-		else if (!strcmp(argv[i], "--signoff") ||
-			 !strcmp(argv[i], "-s")) {
-			do_signoff = 1;
-		}
-		else if (!strcmp(argv[i], "--attach")) {
-			rev.mime_boundary = git_version_string;
-			rev.no_inline = 1;
-		}
-		else if (!prefixcmp(argv[i], "--attach=")) {
-			rev.mime_boundary = argv[i] + 9;
-			rev.no_inline = 1;
-		}
-		else if (!strcmp(argv[i], "--no-attach")) {
-			rev.mime_boundary = NULL;
-			rev.no_inline = 0;
-		}
-		else if (!strcmp(argv[i], "--inline")) {
-			rev.mime_boundary = git_version_string;
-			rev.no_inline = 0;
-		}
-		else if (!prefixcmp(argv[i], "--inline=")) {
-			rev.mime_boundary = argv[i] + 9;
-			rev.no_inline = 0;
-		}
-		else if (!strcmp(argv[i], "--ignore-if-in-upstream"))
-			ignore_if_in_upstream = 1;
-		else if (!strcmp(argv[i], "--thread")
-			|| !strcmp(argv[i], "--thread=shallow"))
-			thread = THREAD_SHALLOW;
-		else if (!strcmp(argv[i], "--thread=deep"))
-			thread = THREAD_DEEP;
-		else if (!strcmp(argv[i], "--no-thread"))
-			thread = 0;
-		else if (!prefixcmp(argv[i], "--in-reply-to="))
-			in_reply_to = argv[i] + 14;
-		else if (!strcmp(argv[i], "--in-reply-to")) {
-			i++;
-			if (i == argc)
-				die("Need a Message-Id for --in-reply-to");
-			in_reply_to = argv[i];
-		} else if (!prefixcmp(argv[i], "--subject-prefix=")) {
-			subject_prefix = 1;
-			rev.subject_prefix = argv[i] + 17;
-		} else if (!prefixcmp(argv[i], "--suffix="))
-			fmt_patch_suffix = argv[i] + 9;
-		else if (!strcmp(argv[i], "--cover-letter"))
-			cover_letter = 1;
-		else if (!strcmp(argv[i], "--no-binary"))
-			no_binary_diff = 1;
-		else if (!prefixcmp(argv[i], "--add-header="))
-			add_header(argv[i] + 13);
-		else
-			argv[j++] = argv[i];
-	}
-	argc = j;
+	argc = parse_options(argc, argv, prefix, builtin_format_patch_options,
+			     builtin_format_patch_usage,
+			     PARSE_OPT_KEEP_ARGV0 | PARSE_OPT_KEEP_UNKNOWN);
 
 	if (do_signoff) {
 		const char *committer;
@@ -917,7 +999,7 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 		strbuf_addch(&buf, '\n');
 	}
 
-	rev.extra_headers = strbuf_detach(&buf, 0);
+	rev.extra_headers = strbuf_detach(&buf, NULL);
 
 	if (start_number < 0)
 		start_number = 1;
@@ -953,8 +1035,8 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 		if (use_stdout)
 			die("standard output, or directory, which one?");
 		if (mkdir(output_directory, 0777) < 0 && errno != EEXIST)
-			die("Could not create directory %s",
-			    output_directory);
+			die_errno("Could not create directory '%s'",
+				  output_directory);
 	}
 
 	if (rev.pending.nr == 1) {

@@ -25,6 +25,8 @@ static int add_ref_decoration(const char *refname, const unsigned char *sha1, in
 	struct object *obj = parse_object(sha1);
 	if (!obj)
 		return 0;
+	if (!cb_data || *(int *)cb_data == DECORATE_SHORT_REFS)
+		refname = prettify_refname(refname);
 	add_name_decoration("", refname, obj);
 	while (obj->type == OBJ_TAG) {
 		obj = ((struct tag *)obj)->tagged;
@@ -35,12 +37,12 @@ static int add_ref_decoration(const char *refname, const unsigned char *sha1, in
 	return 0;
 }
 
-void load_ref_decorations(void)
+void load_ref_decorations(int flags)
 {
 	static int loaded;
 	if (!loaded) {
 		loaded = 1;
-		for_each_ref(add_ref_decoration, NULL);
+		for_each_ref(add_ref_decoration, &flags);
 	}
 }
 
@@ -165,18 +167,6 @@ static unsigned int digits_in_number(unsigned int number)
 		result++;
 	}
 	return result;
-}
-
-static int has_non_ascii(const char *s)
-{
-	int ch;
-	if (!s)
-		return 0;
-	while ((ch = *s++) != '\0') {
-		if (non_ascii(ch))
-			return 1;
-	}
-	return 0;
 }
 
 void get_patch_filename(struct commit *commit, int nr, const char *suffix,
@@ -320,7 +310,8 @@ void show_log(struct rev_info *opt)
 	}
 
 	/*
-	 * If use_terminator is set, add a newline at the end of the entry.
+	 * If use_terminator is set, we already handled any record termination
+	 * at the end of the last record.
 	 * Otherwise, add a diffopt.line_termination character before all
 	 * entries but the first.  (IOW, as a separator between entries)
 	 */
