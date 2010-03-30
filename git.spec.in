@@ -97,7 +97,7 @@ BuildRequires:  perl > 5.8
 %description -n perl-Git
 Perl interface to Git
 
-%define path_settings ETC_GITCONFIG=/etc/gitconfig prefix=%{_prefix} mandir=%{_mandir} htmldir=%{_docdir}/%{name}-%{version}
+%define path_settings ETC_GITCONFIG=/etc/gitconfig prefix=%{_prefix} mandir=%{_mandir} htmldir=%{_docdir}/%{name}-%{version} gitexecdir=%{_libexecdir}/git-core
 
 %prep
 %setup -q
