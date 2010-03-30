@@ -16,12 +16,13 @@ test_expect_success setup '
 		echo foo mmap bar_mmap
 		echo foo_mmap bar mmap baz
 	} >file &&
+	echo ww w >w &&
 	echo x x xx x >x &&
 	echo y yy >y &&
 	echo zzz > z &&
 	mkdir t &&
 	echo test >t/t &&
-	git add file x y z t/t &&
+	git add file w x y z t/t &&
 	test_tick &&
 	git commit -m initial
 '
@@ -46,6 +47,12 @@ do
 		} >expected &&
 		git grep -n -w -e mmap $H >actual &&
 		diff expected actual
+	'
+
+	test_expect_success "grep -w $L (w)" '
+		: >expected &&
+		! git grep -n -w -e "^w" >actual &&
+		test_cmp expected actual
 	'
 
 	test_expect_success "grep -w $L (x)" '
@@ -117,6 +124,36 @@ do
         '
 
 done
+
+cat >expected <<EOF
+file:foo mmap bar_mmap
+EOF
+
+test_expect_success 'grep -e A --and -e B' '
+	git grep -e "foo mmap" --and -e bar_mmap >actual &&
+	test_cmp expected actual
+'
+
+cat >expected <<EOF
+file:foo_mmap bar mmap
+file:foo_mmap bar mmap baz
+EOF
+
+
+test_expect_success 'grep ( -e A --or -e B ) --and -e B' '
+	git grep \( -e foo_ --or -e baz \) \
+		--and -e " mmap" >actual &&
+	test_cmp expected actual
+'
+
+cat >expected <<EOF
+file:foo mmap bar
+EOF
+
+test_expect_success 'grep -e A --and --not -e B' '
+	git grep -e "foo mmap" --and --not -e bar_mmap >actual &&
+	test_cmp expected actual
+'
 
 test_expect_success 'log grep setup' '
 	echo a >>file &&

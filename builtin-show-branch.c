@@ -365,8 +365,7 @@ static int append_ref(const char *refname, const unsigned char *sha1,
 				return 0;
 	}
 	if (MAX_REVS <= ref_name_cnt) {
-		fprintf(stderr, "warning: ignoring %s; "
-			"cannot handle more than %d refs\n",
+		warning("ignoring %s; cannot handle more than %d refs",
 			refname, MAX_REVS);
 		return 0;
 	}
@@ -577,7 +576,7 @@ static void parse_reflog_param(const char *arg, int *cnt, const char **base)
 	if (*ep == ',')
 		*base = ep + 1;
 	else if (*ep)
-		die("unrecognized reflog param '%s'", arg + 9);
+		die("unrecognized reflog param '%s'", arg);
 	else
 		*base = NULL;
 	if (*cnt <= 0)

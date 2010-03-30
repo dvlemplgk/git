@@ -232,7 +232,7 @@ static void free_base_data(struct base_data *c)
 
 static void prune_base_data(struct base_data *retain)
 {
-	struct base_data *b = base_cache;
+	struct base_data *b;
 	for (b = base_cache;
 	     base_cache_used > delta_base_cache_limit && b;
 	     b = b->child) {
@@ -293,8 +293,8 @@ static void *unpack_entry_data(unsigned long offset, unsigned long size)
 
 static void *unpack_raw_entry(struct object_entry *obj, union delta_base *delta_base)
 {
-	unsigned char *p, c;
-	unsigned long size;
+	unsigned char *p;
+	unsigned long size, c;
 	off_t base_offset;
 	unsigned shift;
 	void *data;
@@ -312,7 +312,7 @@ static void *unpack_raw_entry(struct object_entry *obj, union delta_base *delta_
 		p = fill(1);
 		c = *p;
 		use(1);
-		size += (c & 0x7fUL) << shift;
+		size += (c & 0x7f) << shift;
 		shift += 7;
 	}
 	obj->size = size;

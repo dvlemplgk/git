@@ -30,14 +30,14 @@ int diff_auto_refresh_index = 1;
 static int diff_mnemonic_prefix;
 
 static char diff_colors[][COLOR_MAXLEN] = {
-	"\033[m",	/* reset */
-	"",		/* PLAIN (normal) */
-	"\033[1m",	/* METAINFO (bold) */
-	"\033[36m",	/* FRAGINFO (cyan) */
-	"\033[31m",	/* OLD (red) */
-	"\033[32m",	/* NEW (green) */
-	"\033[33m",	/* COMMIT (yellow) */
-	"\033[41m",	/* WHITESPACE (red background) */
+	GIT_COLOR_RESET,
+	GIT_COLOR_NORMAL,	/* PLAIN */
+	GIT_COLOR_BOLD,		/* METAINFO */
+	GIT_COLOR_CYAN,		/* FRAGINFO */
+	GIT_COLOR_RED,		/* OLD */
+	GIT_COLOR_GREEN,	/* NEW */
+	GIT_COLOR_YELLOW,	/* COMMIT */
+	GIT_COLOR_BG_RED,	/* WHITESPACE */
 };
 
 static void diff_filespec_load_driver(struct diff_filespec *one);
@@ -62,6 +62,15 @@ static int parse_diff_color_slot(const char *var, int ofs)
 	die("bad config variable '%s'", var);
 }
 
+static int git_config_rename(const char *var, const char *value)
+{
+	if (!value)
+		return DIFF_DETECT_RENAME;
+	if (!strcasecmp(value, "copies") || !strcasecmp(value, "copy"))
+		return  DIFF_DETECT_COPY;
+	return git_config_bool(var,value) ? DIFF_DETECT_RENAME : 0;
+}
+
 /*
  * These are to give UI layer defaults.
  * The core-level commands such as git-diff-files should
@@ -75,13 +84,7 @@ int git_diff_ui_config(const char *var, const char *value, void *cb)
 		return 0;
 	}
 	if (!strcmp(var, "diff.renames")) {
-		if (!value)
-			diff_detect_rename_default = DIFF_DETECT_RENAME;
-		else if (!strcasecmp(value, "copies") ||
-			 !strcasecmp(value, "copy"))
-			diff_detect_rename_default = DIFF_DETECT_COPY;
-		else if (git_config_bool(var,value))
-			diff_detect_rename_default = DIFF_DETECT_RENAME;
+		diff_detect_rename_default = git_config_rename(var, value);
 		return 0;
 	}
 	if (!strcmp(var, "diff.autorefreshindex")) {
@@ -186,7 +189,7 @@ static void remove_tempfile(void)
 	int i;
 	for (i = 0; i < ARRAY_SIZE(diff_temp); i++) {
 		if (diff_temp[i].name == diff_temp[i].tmp_path)
-			unlink(diff_temp[i].name);
+			unlink_or_warn(diff_temp[i].name);
 		diff_temp[i].name = NULL;
 	}
 }
@@ -873,9 +876,9 @@ static void fill_print_name(struct diffstat_file *file)
 	file->print_name = pname;
 }
 
-static void show_stats(struct diffstat_t* data, struct diff_options *options)
+static void show_stats(struct diffstat_t *data, struct diff_options *options)
 {
-	int i, len, add, del, total, adds = 0, dels = 0;
+	int i, len, add, del, adds = 0, dels = 0;
 	int max_change = 0, max_len = 0;
 	int total_files = data->nr;
 	int width, name_width;
@@ -978,14 +981,12 @@ static void show_stats(struct diffstat_t* data, struct diff_options *options)
 		 */
 		add = added;
 		del = deleted;
-		total = add + del;
 		adds += add;
 		dels += del;
 
 		if (width <= max_change) {
 			add = scale_linear(add, width, max_change);
 			del = scale_linear(del, width, max_change);
-			total = add + del;
 		}
 		show_name(options->file, prefix, name, len, reset, set);
 		fprintf(options->file, "%5d%s", added + deleted,
@@ -1024,7 +1025,7 @@ static void show_shortstats(struct diffstat_t* data, struct diff_options *option
 	       total_files, adds, dels);
 }
 
-static void show_numstat(struct diffstat_t* data, struct diff_options *options)
+static void show_numstat(struct diffstat_t *data, struct diff_options *options)
 {
 	int i;
 
@@ -2582,13 +2583,13 @@ int diff_opt_parse(struct diff_options *options, const char **av, int ac)
 
 	/* xdiff options */
 	else if (!strcmp(arg, "-w") || !strcmp(arg, "--ignore-all-space"))
-		options->xdl_opts |= XDF_IGNORE_WHITESPACE;
+		DIFF_XDL_SET(options, IGNORE_WHITESPACE);
 	else if (!strcmp(arg, "-b") || !strcmp(arg, "--ignore-space-change"))
-		options->xdl_opts |= XDF_IGNORE_WHITESPACE_CHANGE;
+		DIFF_XDL_SET(options, IGNORE_WHITESPACE_CHANGE);
 	else if (!strcmp(arg, "--ignore-space-at-eol"))
-		options->xdl_opts |= XDF_IGNORE_WHITESPACE_AT_EOL;
+		DIFF_XDL_SET(options, IGNORE_WHITESPACE_AT_EOL);
 	else if (!strcmp(arg, "--patience"))
-		options->xdl_opts |= XDF_PATIENCE_DIFF;
+		DIFF_XDL_SET(options, PATIENCE_DIFF);
 
 	/* flags options */
 	else if (!strcmp(arg, "--binary")) {
@@ -2609,10 +2610,13 @@ int diff_opt_parse(struct diff_options *options, const char **av, int ac)
 		DIFF_OPT_SET(options, COLOR_DIFF);
 	else if (!strcmp(arg, "--no-color"))
 		DIFF_OPT_CLR(options, COLOR_DIFF);
-	else if (!strcmp(arg, "--color-words"))
-		options->flags |= DIFF_OPT_COLOR_DIFF | DIFF_OPT_COLOR_DIFF_WORDS;
+	else if (!strcmp(arg, "--color-words")) {
+		DIFF_OPT_SET(options, COLOR_DIFF);
+		DIFF_OPT_SET(options, COLOR_DIFF_WORDS);
+	}
 	else if (!prefixcmp(arg, "--color-words=")) {
-		options->flags |= DIFF_OPT_COLOR_DIFF | DIFF_OPT_COLOR_DIFF_WORDS;
+		DIFF_OPT_SET(options, COLOR_DIFF);
+		DIFF_OPT_SET(options, COLOR_DIFF_WORDS);
 		options->word_regex = arg + 14;
 	}
 	else if (!strcmp(arg, "--exit-code"))
@@ -3586,6 +3590,7 @@ static char *run_textconv(const char *pgm, struct diff_filespec *spec,
 	if (start_command(&child) != 0 ||
 	    strbuf_read(&buf, child.out, 0) < 0 ||
 	    finish_command(&child) != 0) {
+		strbuf_release(&buf);
 		remove_tempfile();
 		error("error running textconv command '%s'", pgm);
 		return NULL;

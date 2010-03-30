@@ -53,7 +53,7 @@ int common_prefix(const char **pathspec)
 }
 
 /*
- * Does 'match' matches the given name?
+ * Does 'match' match the given name?
  * A match is found if
  *
  * (1) the 'match' string is leading directory of 'name', or
@@ -156,7 +156,7 @@ void add_exclude(const char *string, const char *base,
 	if (len && string[len - 1] == '/') {
 		char *s;
 		x = xmalloc(sizeof(*x) + len);
-		s = (char*)(x+1);
+		s = (char *)(x+1);
 		memcpy(s, string, len - 1);
 		s[len - 1] = '\0';
 		string = s;
@@ -290,7 +290,7 @@ static void prep_exclude(struct dir_struct *dir, const char *base, int baselen)
 	dir->basebuf[baselen] = '\0';
 }
 
-/* Scan the list and let the last match determines the fate.
+/* Scan the list and let the last match determine the fate.
  * Return 1 for exclude, 0 for include and -1 for undecided.
  */
 static int excluded_1(const char *pathname,
@@ -487,14 +487,14 @@ static enum directory_treatment treat_directory(struct dir_struct *dir,
 		return recurse_into_directory;
 
 	case index_gitdir:
-		if (dir->show_other_directories)
+		if (dir->flags & DIR_SHOW_OTHER_DIRECTORIES)
 			return ignore_directory;
 		return show_directory;
 
 	case index_nonexistent:
-		if (dir->show_other_directories)
+		if (dir->flags & DIR_SHOW_OTHER_DIRECTORIES)
 			break;
-		if (!dir->no_gitlinks) {
+		if (!(dir->flags & DIR_NO_GITLINKS)) {
 			unsigned char sha1[20];
 			if (resolve_gitlink_ref(dirname, "HEAD", sha1) == 0)
 				return show_directory;
@@ -503,7 +503,7 @@ static enum directory_treatment treat_directory(struct dir_struct *dir,
 	}
 
 	/* This is the "show_other_directories" case */
-	if (!dir->hide_empty_directories)
+	if (!(dir->flags & DIR_HIDE_EMPTY_DIRECTORIES))
 		return show_directory;
 	if (!read_directory_recursive(dir, dirname, dirname, len, 1, simplify))
 		return ignore_directory;
@@ -576,7 +576,7 @@ static int get_dtype(struct dirent *de, const char *path)
  */
 static int read_directory_recursive(struct dir_struct *dir, const char *path, const char *base, int baselen, int check_only, const struct path_simplify *simplify)
 {
-	DIR *fdir = opendir(path);
+	DIR *fdir = opendir(*path ? path : ".");
 	int contents = 0;
 
 	if (fdir) {
@@ -601,7 +601,7 @@ static int read_directory_recursive(struct dir_struct *dir, const char *path, co
 
 			dtype = DTYPE(de);
 			exclude = excluded(dir, fullname, &dtype);
-			if (exclude && dir->collect_ignored
+			if (exclude && (dir->flags & DIR_COLLECT_IGNORED)
 			    && in_pathspec(fullname, baselen + len, simplify))
 				dir_add_ignored(dir, fullname, baselen + len);
 
@@ -609,7 +609,7 @@ static int read_directory_recursive(struct dir_struct *dir, const char *path, co
 			 * Excluded? If we don't explicitly want to show
 			 * ignored files, ignore it
 			 */
-			if (exclude && !dir->show_ignored)
+			if (exclude && !(dir->flags & DIR_SHOW_IGNORED))
 				continue;
 
 			if (dtype == DT_UNKNOWN)
@@ -621,7 +621,7 @@ static int read_directory_recursive(struct dir_struct *dir, const char *path, co
 			 * even if we don't ignore them, since the
 			 * directory may contain files that we do..
 			 */
-			if (!exclude && dir->show_ignored) {
+			if (!exclude && (dir->flags & DIR_SHOW_IGNORED)) {
 				if (dtype != DT_DIR)
 					continue;
 			}
@@ -634,7 +634,8 @@ static int read_directory_recursive(struct dir_struct *dir, const char *path, co
 				len++;
 				switch (treat_directory(dir, fullname, baselen + len, simplify)) {
 				case show_directory:
-					if (exclude != dir->show_ignored)
+					if (exclude != !!(dir->flags
+							& DIR_SHOW_IGNORED))
 						continue;
 					break;
 				case recurse_into_directory:
@@ -720,7 +721,7 @@ int read_directory(struct dir_struct *dir, const char *path, const char *base, i
 {
 	struct path_simplify *simplify;
 
-	if (has_symlink_leading_path(strlen(path), path))
+	if (has_symlink_leading_path(path, strlen(path)))
 		return dir->nr;
 
 	simplify = create_simplify(pathspec);

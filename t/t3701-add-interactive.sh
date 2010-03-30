@@ -3,6 +3,11 @@
 test_description='add -i basic tests'
 . ./test-lib.sh
 
+if ! test_have_prereq PERL; then
+	say 'skipping git add -i tests, perl not available'
+	test_done
+fi
+
 test_expect_success 'setup (initial)' '
 	echo content >file &&
 	git add file &&
@@ -135,10 +140,12 @@ test_expect_success 'real edit works' '
 
 if test "$(git config --bool core.filemode)" = false
 then
-    say 'skipping filemode tests (filesystem does not properly support modes)'
+	say 'skipping filemode tests (filesystem does not properly support modes)'
 else
+	test_set_prereq FILEMODE
+fi
 
-test_expect_success 'patch does not affect mode' '
+test_expect_success FILEMODE 'patch does not affect mode' '
 	git reset --hard &&
 	echo content >>file &&
 	chmod +x file &&
@@ -147,7 +154,7 @@ test_expect_success 'patch does not affect mode' '
 	git diff file | grep "new mode"
 '
 
-test_expect_success 'stage mode but not hunk' '
+test_expect_success FILEMODE 'stage mode but not hunk' '
 	git reset --hard &&
 	echo content >>file &&
 	chmod +x file &&
@@ -156,7 +163,44 @@ test_expect_success 'stage mode but not hunk' '
 	git diff          file | grep "+content"
 '
 
-fi
 # end of tests disabled when filemode is not usable
+
+test_expect_success 'setup again' '
+	git reset --hard &&
+	test_chmod +x file &&
+	echo content >>file
+'
+
+# Write the patch file with a new line at the top and bottom
+cat >patch <<EOF
+index 180b47c..b6f2c08 100644
+--- a/file
++++ b/file
+@@ -1,2 +1,4 @@
++firstline
+ baseline
+ content
++lastline
+EOF
+# Expected output, similar to the patch but w/ diff at the top
+cat >expected <<EOF
+diff --git a/file b/file
+index b6f2c08..61b9053 100755
+--- a/file
++++ b/file
+@@ -1,2 +1,4 @@
++firstline
+ baseline
+ content
++lastline
+EOF
+# Test splitting the first patch, then adding both
+test_expect_success 'add first line works' '
+	git commit -am "clear local changes" &&
+	git apply patch &&
+	(echo s; echo y; echo y) | git add -p file &&
+	git diff --cached > diff &&
+	test_cmp expected diff
+'
 
 test_done

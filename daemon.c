@@ -229,7 +229,7 @@ static char *path_ok(char *directory)
 	}
 
 	if (!path) {
-		logerror("'%s': unable to chdir or not a git archive", dir);
+		logerror("'%s' does not appear to be a git repository", dir);
 		return NULL;
 	}
 
@@ -406,15 +406,15 @@ static char *xstrdup_tolower(const char *str)
 }
 
 /*
- * Separate the "extra args" information as supplied by the client connection.
+ * Read the host as supplied by the client connection.
  */
-static void parse_extra_args(char *extra_args, int buflen)
+static void parse_host_arg(char *extra_args, int buflen)
 {
 	char *val;
 	int vallen;
 	char *end = extra_args + buflen;
 
-	while (extra_args < end && *extra_args) {
+	if (extra_args < end && *extra_args) {
 		saw_extended_args = 1;
 		if (strncasecmp("host=", extra_args, 5) == 0) {
 			val = extra_args + 5;
@@ -436,6 +436,8 @@ static void parse_extra_args(char *extra_args, int buflen)
 			/* On to the next one */
 			extra_args = val + vallen;
 		}
+		if (extra_args < end && *extra_args)
+			die("Invalid request");
 	}
 
 	/*
@@ -444,27 +446,27 @@ static void parse_extra_args(char *extra_args, int buflen)
 	if (hostname) {
 #ifndef NO_IPV6
 		struct addrinfo hints;
-		struct addrinfo *ai, *ai0;
+		struct addrinfo *ai;
 		int gai;
 		static char addrbuf[HOST_NAME_MAX + 1];
 
 		memset(&hints, 0, sizeof(hints));
 		hints.ai_flags = AI_CANONNAME;
 
-		gai = getaddrinfo(hostname, 0, &hints, &ai0);
+		gai = getaddrinfo(hostname, 0, &hints, &ai);
 		if (!gai) {
-			for (ai = ai0; ai; ai = ai->ai_next) {
-				struct sockaddr_in *sin_addr = (void *)ai->ai_addr;
+			struct sockaddr_in *sin_addr = (void *)ai->ai_addr;
 
-				inet_ntop(AF_INET, &sin_addr->sin_addr,
-					  addrbuf, sizeof(addrbuf));
-				free(canon_hostname);
-				canon_hostname = xstrdup(ai->ai_canonname);
-				free(ip_address);
-				ip_address = xstrdup(addrbuf);
-				break;
-			}
-			freeaddrinfo(ai0);
+			inet_ntop(AF_INET, &sin_addr->sin_addr,
+				  addrbuf, sizeof(addrbuf));
+			free(ip_address);
+			ip_address = xstrdup(addrbuf);
+
+			free(canon_hostname);
+			canon_hostname = xstrdup(ai->ai_canonname ?
+						 ai->ai_canonname : ip_address);
+
+			freeaddrinfo(ai);
 		}
 #else
 		struct hostent *hent;
@@ -545,7 +547,7 @@ static int execute(struct sockaddr *addr)
 	hostname = canon_hostname = ip_address = tcp_port = NULL;
 
 	if (len != pktlen)
-		parse_extra_args(line + len + 1, pktlen - len - 1);
+		parse_host_arg(line + len + 1, pktlen - len - 1);
 
 	for (i = 0; i < ARRAY_SIZE(daemon_service); i++) {
 		struct daemon_service *s = &(daemon_service[i]);

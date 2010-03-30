@@ -420,7 +420,7 @@ do_next () {
 	NEWHEAD=$(git rev-parse HEAD) &&
 	case $HEADNAME in
 	refs/*)
-		message="$GIT_REFLOG_ACTION: $HEADNAME onto $SHORTONTO)" &&
+		message="$GIT_REFLOG_ACTION: $HEADNAME onto $SHORTONTO" &&
 		git update-ref -m "$message" $HEADNAME $NEWHEAD $OLDHEAD &&
 		git symbolic-ref HEAD $HEADNAME
 		;;
@@ -440,6 +440,30 @@ do_rest () {
 	do
 		do_next
 	done
+}
+
+# skip picking commits whose parents are unchanged
+skip_unnecessary_picks () {
+	fd=3
+	while read command sha1 rest
+	do
+		# fd=3 means we skip the command
+		case "$fd,$command,$(git rev-parse --verify --quiet $sha1^)" in
+		3,pick,"$ONTO"*|3,p,"$ONTO"*)
+			# pick a commit whose parent is current $ONTO -> skip
+			ONTO=$sha1
+			;;
+		3,#*|3,,*)
+			# copy comments
+			;;
+		*)
+			fd=1
+			;;
+		esac
+		echo "$command${sha1:+ }$sha1${rest:+ }$rest" >&$fd
+	done <"$TODO" >"$TODO.new" 3>>"$DONE" &&
+	mv -f "$TODO".new "$TODO" ||
+	die "Could not skip unnecessary pick commands"
 }
 
 # check if no other options are set
@@ -745,6 +769,8 @@ EOF
 
 		has_action "$TODO" ||
 			die_abort "Nothing to do"
+
+		test -d "$REWRITTEN" || skip_unnecessary_picks
 
 		git update-ref ORIG_HEAD $HEAD
 		output git checkout $ONTO && do_rest

@@ -360,9 +360,8 @@ static void merge_name(const char *remote, struct strbuf *msg)
 	const char *ptr;
 	int len, early;
 
-	len = strlen(remote);
-	if (interpret_nth_last_branch(remote, &bname) == len)
-		remote = bname.buf;
+	strbuf_branchname(&bname, remote);
+	remote = bname.buf;
 
 	memset(branch_head, 0, sizeof(branch_head));
 	remote_head = peel_to_type(remote, 0, NULL, OBJ_COMMIT);
@@ -636,7 +635,7 @@ static int checkout_fast_forward(unsigned char *head, unsigned char *remote)
 	memset(&opts, 0, sizeof(opts));
 	memset(&t, 0, sizeof(t));
 	memset(&dir, 0, sizeof(dir));
-	dir.show_ignored = 1;
+	dir.flags |= DIR_SHOW_IGNORED;
 	dir.exclude_per_dir = ".gitignore";
 	opts.dir = &dir;
 
@@ -837,8 +836,11 @@ int cmd_merge(int argc, const char **argv, const char *prefix)
 	struct commit_list **remotes = &remoteheads;
 
 	setup_work_tree();
+	if (file_exists(git_path("MERGE_HEAD")))
+		die("You have not concluded your merge. (MERGE_HEAD exists)");
 	if (read_cache_unmerged())
-		die("You are in the middle of a conflicted merge.");
+		die("You are in the middle of a conflicted merge."
+				" (index unmerged)");
 
 	/*
 	 * Check if we are _not_ on a detached HEAD, i.e. if there is a

@@ -61,7 +61,7 @@ static void prune_directory(struct dir_struct *dir, const char **pathspec, int p
 	fill_pathspec_matches(pathspec, seen, specs);
 
 	for (i = 0; i < specs; i++) {
-		if (!seen[i] && !file_exists(pathspec[i]))
+		if (!seen[i] && pathspec[i][0] && !file_exists(pathspec[i]))
 			die("pathspec '%s' did not match any files",
 					pathspec[i]);
 	}
@@ -104,7 +104,7 @@ static void fill_directory(struct dir_struct *dir, const char **pathspec,
 	/* Set up the default git porcelain excludes */
 	memset(dir, 0, sizeof(*dir));
 	if (!ignored_too) {
-		dir->collect_ignored = 1;
+		dir->flags |= DIR_COLLECT_IGNORED;
 		setup_standard_excludes(dir);
 	}
 
@@ -148,7 +148,7 @@ static const char **validate_pathspec(int argc, const char **argv, const char *p
 	if (pathspec) {
 		const char **p;
 		for (p = pathspec; *p; p++) {
-			if (has_symlink_leading_path(strlen(*p), *p)) {
+			if (has_symlink_leading_path(*p, strlen(*p))) {
 				int len = prefix ? strlen(prefix) : 0;
 				die("'%s' is beyond a symbolic link", *p + len);
 			}
@@ -250,14 +250,14 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 	int add_new_files;
 	int require_pathspec;
 
+	git_config(add_config, NULL);
+
 	argc = parse_options(argc, argv, builtin_add_options,
 			  builtin_add_usage, 0);
 	if (patch_interactive)
 		add_interactive = 1;
 	if (add_interactive)
 		exit(interactive_add(argc, argv, prefix));
-
-	git_config(add_config, NULL);
 
 	if (addremove && take_worktree_changes)
 		die("-A and -u are mutually incompatible");

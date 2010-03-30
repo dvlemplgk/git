@@ -167,6 +167,9 @@ static struct ref *get_ref_map(struct transport *transport,
 	return ref_map;
 }
 
+#define STORE_REF_ERROR_OTHER 1
+#define STORE_REF_ERROR_DF_CONFLICT 2
+
 static int s_update_ref(const char *action,
 			struct ref *ref,
 			int check_old)
@@ -181,9 +184,11 @@ static int s_update_ref(const char *action,
 	lock = lock_any_ref_for_update(ref->name,
 				       check_old ? ref->old_sha1 : NULL, 0);
 	if (!lock)
-		return 2;
+		return errno == ENOTDIR ? STORE_REF_ERROR_DF_CONFLICT :
+					  STORE_REF_ERROR_OTHER;
 	if (write_ref_sha1(lock, ref->new_sha1, msg) < 0)
-		return 2;
+		return errno == ENOTDIR ? STORE_REF_ERROR_DF_CONFLICT :
+					  STORE_REF_ERROR_OTHER;
 	return 0;
 }
 
@@ -197,11 +202,7 @@ static int update_local_ref(struct ref *ref,
 	struct commit *current = NULL, *updated;
 	enum object_type type;
 	struct branch *current_branch = branch_get(NULL);
-	const char *pretty_ref = ref->name + (
-		!prefixcmp(ref->name, "refs/heads/") ? 11 :
-		!prefixcmp(ref->name, "refs/tags/") ? 10 :
-		!prefixcmp(ref->name, "refs/remotes/") ? 13 :
-		0);
+	const char *pretty_ref = prettify_ref(ref);
 
 	*display = 0;
 	type = sha1_object_info(ref->new_sha1, NULL);
@@ -381,7 +382,7 @@ static int store_updated_refs(const char *url, const char *remote_name,
 		}
 	}
 	fclose(fp);
-	if (rc & 2)
+	if (rc & STORE_REF_ERROR_DF_CONFLICT)
 		error("some local refs could not be updated; try running\n"
 		      " 'git remote prune %s' to remove any old, conflicting "
 		      "branches", remote_name);
@@ -544,7 +545,8 @@ static void check_not_current_branch(struct ref *ref_map)
 	for (; ref_map; ref_map = ref_map->next)
 		if (ref_map->peer_ref && !strcmp(current_branch->refname,
 					ref_map->peer_ref->name))
-			die("Refusing to fetch into current branch");
+			die("Refusing to fetch into current branch %s "
+			    "of non-bare repository", current_branch->refname);
 }
 
 static int do_fetch(struct transport *transport,
