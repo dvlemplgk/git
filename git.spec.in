@@ -92,7 +92,7 @@ Summary:        Perl interface to Git
 Group:          Development/Libraries
 Requires:       git = %{version}-%{release}
 #Requires:       perl(:MODULE_COMPAT_%(eval "`%{__perl} -V:version`"; echo $version))
-BuildRequires:  perl > 5.8
+BuildRequires:  perl(Error)
 
 %description -n perl-Git
 Perl interface to Git
