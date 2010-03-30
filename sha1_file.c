@@ -689,6 +689,7 @@ void free_pack_by_name(const char *pack_name)
 	while (*pp) {
 		p = *pp;
 		if (strcmp(pack_name, p->pack_name) == 0) {
+			clear_delta_base_cache();
 			close_pack_windows(p);
 			if (p->pack_fd != -1)
 				close(p->pack_fd);
@@ -1663,6 +1664,13 @@ static inline void release_delta_base_cache(struct delta_base_cache_entry *ent)
 	}
 }
 
+void clear_delta_base_cache(void)
+{
+	unsigned long p;
+	for (p = 0; p < MAX_DELTA_CACHE; p++)
+		release_delta_base_cache(&delta_base_cache[p]);
+}
+
 static void add_delta_base_cache(struct packed_git *p, off_t base_offset,
 	void *base, unsigned long base_size, enum object_type type)
 {
@@ -1908,25 +1916,7 @@ off_t find_pack_entry_one(const unsigned char *sha1,
 	return 0;
 }
 
-int matches_pack_name(struct packed_git *p, const char *name)
-{
-	const char *last_c, *c;
-
-	if (!strcmp(p->pack_name, name))
-		return 1;
-
-	for (c = p->pack_name, last_c = c; *c;)
-		if (*c == '/')
-			last_c = ++c;
-		else
-			++c;
-	if (!strcmp(last_c, name))
-		return 1;
-
-	return 0;
-}
-
-static int find_pack_entry(const unsigned char *sha1, struct pack_entry *e, const char **ignore_packed)
+static int find_pack_entry(const unsigned char *sha1, struct pack_entry *e)
 {
 	static struct packed_git *last_found = (void *)1;
 	struct packed_git *p;
@@ -1938,15 +1928,6 @@ static int find_pack_entry(const unsigned char *sha1, struct pack_entry *e, cons
 	p = (last_found == (void *)1) ? packed_git : last_found;
 
 	do {
-		if (ignore_packed) {
-			const char **ig;
-			for (ig = ignore_packed; *ig; ig++)
-				if (matches_pack_name(p, *ig))
-					break;
-			if (*ig)
-				goto next;
-		}
-
 		if (p->num_bad_objects) {
 			unsigned i;
 			for (i = 0; i < p->num_bad_objects; i++)
@@ -2027,7 +2008,7 @@ int sha1_object_info(const unsigned char *sha1, unsigned long *sizep)
 	struct pack_entry e;
 	int status;
 
-	if (!find_pack_entry(sha1, &e, NULL)) {
+	if (!find_pack_entry(sha1, &e)) {
 		/* Most likely it's a loose object. */
 		status = sha1_loose_object_info(sha1, sizep);
 		if (status >= 0)
@@ -2035,7 +2016,7 @@ int sha1_object_info(const unsigned char *sha1, unsigned long *sizep)
 
 		/* Not a loose object; someone else may have just packed it. */
 		reprepare_packed_git();
-		if (!find_pack_entry(sha1, &e, NULL))
+		if (!find_pack_entry(sha1, &e))
 			return status;
 	}
 
@@ -2054,7 +2035,7 @@ static void *read_packed_sha1(const unsigned char *sha1,
 	struct pack_entry e;
 	void *data;
 
-	if (!find_pack_entry(sha1, &e, NULL))
+	if (!find_pack_entry(sha1, &e))
 		return NULL;
 	data = cache_or_unpack_entry(e.p, e.offset, size, type, 1);
 	if (!data) {
@@ -2290,7 +2271,7 @@ static void close_sha1_file(int fd)
 		fsync_or_die(fd, "sha1 file");
 	fchmod(fd, 0444);
 	if (close(fd) != 0)
-		die("unable to write sha1 file");
+		die("error when closing sha1 file (%s)", strerror(errno));
 }
 
 /* Size of directory component, including the ending '/' */
@@ -2453,17 +2434,17 @@ int has_pack_file(const unsigned char *sha1)
 	return 1;
 }
 
-int has_sha1_pack(const unsigned char *sha1, const char **ignore_packed)
+int has_sha1_pack(const unsigned char *sha1)
 {
 	struct pack_entry e;
-	return find_pack_entry(sha1, &e, ignore_packed);
+	return find_pack_entry(sha1, &e);
 }
 
 int has_sha1_file(const unsigned char *sha1)
 {
 	struct pack_entry e;
 
-	if (find_pack_entry(sha1, &e, NULL))
+	if (find_pack_entry(sha1, &e))
 		return 1;
 	return has_loose_object(sha1);
 }

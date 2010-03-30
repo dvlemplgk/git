@@ -82,7 +82,7 @@ do
 	-i|--i|--im|--imm|--imme|--immed|--immedi|--immedia|--immediat|--immediate)
 		immediate=t; shift ;;
 	-l|--l|--lo|--lon|--long|--long-|--long-t|--long-te|--long-tes|--long-test|--long-tests)
-		export GIT_TEST_LONG=t; shift ;;
+		GIT_TEST_LONG=t; export GIT_TEST_LONG; shift ;;
 	-h|--h|--he|--hel|--help)
 		help=t; shift ;;
 	-v|--v|--ve|--ver|--verb|--verbo|--verbos|--verbose)
@@ -441,14 +441,6 @@ test_done () {
 	fi
 	case "$test_failure" in
 	0)
-		# We could:
-		# cd .. && rm -fr 'trash directory'
-		# but that means we forbid any tests that use their own
-		# subdirectory from calling test_done without coming back
-		# to where they started from.
-		# The Makefile provided will clean this test area so
-		# we will leave things as they are.
-
 		say_color pass "passed all $msg"
 
 		test -d "$remove_trash" &&

@@ -1649,7 +1649,8 @@ static int reuse_worktree_file(const char *name, const unsigned char *sha1, int 
 	struct stat st;
 	int pos, len;
 
-	/* We do not read the cache ourselves here, because the
+	/*
+	 * We do not read the cache ourselves here, because the
 	 * benchmark with my previous version that always reads cache
 	 * shows that it makes things worse for diff-tree comparing
 	 * two linux-2.6 kernel trees in an already checked out work
@@ -1673,7 +1674,7 @@ static int reuse_worktree_file(const char *name, const unsigned char *sha1, int 
 	 * objects however would tend to be slower as they need
 	 * to be individually opened and inflated.
 	 */
-	if (!FAST_WORKING_DIRECTORY && !want_file && has_sha1_pack(sha1, NULL))
+	if (!FAST_WORKING_DIRECTORY && !want_file && has_sha1_pack(sha1))
 		return 0;
 
 	len = strlen(name);
@@ -1687,6 +1688,13 @@ static int reuse_worktree_file(const char *name, const unsigned char *sha1, int 
 	 * unreusable because it is not a regular file.
 	 */
 	if (hashcmp(sha1, ce->sha1) || !S_ISREG(ce->ce_mode))
+		return 0;
+
+	/*
+	 * If ce is marked as "assume unchanged", there is no
+	 * guarantee that work tree matches what we are looking for.
+	 */
+	if (ce->ce_flags & CE_VALID)
 		return 0;
 
 	/*

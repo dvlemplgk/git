@@ -488,9 +488,8 @@ static void write_pack_file(void)
 		} else {
 			char tmpname[PATH_MAX];
 			int fd;
-			snprintf(tmpname, sizeof(tmpname),
-				 "%s/pack/tmp_pack_XXXXXX", get_object_directory());
-			fd = xmkstemp(tmpname);
+			fd = odb_mkstemp(tmpname, sizeof(tmpname),
+					 "pack/tmp_pack_XXXXXX");
 			pack_tmp_name = xstrdup(tmpname);
 			f = sha1fd(fd, pack_tmp_name);
 		}
@@ -1294,7 +1293,7 @@ static int try_delta(struct unpacked *trg, struct unpacked *src,
 		max_size = trg_entry->delta_size;
 		ref_depth = trg->depth;
 	}
-	max_size = max_size * (max_depth - src->depth) /
+	max_size = (uint64_t)max_size * (max_depth - src->depth) /
 						(max_depth - ref_depth + 1);
 	if (max_size == 0)
 		return 0;
@@ -1906,6 +1905,8 @@ static void show_object(struct object_array_entry *p)
 	add_preferred_base_object(p->name);
 	add_object_entry(p->item->sha1, p->item->type, p->name, 0);
 	p->item->flags |= OBJECT_ADDED;
+	free((char *)p->name);
+	p->name = NULL;
 }
 
 static void show_edge(struct commit *commit)
@@ -1960,11 +1961,7 @@ static void add_objects_in_unpacked_packs(struct rev_info *revs)
 		const unsigned char *sha1;
 		struct object *o;
 
-		for (i = 0; i < revs->num_ignore_packed; i++) {
-			if (matches_pack_name(p, revs->ignore_packed[i]))
-				break;
-		}
-		if (revs->num_ignore_packed <= i)
+		if (!p->pack_local || p->pack_keep)
 			continue;
 		if (open_pack_index(p))
 			die("cannot open pack index");
@@ -1993,6 +1990,29 @@ static void add_objects_in_unpacked_packs(struct rev_info *revs)
 	free(in_pack.array);
 }
 
+static int has_sha1_pack_kept_or_nonlocal(const unsigned char *sha1)
+{
+	static struct packed_git *last_found = (void *)1;
+	struct packed_git *p;
+
+	p = (last_found != (void *)1) ? last_found : packed_git;
+
+	while (p) {
+		if ((!p->pack_local || p->pack_keep) &&
+			find_pack_entry_one(sha1, p)) {
+			last_found = p;
+			return 1;
+		}
+		if (p == last_found)
+			p = packed_git;
+		else
+			p = p->next;
+		if (p == last_found)
+			p = p->next;
+	}
+	return 0;
+}
+
 static void loosen_unused_packed_objects(struct rev_info *revs)
 {
 	struct packed_git *p;
@@ -2000,11 +2020,7 @@ static void loosen_unused_packed_objects(struct rev_info *revs)
 	const unsigned char *sha1;
 
 	for (p = packed_git; p; p = p->next) {
-		for (i = 0; i < revs->num_ignore_packed; i++) {
-			if (matches_pack_name(p, revs->ignore_packed[i]))
-				break;
-		}
-		if (revs->num_ignore_packed <= i)
+		if (!p->pack_local || p->pack_keep)
 			continue;
 
 		if (open_pack_index(p))
@@ -2012,7 +2028,8 @@ static void loosen_unused_packed_objects(struct rev_info *revs)
 
 		for (i = 0; i < p->num_objects; i++) {
 			sha1 = nth_packed_object_sha1(p, i);
-			if (!locate_object_entry(sha1))
+			if (!locate_object_entry(sha1) &&
+				!has_sha1_pack_kept_or_nonlocal(sha1))
 				if (force_object_loose(sha1, p->mtime))
 					die("unable to force loose object");
 		}
@@ -2202,7 +2219,6 @@ int cmd_pack_objects(int argc, const char **argv, const char *prefix)
 			continue;
 		}
 		if (!strcmp("--unpacked", arg) ||
-		    !prefixcmp(arg, "--unpacked=") ||
 		    !strcmp("--reflog", arg) ||
 		    !strcmp("--all", arg)) {
 			use_internal_rev_list = 1;

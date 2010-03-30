@@ -183,8 +183,11 @@ static struct commit *handle_commit(struct rev_info *revs, struct object *object
 		if (!tag->tagged)
 			die("bad tag");
 		object = parse_object(tag->tagged->sha1);
-		if (!object)
+		if (!object) {
+			if (flags & UNINTERESTING)
+				return NULL;
 			die("bad object %s", sha1_to_hex(tag->tagged->sha1));
+		}
 	}
 
 	/*
@@ -479,9 +482,10 @@ static int add_parents_to_list(struct rev_info *revs, struct commit *commit,
 		while (parent) {
 			struct commit *p = parent->item;
 			parent = parent->next;
+			if (p)
+				p->object.flags |= UNINTERESTING;
 			if (parse_commit(p) < 0)
-				return -1;
-			p->object.flags |= UNINTERESTING;
+				continue;
 			if (p->parents)
 				mark_parents_uninteresting(p);
 			if (p->object.flags & SEEN)
@@ -990,16 +994,6 @@ static void add_message_grep(struct rev_info *revs, const char *pattern)
 	add_grep(revs, pattern, GREP_PATTERN_BODY);
 }
 
-static void add_ignore_packed(struct rev_info *revs, const char *name)
-{
-	int num = ++revs->num_ignore_packed;
-
-	revs->ignore_packed = xrealloc(revs->ignore_packed,
-				       sizeof(const char *) * (num + 1));
-	revs->ignore_packed[num-1] = name;
-	revs->ignore_packed[num] = NULL;
-}
-
 static int handle_revision_opt(struct rev_info *revs, int argc, const char **argv,
 			       int *unkc, const char **unkv)
 {
@@ -1112,12 +1106,8 @@ static int handle_revision_opt(struct rev_info *revs, int argc, const char **arg
 		revs->edge_hint = 1;
 	} else if (!strcmp(arg, "--unpacked")) {
 		revs->unpacked = 1;
-		free(revs->ignore_packed);
-		revs->ignore_packed = NULL;
-		revs->num_ignore_packed = 0;
 	} else if (!prefixcmp(arg, "--unpacked=")) {
-		revs->unpacked = 1;
-		add_ignore_packed(revs, arg+11);
+		die("--unpacked=<packfile> no longer supported.");
 	} else if (!strcmp(arg, "-r")) {
 		revs->diff = 1;
 		DIFF_OPT_SET(&revs->diffopt, RECURSIVE);
@@ -1681,7 +1671,7 @@ enum commit_action simplify_commit(struct rev_info *revs, struct commit *commit)
 {
 	if (commit->object.flags & SHOWN)
 		return commit_ignore;
-	if (revs->unpacked && has_sha1_pack(commit->object.sha1, revs->ignore_packed))
+	if (revs->unpacked && has_sha1_pack(commit->object.sha1))
 		return commit_ignore;
 	if (revs->show_all)
 		return commit_show;
@@ -1734,14 +1724,16 @@ static struct commit *get_revision_1(struct rev_info *revs)
 			    (commit->date < revs->max_age))
 				continue;
 			if (add_parents_to_list(revs, commit, &revs->commits, NULL) < 0)
-				return NULL;
+				die("Failed to traverse parents of commit %s",
+				    sha1_to_hex(commit->object.sha1));
 		}
 
 		switch (simplify_commit(revs, commit)) {
 		case commit_ignore:
 			continue;
 		case commit_error:
-			return NULL;
+			die("Failed to simplify parents of commit %s",
+			    sha1_to_hex(commit->object.sha1));
 		default:
 			return commit;
 		}
