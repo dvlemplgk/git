@@ -9,32 +9,35 @@ git-grep - Print lines matching a pattern
 SYNOPSIS
 --------
 [verse]
-'git grep' [--cached]
-	   [-a | --text] [-I] [-i | --ignore-case] [-w | --word-regexp]
+'git grep' [-a | --text] [-I] [-i | --ignore-case] [-w | --word-regexp]
 	   [-v | --invert-match] [-h|-H] [--full-name]
 	   [-E | --extended-regexp] [-G | --basic-regexp]
 	   [-F | --fixed-strings] [-n]
 	   [-l | --files-with-matches] [-L | --files-without-match]
 	   [-z | --null]
-	   [-c | --count] [--all-match]
+	   [-c | --count] [--all-match] [-q | --quiet]
 	   [--max-depth <depth>]
 	   [--color | --no-color]
 	   [-A <post-context>] [-B <pre-context>] [-C <context>]
 	   [-f <file>] [-e] <pattern>
-	   [--and|--or|--not|(|)|-e <pattern>...] [<tree>...]
-	   [--] [<path>...]
+	   [--and|--or|--not|(|)|-e <pattern>...]
+	   [--cached | --no-index | <tree>...]
+	   [--] [<pathspec>...]
 
 DESCRIPTION
 -----------
-Look for specified patterns in the working tree files, blobs
-registered in the index file, or given tree objects.
+Look for specified patterns in the tracked files in the work tree, blobs
+registered in the index file, or blobs in given tree objects.
 
 
 OPTIONS
 -------
 --cached::
-	Instead of searching in the working tree files, check
-	the blobs registered in the index file.
+	Instead of searching tracked files in the working tree, search
+	blobs registered in the index file.
+
+--no-index::
+	Search files in the current directory, not just those tracked by git.
 
 -a::
 --text::
@@ -49,7 +52,7 @@ OPTIONS
 	Don't match the pattern in binary files.
 
 --max-depth <depth>::
-	For each pathspec given on command line, descend at most <depth>
+	For each <pathspec> given on command line, descend at most <depth>
 	levels of directories. A negative value means no limit.
 
 -w::
@@ -98,8 +101,8 @@ OPTIONS
 --files-without-match::
 	Instead of showing every matched line, show only the
 	names of files that contain (or do not contain) matches.
-	For better compatibility with 'git-diff', --name-only is a
-	synonym for --files-with-matches.
+	For better compatibility with 'git diff', `--name-only` is a
+	synonym for `--files-with-matches`.
 
 -z::
 --null::
@@ -125,7 +128,7 @@ OPTIONS
 	matches.
 
 -<num>::
-	A shortcut for specifying -C<num>.
+	A shortcut for specifying `-C<num>`.
 
 -p::
 --show-function::
@@ -140,7 +143,7 @@ OPTIONS
 
 -e::
 	The next parameter is the pattern. This option has to be
-	used for patterns starting with - and should be used in
+	used for patterns starting with `-` and should be used in
 	scripts passing user input to grep.  Multiple patterns are
 	combined by 'or'.
 
@@ -158,16 +161,29 @@ OPTIONS
 	this flag is specified to limit the match to files that
 	have lines to match all of them.
 
-`<tree>...`::
-	Search blobs in the trees for specified patterns.
+-q::
+--quiet::
+	Do not output matched lines; instead, exit with status 0 when
+	there is a match and with non-zero status when there isn't.
+
+<tree>...::
+	Instead of searching tracked files in the working tree, search
+	blobs in the given trees.
 
 \--::
 	Signals the end of options; the rest of the parameters
-	are <path> limiters.
+	are <pathspec> limiters.
 
+<pathspec>...::
+	If given, limit the search to paths matching at least one pattern.
+	Both leading paths match and glob(7) patterns are supported.
 
-Example
--------
+Examples
+--------
+
+git grep 'time_t' -- '*.[ch]'::
+	Looks for `time_t` in all tracked .c and .h files in the working
+	directory and its subdirectories.
 
 git grep -e \'#define\' --and \( -e MAX_PATH -e PATH_MAX \)::
 	Looks for a line that has `#define` and either `MAX_PATH` or

@@ -17,6 +17,7 @@
 #include "blob.h"
 #include "xdiff-interface.h"
 #include "ll-merge.h"
+#include "resolve-undo.h"
 
 static const char * const checkout_usage[] = {
 	"git checkout [options] <branch>",
@@ -234,6 +235,10 @@ static int checkout_paths(struct tree *source_tree, const char **pathspec,
 	if (report_path_error(ps_matched, pathspec, 0))
 		return 1;
 
+	/* "checkout -m path" to recreate conflicted state */
+	if (opts->merge)
+		unmerge_cache(pathspec);
+
 	/* Any unmerged paths? */
 	for (pos = 0; pos < active_nr; pos++) {
 		struct cache_entry *ce = active_cache[pos];
@@ -370,6 +375,7 @@ static int merge_working_tree(struct checkout_opts *opts,
 	if (read_cache_preload(NULL) < 0)
 		return error("corrupt index file");
 
+	resolve_undo_clear();
 	if (opts->force) {
 		ret = reset_tree(new->commit->tree, opts, 1);
 		if (ret)
@@ -482,6 +488,20 @@ static void report_tracking(struct branch_info *new)
 	strbuf_release(&sb);
 }
 
+static void detach_advice(const char *old_path, const char *new_name)
+{
+	const char fmt[] =
+	"Note: checking out '%s'.\n\n"
+	"You are in 'detached HEAD' state. You can look around, make experimental\n"
+	"changes and commit them, and you can discard any commits you make in this\n"
+	"state without impacting any branches by performing another checkout.\n\n"
+	"If you want to create a new branch to retain commits you create, you may\n"
+	"do so (now or later) by using -b with the checkout command again. Example:\n\n"
+	"  git checkout -b new_branch_name\n\n";
+
+	fprintf(stderr, fmt, new_name);
+}
+
 static void update_refs_for_switch(struct checkout_opts *opts,
 				   struct branch_info *old,
 				   struct branch_info *new)
@@ -516,8 +536,8 @@ static void update_refs_for_switch(struct checkout_opts *opts,
 		update_ref(msg.buf, "HEAD", new->commit->object.sha1, NULL,
 			   REF_NODEREF, DIE_ON_ERR);
 		if (!opts->quiet) {
-			if (old->path)
-				fprintf(stderr, "Note: moving to '%s' which isn't a local branch\nIf you want to create a new branch from this checkout, you may do so\n(now or later) by using -b with the checkout command again. Example:\n  git checkout -b <new_branch_name>\n", new->name);
+			if (old->path && advice_detached_head)
+				detach_advice(old->path, new->name);
 			describe_detached_head("HEAD is now at", new->commit);
 		}
 	}
@@ -696,7 +716,10 @@ int cmd_checkout(int argc, const char **argv, const char *prefix)
 	 * case 3: git checkout <something> [<paths>]
 	 *
 	 *   With no paths, if <something> is a commit, that is to
-	 *   switch to the branch or detach HEAD at it.
+	 *   switch to the branch or detach HEAD at it.  As a special case,
+	 *   if <something> is A...B (missing A or B means HEAD but you can
+	 *   omit at most one side), and if there is a unique merge base
+	 *   between A and B, A...B names that merge base.
 	 *
 	 *   With no paths, if <something> is _not_ a commit, no -t nor -b
 	 *   was given, and there is a tracking branch whose name is
@@ -722,7 +745,7 @@ int cmd_checkout(int argc, const char **argv, const char *prefix)
 		if (!strcmp(arg, "-"))
 			arg = "@{-1}";
 
-		if (get_sha1(arg, rev)) {
+		if (get_sha1_mb(arg, rev)) {
 			if (has_dash_dash)          /* case (1) */
 				die("invalid reference: %s", arg);
 			if (!patch_mode &&
@@ -749,8 +772,10 @@ int cmd_checkout(int argc, const char **argv, const char *prefix)
 		new.name = arg;
 		if ((new.commit = lookup_commit_reference_gently(rev, 1))) {
 			setup_branch_path(&new);
-			if (resolve_ref(new.path, rev, 1, NULL))
-				new.commit = lookup_commit_reference(rev);
+
+			if ((check_ref_format(new.path) == CHECK_REF_FORMAT_OK) &&
+			    resolve_ref(new.path, rev, 1, NULL))
+				;
 			else
 				new.path = NULL;
 			parse_commit(new.commit);

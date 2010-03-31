@@ -43,6 +43,14 @@ unreleased) version of git, that is available from 'master'
 branch of the `git.git` repository.
 Documentation for older releases are available here:
 
+* link:v1.7.0.3/git.html[documentation for release 1.7.0.3]
+
+* release notes for
+  link:RelNotes-1.7.0.3.txt[1.7.0.3],
+  link:RelNotes-1.7.0.2.txt[1.7.0.2],
+  link:RelNotes-1.7.0.1.txt[1.7.0.1],
+  link:RelNotes-1.7.0.txt[1.7.0].
+
 * link:v1.6.6.2/git.html[documentation for release 1.6.6.2]
 
 * release notes for
@@ -224,7 +232,10 @@ help ...`.
 
 -p::
 --paginate::
-	Pipe all output into 'less' (or if set, $PAGER).
+	Pipe all output into 'less' (or if set, $PAGER) if standard
+	output is a terminal.  This overrides the `pager.<cmd>`
+	configuration options (see the "Configuration Mechanism" section
+	below).
 
 --no-pager::
 	Do not pipe git output into a pager.
@@ -396,7 +407,8 @@ people.  Here is an example:
 ------------
 
 Various commands read from the configuration file and adjust
-their operation accordingly.
+their operation accordingly.  See linkgit:git-config[1] for a
+list.
 
 
 Identifier Terminology
@@ -576,8 +588,8 @@ other
 	linkgit:git-config[1].
 
 'GIT_SSH'::
-	If this environment variable is set then 'git-fetch'
-	and 'git-push' will use this command instead
+	If this environment variable is set then 'git fetch'
+	and 'git push' will use this command instead
 	of 'ssh' when they need to connect to a remote system.
 	The '$GIT_SSH' command will be given exactly two arguments:
 	the 'username@host' (or just 'host') from the URL and the
@@ -593,8 +605,8 @@ for further details.
 
 'GIT_FLUSH'::
 	If this environment variable is set to "1", then commands such
-	as 'git-blame' (in incremental mode), 'git-rev-list', 'git-log',
-	and 'git-whatchanged' will force a flush of the output stream
+	as 'git blame' (in incremental mode), 'git rev-list', 'git log',
+	and 'git whatchanged' will force a flush of the output stream
 	after each commit-oriented record have been flushed.   If this
 	variable is set to "0", the output of these commands will be done
 	using completely buffered I/O.   If this environment variable is

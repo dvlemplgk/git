@@ -41,6 +41,7 @@ static int is_rev_argument(const char *arg)
 		"--all",
 		"--bisect",
 		"--dense",
+		"--branches=",
 		"--branches",
 		"--header",
 		"--max-age=",
@@ -51,8 +52,11 @@ static int is_rev_argument(const char *arg)
 		"--objects-edge",
 		"--parents",
 		"--pretty",
+		"--remotes=",
 		"--remotes",
+		"--glob=",
 		"--sparse",
+		"--tags=",
 		"--tags",
 		"--topo-order",
 		"--date-order",
@@ -451,6 +455,13 @@ int cmd_rev_parse(int argc, const char **argv, const char *prefix)
 	if (argc > 1 && !strcmp("--sq-quote", argv[1]))
 		return cmd_sq_quote(argc - 2, argv + 2);
 
+	if (argc == 2 && !strcmp("--local-env-vars", argv[1])) {
+		int i;
+		for (i = 0; local_repo_env[i]; i++)
+			printf("%s\n", local_repo_env[i]);
+		return 0;
+	}
+
 	if (argc > 1 && !strcmp("-h", argv[1]))
 		usage(builtin_rev_parse_usage);
 
@@ -569,16 +580,41 @@ int cmd_rev_parse(int argc, const char **argv, const char *prefix)
 				for_each_ref_in("refs/bisect/good", anti_reference, NULL);
 				continue;
 			}
+			if (!prefixcmp(arg, "--branches=")) {
+				for_each_glob_ref_in(show_reference, arg + 11,
+					"refs/heads/", NULL);
+				continue;
+			}
 			if (!strcmp(arg, "--branches")) {
 				for_each_branch_ref(show_reference, NULL);
+				continue;
+			}
+			if (!prefixcmp(arg, "--tags=")) {
+				for_each_glob_ref_in(show_reference, arg + 7,
+					"refs/tags/", NULL);
 				continue;
 			}
 			if (!strcmp(arg, "--tags")) {
 				for_each_tag_ref(show_reference, NULL);
 				continue;
 			}
+			if (!prefixcmp(arg, "--glob=")) {
+				for_each_glob_ref(show_reference, arg + 7, NULL);
+				continue;
+			}
+			if (!prefixcmp(arg, "--remotes=")) {
+				for_each_glob_ref_in(show_reference, arg + 10,
+					"refs/remotes/", NULL);
+				continue;
+			}
 			if (!strcmp(arg, "--remotes")) {
 				for_each_remote_ref(show_reference, NULL);
+				continue;
+			}
+			if (!strcmp(arg, "--show-toplevel")) {
+				const char *work_tree = get_git_work_tree();
+				if (work_tree)
+					puts(work_tree);
 				continue;
 			}
 			if (!strcmp(arg, "--show-prefix")) {

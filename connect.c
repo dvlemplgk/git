@@ -502,12 +502,18 @@ struct child_process *git_connect(int fd[2], const char *url_orig,
 		c = ':';
 	}
 
+	/*
+	 * Don't do destructive transforms with git:// as that
+	 * protocol code does '[]' unwrapping of its own.
+	 */
 	if (host[0] == '[') {
 		end = strchr(host + 1, ']');
 		if (end) {
-			*end = 0;
+			if (protocol != PROTO_GIT) {
+				*end = 0;
+				host++;
+			}
 			end++;
-			host++;
 		} else
 			end = host;
 	} else
@@ -601,20 +607,9 @@ struct child_process *git_connect(int fd[2], const char *url_orig,
 		*arg++ = host;
 	}
 	else {
-		/* remove these from the environment */
-		const char *env[] = {
-			ALTERNATE_DB_ENVIRONMENT,
-			DB_ENVIRONMENT,
-			GIT_DIR_ENVIRONMENT,
-			GIT_WORK_TREE_ENVIRONMENT,
-			GRAFT_ENVIRONMENT,
-			INDEX_ENVIRONMENT,
-			NO_REPLACE_OBJECTS_ENVIRONMENT,
-			NULL
-		};
-		conn->env = env;
-		*arg++ = "sh";
-		*arg++ = "-c";
+		/* remove repo-local variables from the environment */
+		conn->env = local_repo_env;
+		conn->use_shell = 1;
 	}
 	*arg++ = cmd.buf;
 	*arg = NULL;

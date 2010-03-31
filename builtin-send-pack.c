@@ -372,6 +372,14 @@ static void print_helper_status(struct ref *ref)
 	strbuf_release(&buf);
 }
 
+static int sideband_demux(int in, int out, void *data)
+{
+	int *fd = data;
+	int ret = recv_sideband("send-pack", fd[0], out);
+	close(out);
+	return ret;
+}
+
 int send_pack(struct send_pack_args *args,
 	      int fd[], struct child_process *conn,
 	      struct ref *remote_refs,
@@ -382,18 +390,22 @@ int send_pack(struct send_pack_args *args,
 	struct strbuf req_buf = STRBUF_INIT;
 	struct ref *ref;
 	int new_refs;
-	int ask_for_status_report = 0;
 	int allow_deleting_refs = 0;
-	int expect_status_report = 0;
+	int status_report = 0;
+	int use_sideband = 0;
+	unsigned cmds_sent = 0;
 	int ret;
+	struct async demux;
 
 	/* Does the other end support the reporting? */
 	if (server_supports("report-status"))
-		ask_for_status_report = 1;
+		status_report = 1;
 	if (server_supports("delete-refs"))
 		allow_deleting_refs = 1;
 	if (server_supports("ofs-delta"))
 		args->use_ofs_delta = 1;
+	if (server_supports("side-band-64k"))
+		use_sideband = 1;
 
 	if (!remote_refs) {
 		fprintf(stderr, "No refs in common and none specified; doing nothing.\n"
@@ -406,78 +418,50 @@ int send_pack(struct send_pack_args *args,
 	 */
 	new_refs = 0;
 	for (ref = remote_refs; ref; ref = ref->next) {
-
-		if (ref->peer_ref)
-			hashcpy(ref->new_sha1, ref->peer_ref->new_sha1);
-		else if (!args->send_mirror)
+		if (!ref->peer_ref && !args->send_mirror)
 			continue;
 
-		ref->deletion = is_null_sha1(ref->new_sha1);
+		/* Check for statuses set by set_ref_status_for_push() */
+		switch (ref->status) {
+		case REF_STATUS_REJECT_NONFASTFORWARD:
+		case REF_STATUS_UPTODATE:
+			continue;
+		default:
+			; /* do nothing */
+		}
+
 		if (ref->deletion && !allow_deleting_refs) {
 			ref->status = REF_STATUS_REJECT_NODELETE;
-			continue;
-		}
-		if (!ref->deletion &&
-		    !hashcmp(ref->old_sha1, ref->new_sha1)) {
-			ref->status = REF_STATUS_UPTODATE;
-			continue;
-		}
-
-		/* This part determines what can overwrite what.
-		 * The rules are:
-		 *
-		 * (0) you can always use --force or +A:B notation to
-		 *     selectively force individual ref pairs.
-		 *
-		 * (1) if the old thing does not exist, it is OK.
-		 *
-		 * (2) if you do not have the old thing, you are not allowed
-		 *     to overwrite it; you would not know what you are losing
-		 *     otherwise.
-		 *
-		 * (3) if both new and old are commit-ish, and new is a
-		 *     descendant of old, it is OK.
-		 *
-		 * (4) regardless of all of the above, removing :B is
-		 *     always allowed.
-		 */
-
-		ref->nonfastforward =
-		    !ref->deletion &&
-		    !is_null_sha1(ref->old_sha1) &&
-		    (!has_sha1_file(ref->old_sha1)
-		      || !ref_newer(ref->new_sha1, ref->old_sha1));
-
-		if (ref->nonfastforward && !ref->force && !args->force_update) {
-			ref->status = REF_STATUS_REJECT_NONFASTFORWARD;
 			continue;
 		}
 
 		if (!ref->deletion)
 			new_refs++;
 
-		if (!args->dry_run) {
+		if (args->dry_run) {
+			ref->status = REF_STATUS_OK;
+		} else {
 			char *old_hex = sha1_to_hex(ref->old_sha1);
 			char *new_hex = sha1_to_hex(ref->new_sha1);
 
-			if (ask_for_status_report) {
-				packet_buf_write(&req_buf, "%s %s %s%c%s",
+			if (!cmds_sent && (status_report || use_sideband)) {
+				packet_buf_write(&req_buf, "%s %s %s%c%s%s",
 					old_hex, new_hex, ref->name, 0,
-					"report-status");
-				ask_for_status_report = 0;
-				expect_status_report = 1;
+					status_report ? " report-status" : "",
+					use_sideband ? " side-band-64k" : "");
 			}
 			else
 				packet_buf_write(&req_buf, "%s %s %s",
 					old_hex, new_hex, ref->name);
+			ref->status = status_report ?
+				REF_STATUS_EXPECTING_REPORT :
+				REF_STATUS_OK;
+			cmds_sent++;
 		}
-		ref->status = expect_status_report ?
-			REF_STATUS_EXPECTING_REPORT :
-			REF_STATUS_OK;
 	}
 
 	if (args->stateless_rpc) {
-		if (!args->dry_run) {
+		if (!args->dry_run && cmds_sent) {
 			packet_buf_flush(&req_buf);
 			send_sideband(out, -1, req_buf.buf, req_buf.len, LARGE_PACKET_MAX);
 		}
@@ -487,22 +471,42 @@ int send_pack(struct send_pack_args *args,
 	}
 	strbuf_release(&req_buf);
 
-	if (new_refs && !args->dry_run) {
+	if (use_sideband && cmds_sent) {
+		memset(&demux, 0, sizeof(demux));
+		demux.proc = sideband_demux;
+		demux.data = fd;
+		demux.out = -1;
+		if (start_async(&demux))
+			die("receive-pack: unable to fork off sideband demultiplexer");
+		in = demux.out;
+	}
+
+	if (new_refs && cmds_sent) {
 		if (pack_objects(out, remote_refs, extra_have, args) < 0) {
 			for (ref = remote_refs; ref; ref = ref->next)
 				ref->status = REF_STATUS_NONE;
+			if (use_sideband)
+				finish_async(&demux);
 			return -1;
 		}
 	}
-	if (args->stateless_rpc && !args->dry_run)
+	if (args->stateless_rpc && cmds_sent)
 		packet_flush(out);
 
-	if (expect_status_report)
+	if (status_report && cmds_sent)
 		ret = receive_status(in, remote_refs);
 	else
 		ret = 0;
 	if (args->stateless_rpc)
 		packet_flush(out);
+
+	if (use_sideband && cmds_sent) {
+		if (finish_async(&demux)) {
+			error("error in sideband demultiplexer");
+			ret = -1;
+		}
+		close(demux.out);
+	}
 
 	if (ret < 0)
 		return ret;
@@ -672,6 +676,9 @@ int cmd_send_pack(int argc, const char **argv, const char *prefix)
 	/* match them up */
 	if (match_refs(local_refs, &remote_refs, nr_refspecs, refspecs, flags))
 		return -1;
+
+	set_ref_status_for_push(remote_refs, args.send_mirror,
+		args.force_update);
 
 	ret = send_pack(&args, fd, conn, remote_refs, &extra_have);
 

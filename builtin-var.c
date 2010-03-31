@@ -6,7 +6,7 @@
 #include "cache.h"
 #include "exec_cmd.h"
 
-static const char var_usage[] = "git var [-l | <variable>]";
+static const char var_usage[] = "git var (-l | <variable>)";
 
 static const char *editor(int flag)
 {
@@ -20,7 +20,7 @@ static const char *editor(int flag)
 
 static const char *pager(int flag)
 {
-	const char *pgm = git_pager();
+	const char *pgm = git_pager(1);
 
 	if (!pgm)
 		pgm = "cat";
@@ -72,15 +72,13 @@ static int show_config(const char *var, const char *value, void *cb)
 	return git_default_config(var, value, cb);
 }
 
-int main(int argc, char **argv)
+int cmd_var(int argc, const char **argv, const char *prefix)
 {
 	const char *val;
 	int nongit;
 	if (argc != 2) {
 		usage(var_usage);
 	}
-
-	git_extract_argv0_path(argv[0]);
 
 	setup_git_directory_gently(&nongit);
 	val = NULL;

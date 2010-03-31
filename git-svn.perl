@@ -26,6 +26,7 @@ if (! exists $ENV{SVN_SSH}) {
 		$ENV{SVN_SSH} = $ENV{GIT_SSH};
 		if ($^O eq 'msys') {
 			$ENV{SVN_SSH} =~ s/\\/\\\\/g;
+			$ENV{SVN_SSH} =~ s/(.*)/"$1"/;
 		}
 	}
 }
@@ -115,6 +116,7 @@ my %init_opts = ( 'template=s' => \$_template, 'shared:s' => \$_shared,
 		  'use-svm-props' => sub { $icv{useSvmProps} = 1 },
 		  'use-svnsync-props' => sub { $icv{useSvnsyncProps} = 1 },
 		  'rewrite-root=s' => sub { $icv{rewriteRoot} = $_[1] },
+		  'rewrite-uuid=s' => sub { $icv{rewriteUUID} = $_[1] },
                   %remote_opts );
 my %cmt_opts = ( 'edit|e' => \$_edit,
 		'rmdir' => \$SVN::Git::Editor::_rmdir,
@@ -155,12 +157,16 @@ my %cmd = (
 	            { 'message|m=s' => \$_message,
 	              'destination|d=s' => \$_branch_dest,
 	              'dry-run|n' => \$_dry_run,
-		      'tag|t' => \$_tag } ],
+	              'tag|t' => \$_tag,
+	              'username=s' => \$Git::SVN::Prompt::_username,
+	              'commit-url=s' => \$_commit_url } ],
 	tag => [ sub { $_tag = 1; cmd_branch(@_) },
 	         'Create a tag in the SVN repository',
 	         { 'message|m=s' => \$_message,
 	           'destination|d=s' => \$_branch_dest,
-	           'dry-run|n' => \$_dry_run } ],
+	           'dry-run|n' => \$_dry_run,
+	           'username=s' => \$Git::SVN::Prompt::_username,
+	           'commit-url=s' => \$_commit_url } ],
 	'set-tree' => [ \&cmd_set_tree,
 	                "Set an SVN repository to a git tree-ish",
 			{ 'stdin' => \$_stdin, %cmt_opts, %fc_opts, } ],
@@ -708,7 +714,21 @@ sub cmd_branch {
 		}
 	}
 	my ($lft, $rgt) = @{ $glob->{path} }{qw/left right/};
-	my $dst = join '/', $remote->{url}, $lft, $branch_name, ($rgt || ());
+	my $url;
+	if (defined $_commit_url) {
+		$url = $_commit_url;
+	} else {
+		$url = eval { command_oneline('config', '--get',
+			"svn-remote.$gs->{repo_id}.commiturl") };
+		if (!$url) {
+			$url = $remote->{url};
+		}
+	}
+	my $dst = join '/', $url, $lft, $branch_name, ($rgt || ());
+
+	if ($dst =~ /^https:/ && $src =~ /^http:/) {
+		$src=~s/^http:/https:/;
+	}
 
 	my $ctx = SVN::Client->new(
 		auth    => Git::SVN::Ra::_auth_providers(),
@@ -1636,6 +1656,7 @@ use File::Path qw/mkpath/;
 use File::Copy qw/copy/;
 use IPC::Open3;
 use Memoize;  # core since 5.8.0, Jul 2002
+use Memoize::Storable;
 
 my ($_gc_nr, $_gc_period);
 
@@ -1806,8 +1827,8 @@ sub read_all_remotes {
 			my $rs = {
 			    t => $t,
 			    remote => $remote,
-			    path => Git::SVN::GlobSpec->new($local_ref),
-			    ref => Git::SVN::GlobSpec->new($remote_ref) };
+			    path => Git::SVN::GlobSpec->new($local_ref, 1),
+			    ref => Git::SVN::GlobSpec->new($remote_ref, 0) };
 			if (length($rs->{ref}->{right}) != 0) {
 				die "The '*' glob character must be the last ",
 				    "character of '$remote_ref'\n";
@@ -2189,6 +2210,10 @@ sub svnsync {
 		die "Can't have both 'useSvnsyncProps' and 'rewriteRoot' ",
 		    "options set!\n";
 	}
+	if ($self->rewrite_uuid) {
+		die "Can't have both 'useSvnsyncProps' and 'rewriteUUID' ",
+		    "options set!\n";
+	}
 
 	my $svnsync;
 	# see if we have it in our config, first:
@@ -2468,6 +2493,20 @@ sub rewrite_root {
 		}
 	}
 	$self->{-rewrite_root} = $rwr;
+}
+
+sub rewrite_uuid {
+	my ($self) = @_;
+	return $self->{-rewrite_uuid} if exists $self->{-rewrite_uuid};
+	my $k = "svn-remote.$self->{repo_id}.rewriteUUID";
+	my $rwid = eval { command_oneline(qw/config --get/, $k) };
+	if ($rwid) {
+		$rwid =~ s#/+$##;
+		if ($rwid !~ m#^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$#) {
+			die "$rwid is not a valid UUID (key: $k)\n";
+		}
+	}
+	$self->{-rewrite_uuid} = $rwid;
 }
 
 sub metadata_url {
@@ -3052,12 +3091,65 @@ sub check_cherry_pick {
 	for my $range ( @ranges ) {
 		delete @commits{_rev_list($range)};
 	}
+	for my $commit (keys %commits) {
+		if (has_no_changes($commit)) {
+			delete $commits{$commit};
+		}
+	}
 	return (keys %commits);
 }
 
-BEGIN {
-	memoize 'lookup_svn_merge';
-	memoize 'check_cherry_pick';
+sub has_no_changes {
+	my $commit = shift;
+
+	my @revs = split / /, command_oneline(
+		qw(rev-list --parents -1 -m), $commit);
+
+	# Commits with no parents, e.g. the start of a partial branch,
+	# have changes by definition.
+	return 1 if (@revs < 2);
+
+	# Commits with multiple parents, e.g a merge, have no changes
+	# by definition.
+	return 0 if (@revs > 2);
+
+	return (command_oneline("rev-parse", "$commit^{tree}") eq
+		command_oneline("rev-parse", "$commit~1^{tree}"));
+}
+
+# The GIT_DIR environment variable is not always set until after the command
+# line arguments are processed, so we can't memoize in a BEGIN block.
+{
+	my $memoized = 0;
+
+	sub memoize_svn_mergeinfo_functions {
+		return if $memoized;
+		$memoized = 1;
+
+		my $cache_path = "$ENV{GIT_DIR}/svn/.caches/";
+		mkpath([$cache_path]) unless -d $cache_path;
+
+		tie my %lookup_svn_merge_cache => 'Memoize::Storable',
+		    "$cache_path/lookup_svn_merge.db", 'nstore';
+		memoize 'lookup_svn_merge',
+			SCALAR_CACHE => 'FAULT',
+			LIST_CACHE => ['HASH' => \%lookup_svn_merge_cache],
+		;
+
+		tie my %check_cherry_pick_cache => 'Memoize::Storable',
+		    "$cache_path/check_cherry_pick.db", 'nstore';
+		memoize 'check_cherry_pick',
+			SCALAR_CACHE => 'FAULT',
+			LIST_CACHE => ['HASH' => \%check_cherry_pick_cache],
+		;
+
+		tie my %has_no_changes_cache => 'Memoize::Storable',
+		    "$cache_path/has_no_changes.db", 'nstore';
+		memoize 'has_no_changes',
+			SCALAR_CACHE => ['HASH' => \%has_no_changes_cache],
+			LIST_CACHE => 'FAULT',
+		;
+	}
 }
 
 sub parents_exclude {
@@ -3101,6 +3193,8 @@ sub find_extra_svn_parents {
 	my ($self, $ed, $mergeinfo, $parents) = @_;
 	# aha!  svk:merge property changed...
 
+	memoize_svn_mergeinfo_functions();
+
 	# We first search for merged tips which are not in our
 	# history.  Then, we figure out which git revisions are in
 	# that tip, but not this revision.  If all of those revisions
@@ -3134,10 +3228,21 @@ sub find_extra_svn_parents {
 		my $ranges = $ranges{$merge_tip};
 
 		# check out 'new' tips
-		my $merge_base = command_oneline(
-			"merge-base",
-			@$parents, $merge_tip,
-		       );
+		my $merge_base;
+		eval {
+			$merge_base = command_oneline(
+				"merge-base",
+				@$parents, $merge_tip,
+			);
+		};
+		if ($@) {
+			die "An error occurred during merge-base"
+				unless $@->isa("Git::Error::Command");
+
+			warn "W: Cannot find common ancestor between ".
+			     "@$parents and $merge_tip. Ignoring merge info.\n";
+			next;
+		}
 
 		# double check that there are no missing non-merge commits
 		my (@incomplete) = check_cherry_pick(
@@ -3253,6 +3358,10 @@ sub make_log_entry {
 			die "Can't have both 'useSvmProps' and 'rewriteRoot' ",
 			    "options set!\n";
 		}
+		if ($self->rewrite_uuid) {
+			die "Can't have both 'useSvmProps' and 'rewriteUUID' ",
+			    "options set!\n";
+		}
 		my ($uuid, $r) = $headrev =~ m{^([a-f\d\-]{30,}):(\d+)$}i;
 		# we don't want "SVM: initializing mirror for junk" ...
 		return undef if $r == 0;
@@ -3283,10 +3392,10 @@ sub make_log_entry {
 	} else {
 		my $url = $self->metadata_url;
 		remove_username($url);
-		$log_entry{metadata} = "$url\@$rev " .
-		                       $self->ra->get_uuid;
-		$email ||= "$author\@" . $self->ra->get_uuid;
-		$commit_email ||= "$author\@" . $self->ra->get_uuid;
+		my $uuid = $self->rewrite_uuid || $self->ra->get_uuid;
+		$log_entry{metadata} = "$url\@$rev " . $uuid;
+		$email ||= "$author\@" . $uuid;
+		$commit_email ||= "$author\@" . $uuid;
 	}
 	$log_entry{name} = $name;
 	$log_entry{email} = $email;
@@ -3368,7 +3477,7 @@ sub rebuild {
 				'--');
 	my $metadata_url = $self->metadata_url;
 	remove_username($metadata_url);
-	my $svn_uuid = $self->ra_uuid;
+	my $svn_uuid = $self->rewrite_uuid || $self->ra_uuid;
 	my $c;
 	while (<$log>) {
 		if ( m{^commit ($::sha1)$} ) {
@@ -5157,6 +5266,7 @@ sub match_globs {
 			next if (length $g->{path}->{right} &&
 				 ($self->check_path($p, $r) !=
 				  $SVN::Node::dir));
+			next unless $p =~ /$g->{path}->{regex}/;
 			$exists->{$p} = Git::SVN->init($self->{url}, $p, undef,
 					 $g->{ref}->full_path($de), 1);
 		}
@@ -5349,7 +5459,12 @@ sub git_svn_log_cmd {
 
 # adapted from pager.c
 sub config_pager {
-	chomp(my $pager = command_oneline(qw(var GIT_PAGER)));
+	if (! -t *STDOUT) {
+		$ENV{GIT_PAGER_IN_USE} = 'false';
+		$pager = undef;
+		return;
+	}
+	chomp($pager = command_oneline(qw(var GIT_PAGER)));
 	if ($pager eq 'cat') {
 		$pager = undef;
 	}
@@ -5357,7 +5472,7 @@ sub config_pager {
 }
 
 sub run_pager {
-	return unless -t *STDOUT && defined $pager;
+	return unless defined $pager;
 	pipe my ($rfd, $wfd) or return;
 	defined(my $pid = fork) or ::fatal "Can't fork: $!";
 	if (!$pid) {
@@ -5930,29 +6045,48 @@ use strict;
 use warnings;
 
 sub new {
-	my ($class, $glob) = @_;
+	my ($class, $glob, $pattern_ok) = @_;
 	my $re = $glob;
 	$re =~ s!/+$!!g; # no need for trailing slashes
-	$re =~ m!^([^*]*)(\*(?:/\*)*)(.*)$!;
-	my $temp = $re;
-	my ($left, $right) = ($1, $3);
-	$re = $2;
-	my $depth = $re =~ tr/*/*/;
-	if ($depth != $temp =~ tr/*/*/) {
-		die "Only one set of wildcard directories " .
-			"(e.g. '*' or '*/*/*') is supported: '$glob'\n";
+	my (@left, @right, @patterns);
+	my $state = "left";
+	my $die_msg = "Only one set of wildcard directories " .
+				"(e.g. '*' or '*/*/*') is supported: '$glob'\n";
+	for my $part (split(m|/|, $glob)) {
+		if ($part =~ /\*/ && $part ne "*") {
+			die "Invalid pattern in '$glob': $part\n";
+		} elsif ($pattern_ok && $part =~ /[{}]/ &&
+			 $part !~ /^\{[^{}]+\}/) {
+			die "Invalid pattern in '$glob': $part\n";
+		}
+		if ($part eq "*") {
+			die $die_msg if $state eq "right";
+			$state = "pattern";
+			push(@patterns, "[^/]*");
+		} elsif ($pattern_ok && $part =~ /^\{(.*)\}$/) {
+			die $die_msg if $state eq "right";
+			$state = "pattern";
+			my $p = quotemeta($1);
+			$p =~ s/\\,/|/g;
+			push(@patterns, "(?:$p)");
+		} else {
+			if ($state eq "left") {
+				push(@left, $part);
+			} else {
+				push(@right, $part);
+				$state = "right";
+			}
+		}
 	}
+	my $depth = @patterns;
 	if ($depth == 0) {
-		die "One '*' is needed for glob: '$glob'\n";
+		die "One '*' is needed in glob: '$glob'\n";
 	}
-	$re =~ s!\*!\[^/\]*!g;
-	$re = quotemeta($left) . "($re)" . quotemeta($right);
-	if (length $left && !($left =~ s!/+$!!g)) {
-		die "Missing trailing '/' on left side of: '$glob' ($left)\n";
-	}
-	if (length $right && !($right =~ s!^/+!!g)) {
-		die "Missing leading '/' on right side of: '$glob' ($right)\n";
-	}
+	my $left = join('/', @left);
+	my $right = join('/', @right);
+	$re = join('/', @patterns);
+	$re = join('\/',
+		   grep(length, quotemeta($left), "($re)", quotemeta($right)));
 	my $left_re = qr/^\/\Q$left\E(\/|$)/;
 	bless { left => $left, right => $right, left_regex => $left_re,
 	        regex => qr/$re/, glob => $glob, depth => $depth }, $class;

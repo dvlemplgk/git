@@ -570,7 +570,7 @@ static int reopen_stdout(struct commit *commit, struct rev_info *rev)
 
 	get_patch_filename(commit, rev->nr, fmt_patch_suffix, &filename);
 
-	if (!DIFF_OPT_TST(&rev->diffopt, QUIET))
+	if (!DIFF_OPT_TST(&rev->diffopt, QUICK))
 		fprintf(realstdout, "%s\n", filename.buf + outdir_offset);
 
 	if (freopen(filename.buf, "w", stdout) == NULL)
@@ -1089,7 +1089,7 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 
 	/*
 	 * We cannot move this anywhere earlier because we do want to
-	 * know if --root was given explicitly from the comand line.
+	 * know if --root was given explicitly from the command line.
 	 */
 	rev.show_root_diff = 1;
 

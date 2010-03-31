@@ -25,11 +25,13 @@ p=              pass it through git-apply
 patch-format=   format the patch(es) are in
 reject          pass it through git-apply
 resolvemsg=     override error message when patch failure occurs
-r,resolved      to be used after a patch failure
+continue        continue applying patches after resolving a conflict
+r,resolved      synonyms for --continue
 skip            skip the current patch
 abort           restore the original branch and abort the patching operation.
 committer-date-is-author-date    lie about committer date
 ignore-date     use current timestamp for author date
+rerere-autoupdate update the index with reused conflict resolution if possible
 rebasing*       (internal use for git-rebase)"
 
 . git-sh-setup
@@ -135,7 +137,7 @@ It does not apply to blobs recorded in its index."
 	    export GIT_MERGE_VERBOSITY=0
     fi
     git-merge-recursive $orig_tree -- HEAD $his_tree || {
-	    git rerere
+	    git rerere $allow_rerere_autoupdate
 	    echo Failed to merge in the changes.
 	    exit 1
     }
@@ -204,7 +206,8 @@ check_patch_format () {
 			# discarding the indented remainder of folded lines,
 			# and see if it looks like that they all begin with the
 			# header field names...
-			sed -n -e '/^$/q' -e '/^[ 	]/d' -e p "$1" |
+			tr -d '\015' <"$1" |
+			sed -n -e '/^$/q' -e '/^[ 	]/d' -e p |
 			sane_egrep -v '^[!-9;-~]+:' >/dev/null ||
 			patch_format=mbox
 		fi
@@ -293,6 +296,7 @@ resolvemsg= resume= scissors= no_inbody_headers=
 git_apply_opt=
 committer_date_is_author_date=
 ignore_date=
+allow_rerere_autoupdate=
 
 while test $# != 0
 do
@@ -315,7 +319,7 @@ do
 		scissors=t ;;
 	--no-scissors)
 		scissors=f ;;
-	-r|--resolved)
+	-r|--resolved|--continue)
 		resolved=t ;;
 	--skip)
 		skip=t ;;
@@ -340,6 +344,8 @@ do
 		committer_date_is_author_date=t ;;
 	--ignore-date)
 		ignore_date=t ;;
+	--rerere-autoupdate|--no-rerere-autoupdate)
+		allow_rerere_autoupdate="$1" ;;
 	-q|--quiet)
 		GIT_QUIET=t ;;
 	--)
@@ -657,10 +663,7 @@ do
 		[eE]*) git_editor "$dotest/final-commit"
 		       action=again ;;
 		[vV]*) action=again
-		       : ${GIT_PAGER=$(git var GIT_PAGER)}
-		       : ${LESS=-FRSX}
-		       export LESS
-		       $GIT_PAGER "$dotest/patch" ;;
+		       git_pager "$dotest/patch" ;;
 		*)     action=again ;;
 		esac
 	    done
@@ -770,6 +773,5 @@ do
 	go_next
 done
 
-git gc --auto
-
 rm -fr "$dotest"
+git gc --auto

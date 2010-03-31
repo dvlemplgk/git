@@ -134,10 +134,20 @@ static void add_pending_object_with_mode(struct rev_info *revs, struct object *o
 {
 	if (revs->no_walk && (obj->flags & UNINTERESTING))
 		revs->no_walk = 0;
-	if (revs->reflog_info && obj->type == OBJ_COMMIT &&
-			add_reflog_for_walk(revs->reflog_info,
-				(struct commit *)obj, name))
-		return;
+	if (revs->reflog_info && obj->type == OBJ_COMMIT) {
+		struct strbuf buf = STRBUF_INIT;
+		int len = interpret_branch_name(name, &buf);
+		int st;
+
+		if (0 < len && name[len] && buf.len)
+			strbuf_addstr(&buf, name + len);
+		st = add_reflog_for_walk(revs->reflog_info,
+					 (struct commit *)obj,
+					 buf.buf[0] ? buf.buf: name);
+		strbuf_release(&buf);
+		if (st)
+			return;
+	}
 	add_object_array_with_mode(obj, name, &revs->pending, mode);
 }
 
@@ -268,7 +278,7 @@ static int tree_difference = REV_TREE_SAME;
 static void file_add_remove(struct diff_options *options,
 		    int addremove, unsigned mode,
 		    const unsigned char *sha1,
-		    const char *fullpath)
+		    const char *fullpath, unsigned dirty_submodule)
 {
 	int diff = addremove == '+' ? REV_TREE_NEW : REV_TREE_OLD;
 
@@ -281,7 +291,8 @@ static void file_change(struct diff_options *options,
 		 unsigned old_mode, unsigned new_mode,
 		 const unsigned char *old_sha1,
 		 const unsigned char *new_sha1,
-		 const char *fullpath)
+		 const char *fullpath,
+		 unsigned old_dirty_submodule, unsigned new_dirty_submodule)
 {
 	tree_difference = REV_TREE_DIFFERENT;
 	DIFF_OPT_SET(options, HAS_CHANGES);
@@ -536,6 +547,9 @@ static void cherry_pick_list(struct commit_list *list, struct rev_info *revs)
 			right_count++;
 	}
 
+	if (!left_count || !right_count)
+		return;
+
 	left_first = left_count < right_count;
 	init_patch_ids(&ids);
 	if (revs->diffopt.nr_paths) {
@@ -699,12 +713,18 @@ static int handle_one_ref(const char *path, const unsigned char *sha1, int flag,
 	return 0;
 }
 
+static void init_all_refs_cb(struct all_refs_cb *cb, struct rev_info *revs,
+	unsigned flags)
+{
+	cb->all_revs = revs;
+	cb->all_flags = flags;
+}
+
 static void handle_refs(struct rev_info *revs, unsigned flags,
 		int (*for_each)(each_ref_fn, void *))
 {
 	struct all_refs_cb cb;
-	cb.all_revs = revs;
-	cb.all_flags = flags;
+	init_all_refs_cb(&cb, revs, flags);
 	for_each(handle_one_ref, &cb);
 }
 
@@ -791,7 +811,7 @@ void init_revisions(struct rev_info *revs, const char *prefix)
 	revs->ignore_merges = 1;
 	revs->simplify_history = 1;
 	DIFF_OPT_SET(&revs->pruning, RECURSIVE);
-	DIFF_OPT_SET(&revs->pruning, QUIET);
+	DIFF_OPT_SET(&revs->pruning, QUICK);
 	revs->pruning.add_remove = file_add_remove;
 	revs->pruning.change = file_change;
 	revs->lifo = 1;
@@ -806,6 +826,7 @@ void init_revisions(struct rev_info *revs, const char *prefix)
 
 	revs->grep_filter.status_only = 1;
 	revs->grep_filter.pattern_tail = &(revs->grep_filter.pattern_list);
+	revs->grep_filter.header_tail = &(revs->grep_filter.header_list);
 	revs->grep_filter.regflags = REG_NEWLINE;
 
 	diff_setup(&revs->diffopt);
@@ -1313,7 +1334,7 @@ static void append_prune_data(const char ***prune_data, const char **av)
  */
 int setup_revisions(int argc, const char **argv, struct rev_info *revs, const char *def)
 {
-	int i, flags, left, seen_dashdash, read_from_stdin;
+	int i, flags, left, seen_dashdash, read_from_stdin, got_rev_arg = 0;
 	const char **prune_data = NULL;
 
 	/* First, search for "--" */
@@ -1359,6 +1380,30 @@ int setup_revisions(int argc, const char **argv, struct rev_info *revs, const ch
 			}
 			if (!strcmp(arg, "--remotes")) {
 				handle_refs(revs, flags, for_each_remote_ref);
+				continue;
+			}
+			if (!prefixcmp(arg, "--glob=")) {
+				struct all_refs_cb cb;
+				init_all_refs_cb(&cb, revs, flags);
+				for_each_glob_ref(handle_one_ref, arg + 7, &cb);
+				continue;
+			}
+			if (!prefixcmp(arg, "--branches=")) {
+				struct all_refs_cb cb;
+				init_all_refs_cb(&cb, revs, flags);
+				for_each_glob_ref_in(handle_one_ref, arg + 11, "refs/heads/", &cb);
+				continue;
+			}
+			if (!prefixcmp(arg, "--tags=")) {
+				struct all_refs_cb cb;
+				init_all_refs_cb(&cb, revs, flags);
+				for_each_glob_ref_in(handle_one_ref, arg + 7, "refs/tags/", &cb);
+				continue;
+			}
+			if (!prefixcmp(arg, "--remotes=")) {
+				struct all_refs_cb cb;
+				init_all_refs_cb(&cb, revs, flags);
+				for_each_glob_ref_in(handle_one_ref, arg + 10, "refs/remotes/", &cb);
 				continue;
 			}
 			if (!strcmp(arg, "--reflog")) {
@@ -1415,6 +1460,8 @@ int setup_revisions(int argc, const char **argv, struct rev_info *revs, const ch
 			append_prune_data(&prune_data, argv + i);
 			break;
 		}
+		else
+			got_rev_arg = 1;
 	}
 
 	if (prune_data)
@@ -1424,7 +1471,7 @@ int setup_revisions(int argc, const char **argv, struct rev_info *revs, const ch
 		revs->def = def;
 	if (revs->show_merge)
 		prepare_show_merge(revs);
-	if (revs->def && !revs->pending.nr) {
+	if (revs->def && !revs->pending.nr && !got_rev_arg) {
 		unsigned char sha1[20];
 		struct object *object;
 		unsigned mode;
@@ -1760,7 +1807,7 @@ static int rewrite_parents(struct rev_info *revs, struct commit *commit)
 
 static int commit_match(struct commit *commit, struct rev_info *opt)
 {
-	if (!opt->grep_filter.pattern_list)
+	if (!opt->grep_filter.pattern_list && !opt->grep_filter.header_list)
 		return 1;
 	return grep_buffer(&opt->grep_filter,
 			   NULL, /* we say nothing, not even filename */

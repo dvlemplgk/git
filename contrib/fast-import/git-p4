@@ -732,7 +732,7 @@ class P4Submit(Command):
             if os.environ.has_key("P4EDITOR"):
                 editor = os.environ.get("P4EDITOR")
             else:
-                editor = read_pipe("git var GIT_EDITOR")
+                editor = read_pipe("git var GIT_EDITOR").strip()
             system(editor + " " + fileName)
 
             response = "y"
@@ -967,9 +967,8 @@ class P4Sync(Command):
         elif file["type"] == "symlink":
             mode = "120000"
             # p4 print on a symlink contains "target\n", so strip it off
-            last = contents.pop()
-            last = last[:-1]
-            contents.append(last)
+            data = ''.join(contents)
+            contents = [data[:-1]]
 
         if self.isWindows and file["type"].endswith("text"):
             mangled = []
@@ -1037,7 +1036,7 @@ class P4Sync(Command):
 
             if includeFile:
                 filesForCommit.append(f)
-                if f['action'] not in ('delete', 'purge'):
+                if f['action'] not in ('delete', 'move/delete', 'purge'):
                     filesToRead.append(f)
                 else:
                     filesToDelete.append(f)

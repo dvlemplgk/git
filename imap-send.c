@@ -91,7 +91,6 @@ struct msg_data {
 	char *data;
 	int len;
 	unsigned char flags;
-	unsigned int crlf:1;
 };
 
 static const char imap_send_usage[] = "git imap-send < <mbox>";
@@ -965,17 +964,13 @@ static struct store *imap_open_store(struct imap_server_conf *srvc)
 	/* open connection to IMAP server */
 
 	if (srvc->tunnel) {
-		const char *argv[4];
+		const char *argv[] = { srvc->tunnel, NULL };
 		struct child_process tunnel = {0};
 
 		imap_info("Starting tunnel '%s'... ", srvc->tunnel);
 
-		argv[0] = "sh";
-		argv[1] = "-c";
-		argv[2] = srvc->tunnel;
-		argv[3] = NULL;
-
 		tunnel.argv = argv;
+		tunnel.use_shell = 1;
 		tunnel.in = -1;
 		tunnel.out = -1;
 		if (start_command(&tunnel))
@@ -1166,6 +1161,44 @@ static int imap_make_flags(int flags, char *buf)
 	return d;
 }
 
+static void lf_to_crlf(struct msg_data *msg)
+{
+	char *new;
+	int i, j, lfnum = 0;
+
+	if (msg->data[0] == '\n')
+		lfnum++;
+	for (i = 1; i < msg->len; i++) {
+		if (msg->data[i - 1] != '\r' && msg->data[i] == '\n')
+			lfnum++;
+	}
+
+	new = xmalloc(msg->len + lfnum);
+	if (msg->data[0] == '\n') {
+		new[0] = '\r';
+		new[1] = '\n';
+		i = 1;
+		j = 2;
+	} else {
+		new[0] = msg->data[0];
+		i = 1;
+		j = 1;
+	}
+	for ( ; i < msg->len; i++) {
+		if (msg->data[i] != '\n') {
+			new[j++] = msg->data[i];
+			continue;
+		}
+		if (msg->data[i - 1] != '\r')
+			new[j++] = '\r';
+		/* otherwise it already had CR before */
+		new[j++] = '\n';
+	}
+	msg->len += lfnum;
+	free(msg->data);
+	msg->data = new;
+}
+
 static int imap_store_msg(struct store *gctx, struct msg_data *data)
 {
 	struct imap_store *ctx = (struct imap_store *)gctx;
@@ -1175,6 +1208,7 @@ static int imap_store_msg(struct store *gctx, struct msg_data *data)
 	int ret, d;
 	char flagstr[128];
 
+	lf_to_crlf(data);
 	memset(&cb, 0, sizeof(cb));
 
 	cb.dlen = data->len;

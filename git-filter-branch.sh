@@ -207,7 +207,7 @@ t,)
 ,*)
 	;;
 *)
-	die "Cannot set --prune-empty and --filter-commit at the same time"
+	die "Cannot set --prune-empty and --commit-filter at the same time"
 esac
 
 case "$force" in
@@ -259,7 +259,6 @@ test -s "$tempdir"/heads ||
 
 GIT_INDEX_FILE="$(pwd)/../index"
 export GIT_INDEX_FILE
-git read-tree || die "Could not seed the index"
 
 # map old->new commit ids for rewriting parents
 mkdir ../map || die "Could not create map/ directory"
@@ -332,7 +331,7 @@ while read commit parents; do
 			die "tree filter failed: $filter_tree"
 
 		(
-			git diff-index -r --name-only $commit &&
+			git diff-index -r --name-only --ignore-submodules $commit &&
 			git ls-files --others
 		) > "$tempdir"/tree-state || exit
 		git update-index --add --replace --remove --stdin \
@@ -463,11 +462,11 @@ if [ "$filter_tag_name" ]; then
 						"$new_sha1" "$new_ref"
 				git cat-file tag "$ref" |
 				sed -n \
-				    -e "1,/^$/{
+				    -e '1,/^$/{
 					  /^object /d
 					  /^type /d
 					  /^tag /d
-					}" \
+					}' \
 				    -e '/^-----BEGIN PGP SIGNATURE-----/q' \
 				    -e 'p' ) |
 				git mktag) ||

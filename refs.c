@@ -519,6 +519,13 @@ const char *resolve_ref(const char *ref, unsigned char *sha1, int reading, int *
 	return ref;
 }
 
+/* The argument to filter_refs */
+struct ref_filter {
+	const char *pattern;
+	each_ref_fn *fn;
+	void *cb_data;
+};
+
 int read_ref(const char *ref, unsigned char *sha1)
 {
 	if (resolve_ref(ref, sha1, 1, NULL))
@@ -543,6 +550,15 @@ static int do_one_ref(const char *base, each_ref_fn fn, int trim,
 	}
 	current_ref = entry;
 	return fn(entry->name + trim, entry->sha1, entry->flag, cb_data);
+}
+
+static int filter_refs(const char *ref, const unsigned char *sha, int flags,
+	void *data)
+{
+	struct ref_filter *filter = (struct ref_filter *)data;
+	if (fnmatch(filter->pattern, ref, 0))
+		return 0;
+	return filter->fn(ref, sha, flags, filter->cb_data);
 }
 
 int peel_ref(const char *ref, unsigned char *sha1)
@@ -672,6 +688,43 @@ int for_each_remote_ref(each_ref_fn fn, void *cb_data)
 int for_each_replace_ref(each_ref_fn fn, void *cb_data)
 {
 	return do_for_each_ref("refs/replace/", fn, 13, 0, cb_data);
+}
+
+int for_each_glob_ref_in(each_ref_fn fn, const char *pattern,
+	const char *prefix, void *cb_data)
+{
+	struct strbuf real_pattern = STRBUF_INIT;
+	struct ref_filter filter;
+	const char *has_glob_specials;
+	int ret;
+
+	if (!prefix && prefixcmp(pattern, "refs/"))
+		strbuf_addstr(&real_pattern, "refs/");
+	else if (prefix)
+		strbuf_addstr(&real_pattern, prefix);
+	strbuf_addstr(&real_pattern, pattern);
+
+	has_glob_specials = strpbrk(pattern, "?*[");
+	if (!has_glob_specials) {
+		/* Append implied '/' '*' if not present. */
+		if (real_pattern.buf[real_pattern.len - 1] != '/')
+			strbuf_addch(&real_pattern, '/');
+		/* No need to check for '*', there is none. */
+		strbuf_addch(&real_pattern, '*');
+	}
+
+	filter.pattern = real_pattern.buf;
+	filter.fn = fn;
+	filter.cb_data = cb_data;
+	ret = for_each_ref(filter_refs, &filter);
+
+	strbuf_release(&real_pattern);
+	return ret;
+}
+
+int for_each_glob_ref(each_ref_fn fn, const char *pattern, void *cb_data)
+{
+	return for_each_glob_ref_in(fn, pattern, NULL, cb_data);
 }
 
 int for_each_rawref(each_ref_fn fn, void *cb_data)
@@ -1521,7 +1574,7 @@ int for_each_recent_reflog_ent(const char *ref, each_reflog_ent_fn fn, long ofs,
 {
 	const char *logfile;
 	FILE *logfp;
-	char buf[1024];
+	struct strbuf sb = STRBUF_INIT;
 	int ret = 0;
 
 	logfile = git_path("logs/%s", ref);
@@ -1534,24 +1587,24 @@ int for_each_recent_reflog_ent(const char *ref, each_reflog_ent_fn fn, long ofs,
 		if (fstat(fileno(logfp), &statbuf) ||
 		    statbuf.st_size < ofs ||
 		    fseek(logfp, -ofs, SEEK_END) ||
-		    fgets(buf, sizeof(buf), logfp)) {
+		    strbuf_getwholeline(&sb, logfp, '\n')) {
 			fclose(logfp);
+			strbuf_release(&sb);
 			return -1;
 		}
 	}
 
-	while (fgets(buf, sizeof(buf), logfp)) {
+	while (!strbuf_getwholeline(&sb, logfp, '\n')) {
 		unsigned char osha1[20], nsha1[20];
 		char *email_end, *message;
 		unsigned long timestamp;
-		int len, tz;
+		int tz;
 
 		/* old SP new SP name <email> SP time TAB msg LF */
-		len = strlen(buf);
-		if (len < 83 || buf[len-1] != '\n' ||
-		    get_sha1_hex(buf, osha1) || buf[40] != ' ' ||
-		    get_sha1_hex(buf + 41, nsha1) || buf[81] != ' ' ||
-		    !(email_end = strchr(buf + 82, '>')) ||
+		if (sb.len < 83 || sb.buf[sb.len - 1] != '\n' ||
+		    get_sha1_hex(sb.buf, osha1) || sb.buf[40] != ' ' ||
+		    get_sha1_hex(sb.buf + 41, nsha1) || sb.buf[81] != ' ' ||
+		    !(email_end = strchr(sb.buf + 82, '>')) ||
 		    email_end[1] != ' ' ||
 		    !(timestamp = strtoul(email_end + 2, &message, 10)) ||
 		    !message || message[0] != ' ' ||
@@ -1565,11 +1618,13 @@ int for_each_recent_reflog_ent(const char *ref, each_reflog_ent_fn fn, long ofs,
 			message += 6;
 		else
 			message += 7;
-		ret = fn(osha1, nsha1, buf+82, timestamp, tz, message, cb_data);
+		ret = fn(osha1, nsha1, sb.buf + 82, timestamp, tz, message,
+			 cb_data);
 		if (ret)
 			break;
 	}
 	fclose(logfp);
+	strbuf_release(&sb);
 	return ret;
 }
 

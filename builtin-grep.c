@@ -15,18 +15,275 @@
 #include "grep.h"
 #include "quote.h"
 
-#ifndef NO_EXTERNAL_GREP
-#ifdef __unix__
-#define NO_EXTERNAL_GREP 0
-#else
-#define NO_EXTERNAL_GREP 1
-#endif
+#ifndef NO_PTHREADS
+#include "thread-utils.h"
+#include <pthread.h>
 #endif
 
 static char const * const grep_usage[] = {
 	"git grep [options] [-e] <pattern> [<rev>...] [[--] path...]",
 	NULL
 };
+
+static int use_threads = 1;
+
+#ifndef NO_PTHREADS
+#define THREADS 8
+static pthread_t threads[THREADS];
+
+static void *load_sha1(const unsigned char *sha1, unsigned long *size,
+		       const char *name);
+static void *load_file(const char *filename, size_t *sz);
+
+enum work_type {WORK_SHA1, WORK_FILE};
+
+/* We use one producer thread and THREADS consumer
+ * threads. The producer adds struct work_items to 'todo' and the
+ * consumers pick work items from the same array.
+ */
+struct work_item
+{
+	enum work_type type;
+	char *name;
+
+	/* if type == WORK_SHA1, then 'identifier' is a SHA1,
+	 * otherwise type == WORK_FILE, and 'identifier' is a NUL
+	 * terminated filename.
+	 */
+	void *identifier;
+	char done;
+	struct strbuf out;
+};
+
+/* In the range [todo_done, todo_start) in 'todo' we have work_items
+ * that have been or are processed by a consumer thread. We haven't
+ * written the result for these to stdout yet.
+ *
+ * The work_items in [todo_start, todo_end) are waiting to be picked
+ * up by a consumer thread.
+ *
+ * The ranges are modulo TODO_SIZE.
+ */
+#define TODO_SIZE 128
+static struct work_item todo[TODO_SIZE];
+static int todo_start;
+static int todo_end;
+static int todo_done;
+
+/* Has all work items been added? */
+static int all_work_added;
+
+/* This lock protects all the variables above. */
+static pthread_mutex_t grep_mutex;
+
+/* Used to serialize calls to read_sha1_file. */
+static pthread_mutex_t read_sha1_mutex;
+
+#define grep_lock() pthread_mutex_lock(&grep_mutex)
+#define grep_unlock() pthread_mutex_unlock(&grep_mutex)
+#define read_sha1_lock() pthread_mutex_lock(&read_sha1_mutex)
+#define read_sha1_unlock() pthread_mutex_unlock(&read_sha1_mutex)
+
+/* Signalled when a new work_item is added to todo. */
+static pthread_cond_t cond_add;
+
+/* Signalled when the result from one work_item is written to
+ * stdout.
+ */
+static pthread_cond_t cond_write;
+
+/* Signalled when we are finished with everything. */
+static pthread_cond_t cond_result;
+
+static void add_work(enum work_type type, char *name, void *id)
+{
+	grep_lock();
+
+	while ((todo_end+1) % ARRAY_SIZE(todo) == todo_done) {
+		pthread_cond_wait(&cond_write, &grep_mutex);
+	}
+
+	todo[todo_end].type = type;
+	todo[todo_end].name = name;
+	todo[todo_end].identifier = id;
+	todo[todo_end].done = 0;
+	strbuf_reset(&todo[todo_end].out);
+	todo_end = (todo_end + 1) % ARRAY_SIZE(todo);
+
+	pthread_cond_signal(&cond_add);
+	grep_unlock();
+}
+
+static struct work_item *get_work(void)
+{
+	struct work_item *ret;
+
+	grep_lock();
+	while (todo_start == todo_end && !all_work_added) {
+		pthread_cond_wait(&cond_add, &grep_mutex);
+	}
+
+	if (todo_start == todo_end && all_work_added) {
+		ret = NULL;
+	} else {
+		ret = &todo[todo_start];
+		todo_start = (todo_start + 1) % ARRAY_SIZE(todo);
+	}
+	grep_unlock();
+	return ret;
+}
+
+static void grep_sha1_async(struct grep_opt *opt, char *name,
+			    const unsigned char *sha1)
+{
+	unsigned char *s;
+	s = xmalloc(20);
+	memcpy(s, sha1, 20);
+	add_work(WORK_SHA1, name, s);
+}
+
+static void grep_file_async(struct grep_opt *opt, char *name,
+			    const char *filename)
+{
+	add_work(WORK_FILE, name, xstrdup(filename));
+}
+
+static void work_done(struct work_item *w)
+{
+	int old_done;
+
+	grep_lock();
+	w->done = 1;
+	old_done = todo_done;
+	for(; todo[todo_done].done && todo_done != todo_start;
+	    todo_done = (todo_done+1) % ARRAY_SIZE(todo)) {
+		w = &todo[todo_done];
+		write_or_die(1, w->out.buf, w->out.len);
+		free(w->name);
+		free(w->identifier);
+	}
+
+	if (old_done != todo_done)
+		pthread_cond_signal(&cond_write);
+
+	if (all_work_added && todo_done == todo_end)
+		pthread_cond_signal(&cond_result);
+
+	grep_unlock();
+}
+
+static void *run(void *arg)
+{
+	int hit = 0;
+	struct grep_opt *opt = arg;
+
+	while (1) {
+		struct work_item *w = get_work();
+		if (!w)
+			break;
+
+		opt->output_priv = w;
+		if (w->type == WORK_SHA1) {
+			unsigned long sz;
+			void* data = load_sha1(w->identifier, &sz, w->name);
+
+			if (data) {
+				hit |= grep_buffer(opt, w->name, data, sz);
+				free(data);
+			}
+		} else if (w->type == WORK_FILE) {
+			size_t sz;
+			void* data = load_file(w->identifier, &sz);
+			if (data) {
+				hit |= grep_buffer(opt, w->name, data, sz);
+				free(data);
+			}
+		} else {
+			assert(0);
+		}
+
+		work_done(w);
+	}
+	free_grep_patterns(arg);
+	free(arg);
+
+	return (void*) (intptr_t) hit;
+}
+
+static void strbuf_out(struct grep_opt *opt, const void *buf, size_t size)
+{
+	struct work_item *w = opt->output_priv;
+	strbuf_add(&w->out, buf, size);
+}
+
+static void start_threads(struct grep_opt *opt)
+{
+	int i;
+
+	pthread_mutex_init(&grep_mutex, NULL);
+	pthread_mutex_init(&read_sha1_mutex, NULL);
+	pthread_cond_init(&cond_add, NULL);
+	pthread_cond_init(&cond_write, NULL);
+	pthread_cond_init(&cond_result, NULL);
+
+	for (i = 0; i < ARRAY_SIZE(todo); i++) {
+		strbuf_init(&todo[i].out, 0);
+	}
+
+	for (i = 0; i < ARRAY_SIZE(threads); i++) {
+		int err;
+		struct grep_opt *o = grep_opt_dup(opt);
+		o->output = strbuf_out;
+		compile_grep_patterns(o);
+		err = pthread_create(&threads[i], NULL, run, o);
+
+		if (err)
+			die("grep: failed to create thread: %s",
+			    strerror(err));
+	}
+}
+
+static int wait_all(void)
+{
+	int hit = 0;
+	int i;
+
+	grep_lock();
+	all_work_added = 1;
+
+	/* Wait until all work is done. */
+	while (todo_done != todo_end)
+		pthread_cond_wait(&cond_result, &grep_mutex);
+
+	/* Wake up all the consumer threads so they can see that there
+	 * is no more work to do.
+	 */
+	pthread_cond_broadcast(&cond_add);
+	grep_unlock();
+
+	for (i = 0; i < ARRAY_SIZE(threads); i++) {
+		void *h;
+		pthread_join(threads[i], &h);
+		hit |= (int) (intptr_t) h;
+	}
+
+	pthread_mutex_destroy(&grep_mutex);
+	pthread_mutex_destroy(&read_sha1_mutex);
+	pthread_cond_destroy(&cond_add);
+	pthread_cond_destroy(&cond_write);
+	pthread_cond_destroy(&cond_result);
+
+	return hit;
+}
+#else /* !NO_PTHREADS */
+#define read_sha1_lock()
+#define read_sha1_unlock()
+
+static int wait_all(void)
+{
+	return 0;
+}
+#endif
 
 static int grep_config(const char *var, const char *value, void *cb)
 {
@@ -42,8 +299,6 @@ static int grep_config(const char *var, const char *value, void *cb)
 		opt->color = git_config_colorbool(var, value, -1);
 		return 0;
 	}
-	if (!strcmp(var, "color.grep.external"))
-		return git_config_string(&(opt->color_external), var, value);
 	if (!strcmp(var, "color.grep.match")) {
 		if (!value)
 			return config_error_nonbool(var);
@@ -153,37 +408,74 @@ static int pathspec_matches(const char **paths, const char *name, int max_depth)
 	return 0;
 }
 
-static int grep_sha1(struct grep_opt *opt, const unsigned char *sha1, const char *name, int tree_name_len)
+static void *lock_and_read_sha1_file(const unsigned char *sha1, enum object_type *type, unsigned long *size)
 {
-	unsigned long size;
-	char *data;
-	enum object_type type;
-	int hit;
-	struct strbuf pathbuf = STRBUF_INIT;
+	void *data;
 
-	data = read_sha1_file(sha1, &type, &size);
-	if (!data) {
-		error("'%s': unable to read %s", name, sha1_to_hex(sha1));
-		return 0;
+	if (use_threads) {
+		read_sha1_lock();
+		data = read_sha1_file(sha1, type, size);
+		read_sha1_unlock();
+	} else {
+		data = read_sha1_file(sha1, type, size);
 	}
-	if (opt->relative && opt->prefix_length) {
-		quote_path_relative(name + tree_name_len, -1, &pathbuf, opt->prefix);
-		strbuf_insert(&pathbuf, 0, name, tree_name_len);
-		name = pathbuf.buf;
-	}
-	hit = grep_buffer(opt, name, data, size);
-	strbuf_release(&pathbuf);
-	free(data);
-	return hit;
+	return data;
 }
 
-static int grep_file(struct grep_opt *opt, const char *filename)
+static void *load_sha1(const unsigned char *sha1, unsigned long *size,
+		       const char *name)
+{
+	enum object_type type;
+	void *data = lock_and_read_sha1_file(sha1, &type, size);
+
+	if (!data)
+		error("'%s': unable to read %s", name, sha1_to_hex(sha1));
+
+	return data;
+}
+
+static int grep_sha1(struct grep_opt *opt, const unsigned char *sha1,
+		     const char *filename, int tree_name_len)
+{
+	struct strbuf pathbuf = STRBUF_INIT;
+	char *name;
+
+	if (opt->relative && opt->prefix_length) {
+		quote_path_relative(filename + tree_name_len, -1, &pathbuf,
+				    opt->prefix);
+		strbuf_insert(&pathbuf, 0, filename, tree_name_len);
+	} else {
+		strbuf_addstr(&pathbuf, filename);
+	}
+
+	name = strbuf_detach(&pathbuf, NULL);
+
+#ifndef NO_PTHREADS
+	if (use_threads) {
+		grep_sha1_async(opt, name, sha1);
+		return 0;
+	} else
+#endif
+	{
+		int hit;
+		unsigned long sz;
+		void *data = load_sha1(sha1, &sz, name);
+		if (!data)
+			hit = 0;
+		else
+			hit = grep_buffer(opt, name, data, sz);
+
+		free(data);
+		free(name);
+		return hit;
+	}
+}
+
+static void *load_file(const char *filename, size_t *sz)
 {
 	struct stat st;
-	int i;
 	char *data;
-	size_t sz;
-	struct strbuf buf = STRBUF_INIT;
+	int i;
 
 	if (lstat(filename, &st) < 0) {
 	err_ret:
@@ -193,312 +485,59 @@ static int grep_file(struct grep_opt *opt, const char *filename)
 	}
 	if (!S_ISREG(st.st_mode))
 		return 0;
-	sz = xsize_t(st.st_size);
+	*sz = xsize_t(st.st_size);
 	i = open(filename, O_RDONLY);
 	if (i < 0)
 		goto err_ret;
-	data = xmalloc(sz + 1);
-	if (st.st_size != read_in_full(i, data, sz)) {
+	data = xmalloc(*sz + 1);
+	if (st.st_size != read_in_full(i, data, *sz)) {
 		error("'%s': short read %s", filename, strerror(errno));
 		close(i);
 		free(data);
 		return 0;
 	}
 	close(i);
-	data[sz] = 0;
+	data[*sz] = 0;
+	return data;
+}
+
+static int grep_file(struct grep_opt *opt, const char *filename)
+{
+	struct strbuf buf = STRBUF_INIT;
+	char *name;
+
 	if (opt->relative && opt->prefix_length)
-		filename = quote_path_relative(filename, -1, &buf, opt->prefix);
-	i = grep_buffer(opt, filename, data, sz);
-	strbuf_release(&buf);
-	free(data);
-	return i;
-}
+		quote_path_relative(filename, -1, &buf, opt->prefix);
+	else
+		strbuf_addstr(&buf, filename);
+	name = strbuf_detach(&buf, NULL);
 
-#if !NO_EXTERNAL_GREP
-static int exec_grep(int argc, const char **argv)
-{
-	pid_t pid;
-	int status;
-
-	argv[argc] = NULL;
-	pid = fork();
-	if (pid < 0)
-		return pid;
-	if (!pid) {
-		execvp("grep", (char **) argv);
-		exit(255);
-	}
-	while (waitpid(pid, &status, 0) < 0) {
-		if (errno == EINTR)
-			continue;
-		return -1;
-	}
-	if (WIFEXITED(status)) {
-		if (!WEXITSTATUS(status))
-			return 1;
+#ifndef NO_PTHREADS
+	if (use_threads) {
+		grep_file_async(opt, name, filename);
 		return 0;
-	}
-	return -1;
-}
-
-#define MAXARGS 1000
-#define ARGBUF 4096
-#define push_arg(a) do { \
-	if (nr < MAXARGS) argv[nr++] = (a); \
-	else die("maximum number of args exceeded"); \
-	} while (0)
-
-/*
- * If you send a singleton filename to grep, it does not give
- * the name of the file.  GNU grep has "-H" but we would want
- * that behaviour in a portable way.
- *
- * So we keep two pathnames in argv buffer unsent to grep in
- * the main loop if we need to do more than one grep.
- */
-static int flush_grep(struct grep_opt *opt,
-		      int argc, int arg0, const char **argv, int *kept)
-{
-	int status;
-	int count = argc - arg0;
-	const char *kept_0 = NULL;
-
-	if (count <= 2) {
-		/*
-		 * Because we keep at least 2 paths in the call from
-		 * the main loop (i.e. kept != NULL), and MAXARGS is
-		 * far greater than 2, this usually is a call to
-		 * conclude the grep.  However, the user could attempt
-		 * to overflow the argv buffer by giving too many
-		 * options to leave very small number of real
-		 * arguments even for the call in the main loop.
-		 */
-		if (kept)
-			die("insanely many options to grep");
-
-		/*
-		 * If we have two or more paths, we do not have to do
-		 * anything special, but we need to push /dev/null to
-		 * get "-H" behaviour of GNU grep portably but when we
-		 * are not doing "-l" nor "-L" nor "-c".
-		 */
-		if (count == 1 &&
-		    !opt->name_only &&
-		    !opt->unmatch_name_only &&
-		    !opt->count) {
-			argv[argc++] = "/dev/null";
-			argv[argc] = NULL;
-		}
-	}
-
-	else if (kept) {
-		/*
-		 * Called because we found many paths and haven't finished
-		 * iterating over the cache yet.  We keep two paths
-		 * for the concluding call.  argv[argc-2] and argv[argc-1]
-		 * has the last two paths, so save the first one away,
-		 * replace it with NULL while sending the list to grep,
-		 * and recover them after we are done.
-		 */
-		*kept = 2;
-		kept_0 = argv[argc-2];
-		argv[argc-2] = NULL;
-		argc -= 2;
-	}
-
-	if (opt->pre_context || opt->post_context) {
-		/*
-		 * grep handles hunk marks between files, but we need to
-		 * do that ourselves between multiple calls.
-		 */
-		if (opt->show_hunk_mark)
-			write_or_die(1, "--\n", 3);
-		else
-			opt->show_hunk_mark = 1;
-	}
-
-	status = exec_grep(argc, argv);
-
-	if (kept_0) {
-		/*
-		 * Then recover them.  Now the last arg is beyond the
-		 * terminating NULL which is at argc, and the second
-		 * from the last is what we saved away in kept_0
-		 */
-		argv[arg0++] = kept_0;
-		argv[arg0] = argv[argc+1];
-	}
-	return status;
-}
-
-static void grep_add_color(struct strbuf *sb, const char *escape_seq)
-{
-	size_t orig_len = sb->len;
-
-	while (*escape_seq) {
-		if (*escape_seq == 'm')
-			strbuf_addch(sb, ';');
-		else if (*escape_seq != '\033' && *escape_seq  != '[')
-			strbuf_addch(sb, *escape_seq);
-		escape_seq++;
-	}
-	if (sb->len > orig_len && sb->buf[sb->len - 1] == ';')
-		strbuf_setlen(sb, sb->len - 1);
-}
-
-static int external_grep(struct grep_opt *opt, const char **paths, int cached)
-{
-	int i, nr, argc, hit, len, status;
-	const char *argv[MAXARGS+1];
-	char randarg[ARGBUF];
-	char *argptr = randarg;
-	struct grep_pat *p;
-
-	if (opt->extended || (opt->relative && opt->prefix_length))
-		return -1;
-	len = nr = 0;
-	push_arg("grep");
-	if (opt->fixed)
-		push_arg("-F");
-	if (opt->linenum)
-		push_arg("-n");
-	if (!opt->pathname)
-		push_arg("-h");
-	if (opt->regflags & REG_EXTENDED)
-		push_arg("-E");
-	if (opt->ignore_case)
-		push_arg("-i");
-	if (opt->binary == GREP_BINARY_NOMATCH)
-		push_arg("-I");
-	if (opt->word_regexp)
-		push_arg("-w");
-	if (opt->name_only)
-		push_arg("-l");
-	if (opt->unmatch_name_only)
-		push_arg("-L");
-	if (opt->null_following_name)
-		/* in GNU grep git's "-z" translates to "-Z" */
-		push_arg("-Z");
-	if (opt->count)
-		push_arg("-c");
-	if (opt->post_context || opt->pre_context) {
-		if (opt->post_context != opt->pre_context) {
-			if (opt->pre_context) {
-				push_arg("-B");
-				len += snprintf(argptr, sizeof(randarg)-len,
-						"%u", opt->pre_context) + 1;
-				if (sizeof(randarg) <= len)
-					die("maximum length of args exceeded");
-				push_arg(argptr);
-				argptr += len;
-			}
-			if (opt->post_context) {
-				push_arg("-A");
-				len += snprintf(argptr, sizeof(randarg)-len,
-						"%u", opt->post_context) + 1;
-				if (sizeof(randarg) <= len)
-					die("maximum length of args exceeded");
-				push_arg(argptr);
-				argptr += len;
-			}
-		}
-		else {
-			push_arg("-C");
-			len += snprintf(argptr, sizeof(randarg)-len,
-					"%u", opt->post_context) + 1;
-			if (sizeof(randarg) <= len)
-				die("maximum length of args exceeded");
-			push_arg(argptr);
-			argptr += len;
-		}
-	}
-	for (p = opt->pattern_list; p; p = p->next) {
-		push_arg("-e");
-		push_arg(p->pattern);
-	}
-	if (opt->color) {
-		struct strbuf sb = STRBUF_INIT;
-
-		grep_add_color(&sb, opt->color_match);
-		setenv("GREP_COLOR", sb.buf, 1);
-
-		strbuf_reset(&sb);
-		strbuf_addstr(&sb, "mt=");
-		grep_add_color(&sb, opt->color_match);
-		strbuf_addstr(&sb, ":sl=:cx=:fn=:ln=:bn=:se=");
-		setenv("GREP_COLORS", sb.buf, 1);
-
-		strbuf_release(&sb);
-
-		if (opt->color_external && strlen(opt->color_external) > 0)
-			push_arg(opt->color_external);
-	} else {
-		unsetenv("GREP_COLOR");
-		unsetenv("GREP_COLORS");
-	}
-	unsetenv("GREP_OPTIONS");
-
-	hit = 0;
-	argc = nr;
-	for (i = 0; i < active_nr; i++) {
-		struct cache_entry *ce = active_cache[i];
-		char *name;
-		int kept;
-		if (!S_ISREG(ce->ce_mode))
-			continue;
-		if (!pathspec_matches(paths, ce->name, opt->max_depth))
-			continue;
-		name = ce->name;
-		if (name[0] == '-') {
-			int len = ce_namelen(ce);
-			name = xmalloc(len + 3);
-			memcpy(name, "./", 2);
-			memcpy(name + 2, ce->name, len + 1);
-		}
-		argv[argc++] = name;
-		if (MAXARGS <= argc) {
-			status = flush_grep(opt, argc, nr, argv, &kept);
-			if (0 < status)
-				hit = 1;
-			argc = nr + kept;
-		}
-		if (ce_stage(ce)) {
-			do {
-				i++;
-			} while (i < active_nr &&
-				 !strcmp(ce->name, active_cache[i]->name));
-			i--; /* compensate for loop control */
-		}
-	}
-	if (argc > nr) {
-		status = flush_grep(opt, argc, nr, argv, NULL);
-		if (0 < status)
-			hit = 1;
-	}
-	return hit;
-}
+	} else
 #endif
+	{
+		int hit;
+		size_t sz;
+		void *data = load_file(filename, &sz);
+		if (!data)
+			hit = 0;
+		else
+			hit = grep_buffer(opt, name, data, sz);
 
-static int grep_cache(struct grep_opt *opt, const char **paths, int cached,
-		      int external_grep_allowed)
+		free(data);
+		free(name);
+		return hit;
+	}
+}
+
+static int grep_cache(struct grep_opt *opt, const char **paths, int cached)
 {
 	int hit = 0;
 	int nr;
 	read_cache();
-
-#if !NO_EXTERNAL_GREP
-	/*
-	 * Use the external "grep" command for the case where
-	 * we grep through the checked-out files. It tends to
-	 * be a lot more optimized
-	 */
-	if (!cached && external_grep_allowed) {
-		hit = external_grep(opt, paths, cached);
-		if (hit >= 0)
-			return hit;
-		hit = 0;
-	}
-#endif
 
 	for (nr = 0; nr < active_nr; nr++) {
 		struct cache_entry *ce = active_cache[nr];
@@ -511,7 +550,7 @@ static int grep_cache(struct grep_opt *opt, const char **paths, int cached,
 		 * are identical, even if worktree file has been modified, so use
 		 * cache version instead
 		 */
-		if (cached || (ce->ce_flags & CE_VALID)) {
+		if (cached || (ce->ce_flags & CE_VALID) || ce_skip_worktree(ce)) {
 			if (ce_stage(ce))
 				continue;
 			hit |= grep_sha1(opt, ce->sha1, ce->name, 0);
@@ -525,6 +564,8 @@ static int grep_cache(struct grep_opt *opt, const char **paths, int cached,
 				 !strcmp(ce->name, active_cache[nr]->name));
 			nr--; /* compensate for loop control */
 		}
+		if (hit && opt->status_only)
+			break;
 	}
 	free_grep_patterns(opt);
 	return hit;
@@ -574,7 +615,7 @@ static int grep_tree(struct grep_opt *opt, const char **paths,
 			void *data;
 			unsigned long size;
 
-			data = read_sha1_file(entry.sha1, &type, &size);
+			data = lock_and_read_sha1_file(entry.sha1, &type, &size);
 			if (!data)
 				die("unable to read tree (%s)",
 				    sha1_to_hex(entry.sha1));
@@ -582,6 +623,8 @@ static int grep_tree(struct grep_opt *opt, const char **paths,
 			hit |= grep_tree(opt, paths, &sub, tree_name, down);
 			free(data);
 		}
+		if (hit && opt->status_only)
+			break;
 	}
 	strbuf_release(&pathbuf);
 	return hit;
@@ -696,8 +739,8 @@ int cmd_grep(int argc, const char **argv, const char *prefix)
 {
 	int hit = 0;
 	int cached = 0;
-	int external_grep_allowed = 1;
 	int seen_dashdash = 0;
+	int external_grep_allowed__ignored;
 	struct grep_opt opt;
 	struct object_array list = { 0, 0, NULL };
 	const char **paths = NULL;
@@ -776,16 +819,13 @@ int cmd_grep(int argc, const char **argv, const char *prefix)
 		{ OPTION_CALLBACK, ')', NULL, &opt, NULL, "",
 		  PARSE_OPT_NOARG | PARSE_OPT_NONEG | PARSE_OPT_NODASH,
 		  close_callback },
+		OPT_BOOLEAN('q', "quiet", &opt.status_only,
+			    "indicate hit with exit status without output"),
 		OPT_BOOLEAN(0, "all-match", &opt.all_match,
 			"show only matches from files that match all patterns"),
 		OPT_GROUP(""),
-#if NO_EXTERNAL_GREP
-		OPT_BOOLEAN(0, "ext-grep", &external_grep_allowed,
-			"allow calling of grep(1) (ignored by this build)"),
-#else
-		OPT_BOOLEAN(0, "ext-grep", &external_grep_allowed,
-			"allow calling of grep(1) (default)"),
-#endif
+		OPT_BOOLEAN(0, "ext-grep", &external_grep_allowed__ignored,
+			    "allow calling of grep(1) (ignored by this build)"),
 		{ OPTION_CALLBACK, 0, "help-all", &options, NULL, "show usage",
 		  PARSE_OPT_HIDDEN | PARSE_OPT_NOARG, help_callback },
 		OPT_END()
@@ -804,6 +844,7 @@ int cmd_grep(int argc, const char **argv, const char *prefix)
 	opt.relative = 1;
 	opt.pathname = 1;
 	opt.pattern_tail = &opt.pattern_list;
+	opt.header_tail = &opt.header_list;
 	opt.regflags = REG_NEWLINE;
 	opt.max_depth = -1;
 
@@ -828,6 +869,16 @@ int cmd_grep(int argc, const char **argv, const char *prefix)
 			     PARSE_OPT_STOP_AT_NON_OPTION |
 			     PARSE_OPT_NO_INTERNAL_HELP);
 
+	/*
+	 * skip a -- separator; we know it cannot be
+	 * separating revisions from pathnames if
+	 * we haven't even had any patterns yet
+	 */
+	if (argc > 0 && !opt.pattern_list && !strcmp(argv[0], "--")) {
+		argv++;
+		argc--;
+	}
+
 	/* First unrecognized non-option token */
 	if (argc > 0 && !opt.pattern_list) {
 		append_grep_pattern(&opt, argv[0], "command line", 0,
@@ -836,14 +887,23 @@ int cmd_grep(int argc, const char **argv, const char *prefix)
 		argc--;
 	}
 
-	if ((opt.color && !opt.color_external) || opt.funcname)
-		external_grep_allowed = 0;
 	if (!opt.pattern_list)
 		die("no pattern given.");
 	if (!opt.fixed && opt.ignore_case)
 		opt.regflags |= REG_ICASE;
 	if ((opt.regflags != REG_NEWLINE) && opt.fixed)
 		die("cannot mix --fixed-strings and regexp");
+
+#ifndef NO_PTHREADS
+	if (online_cpus() == 1 || !grep_threads_ok(&opt))
+		use_threads = 0;
+
+	if (use_threads)
+		start_threads(&opt);
+#else
+	use_threads = 0;
+#endif
+
 	compile_grep_patterns(&opt);
 
 	/* Check revs and then paths */
@@ -881,9 +941,14 @@ int cmd_grep(int argc, const char **argv, const char *prefix)
 	}
 
 	if (!list.nr) {
+		int hit;
 		if (!cached)
 			setup_work_tree();
-		return !grep_cache(&opt, paths, cached, external_grep_allowed);
+
+		hit = grep_cache(&opt, paths, cached);
+		if (use_threads)
+			hit |= wait_all();
+		return !hit;
 	}
 
 	if (cached)
@@ -892,9 +957,15 @@ int cmd_grep(int argc, const char **argv, const char *prefix)
 	for (i = 0; i < list.nr; i++) {
 		struct object *real_obj;
 		real_obj = deref_tag(list.objects[i].item, NULL, 0);
-		if (grep_object(&opt, paths, real_obj, list.objects[i].name))
+		if (grep_object(&opt, paths, real_obj, list.objects[i].name)) {
 			hit = 1;
+			if (opt.status_only)
+				break;
+		}
 	}
+
+	if (use_threads)
+		hit |= wait_all();
 	free_grep_patterns(&opt);
 	return !hit;
 }

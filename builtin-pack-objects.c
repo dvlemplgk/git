@@ -17,7 +17,7 @@
 #include "progress.h"
 #include "refs.h"
 
-#ifdef THREADED_DELTA_SEARCH
+#ifndef NO_PTHREADS
 #include "thread-utils.h"
 #include <pthread.h>
 #endif
@@ -77,7 +77,7 @@ static int allow_ofs_delta;
 static const char *base_name;
 static int progress = 1;
 static int window = 10;
-static uint32_t pack_size_limit, pack_size_limit_cfg;
+static unsigned long pack_size_limit, pack_size_limit_cfg;
 static int depth = 50;
 static int delta_search_threads;
 static int pack_to_stdout;
@@ -246,7 +246,7 @@ static unsigned long write_object(struct sha1file *f,
 
 	type = entry->type;
 
-	/* write limit if limited packsize and not first object */
+	/* apply size limit if limited packsize and not first object */
 	if (!pack_size_limit || !nr_written)
 		limit = 0;
 	else if (pack_size_limit <= write_offset)
@@ -443,7 +443,7 @@ static int write_one(struct sha1file *f,
 
 	/* offset is non zero if object is written already. */
 	if (e->idx.offset || e->preferred_base)
-		return 1;
+		return -1;
 
 	/* if we are deltified, write out base object first. */
 	if (e->delta && !write_one(f, e->delta, offset))
@@ -463,9 +463,6 @@ static int write_one(struct sha1file *f,
 	*offset += size;
 	return 1;
 }
-
-/* forward declaration for write_pack_file */
-static int adjust_perm(const char *path, mode_t mode);
 
 static void write_pack_file(void)
 {
@@ -523,12 +520,9 @@ static void write_pack_file(void)
 		}
 
 		if (!pack_to_stdout) {
-			mode_t mode = umask(0);
 			struct stat st;
-			char *idx_tmp_name, tmpname[PATH_MAX];
-
-			umask(mode);
-			mode = 0444 & ~mode;
+			const char *idx_tmp_name;
+			char tmpname[PATH_MAX];
 
 			idx_tmp_name = write_idx_file(NULL, written_list,
 						      nr_written, sha1);
@@ -536,7 +530,7 @@ static void write_pack_file(void)
 			snprintf(tmpname, sizeof(tmpname), "%s-%s.pack",
 				 base_name, sha1_to_hex(sha1));
 			free_pack_by_name(tmpname);
-			if (adjust_perm(pack_tmp_name, mode))
+			if (adjust_shared_perm(pack_tmp_name))
 				die_errno("unable to make temporary pack file readable");
 			if (rename(pack_tmp_name, tmpname))
 				die_errno("unable to rename temporary pack file");
@@ -564,12 +558,12 @@ static void write_pack_file(void)
 
 			snprintf(tmpname, sizeof(tmpname), "%s-%s.idx",
 				 base_name, sha1_to_hex(sha1));
-			if (adjust_perm(idx_tmp_name, mode))
+			if (adjust_shared_perm(idx_tmp_name))
 				die_errno("unable to make temporary index file readable");
 			if (rename(idx_tmp_name, tmpname))
 				die_errno("unable to rename temporary index file");
 
-			free(idx_tmp_name);
+			free((void *) idx_tmp_name);
 			free(pack_tmp_name);
 			puts(sha1_to_hex(sha1));
 		}
@@ -586,19 +580,6 @@ static void write_pack_file(void)
 	if (written != nr_result)
 		die("wrote %"PRIu32" objects while expecting %"PRIu32,
 			written, nr_result);
-	/*
-	 * We have scanned through [0 ... i).  Since we have written
-	 * the correct number of objects,  the remaining [i ... nr_objects)
-	 * items must be either already written (due to out-of-order delta base)
-	 * or a preferred base.  Count those which are neither and complain if any.
-	 */
-	for (j = 0; i < nr_objects; i++) {
-		struct object_entry *e = objects + i;
-		j += !e->idx.offset && !e->preferred_base;
-	}
-	if (j)
-		die("wrote %"PRIu32" objects as expected but %"PRIu32
-			" unwritten", written, j);
 }
 
 static int locate_object_entry_hash(const unsigned char *sha1)
@@ -673,7 +654,7 @@ static void setup_delta_attr_check(struct git_attr_check *check)
 	static struct git_attr *attr_delta;
 
 	if (!attr_delta)
-		attr_delta = git_attr("delta", 5);
+		attr_delta = git_attr("delta");
 
 	check[0].attr = attr_delta;
 }
@@ -1254,17 +1235,17 @@ static int delta_cacheable(unsigned long src_size, unsigned long trg_size,
 	return 0;
 }
 
-#ifdef THREADED_DELTA_SEARCH
+#ifndef NO_PTHREADS
 
-static pthread_mutex_t read_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t read_mutex;
 #define read_lock()		pthread_mutex_lock(&read_mutex)
 #define read_unlock()		pthread_mutex_unlock(&read_mutex)
 
-static pthread_mutex_t cache_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t cache_mutex;
 #define cache_lock()		pthread_mutex_lock(&cache_mutex)
 #define cache_unlock()		pthread_mutex_unlock(&cache_mutex)
 
-static pthread_mutex_t progress_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t progress_mutex;
 #define progress_lock()		pthread_mutex_lock(&progress_mutex)
 #define progress_unlock()	pthread_mutex_unlock(&progress_mutex)
 
@@ -1379,7 +1360,7 @@ static int try_delta(struct unpacked *trg, struct unpacked *src,
 	/*
 	 * Handle memory allocation outside of the cache
 	 * accounting lock.  Compiler will optimize the strangeness
-	 * away when THREADED_DELTA_SEARCH is not defined.
+	 * away when NO_PTHREADS is defined.
 	 */
 	free(trg_entry->delta_data);
 	cache_lock();
@@ -1566,7 +1547,7 @@ static void find_deltas(struct object_entry **list, unsigned *list_size,
 	free(array);
 }
 
-#ifdef THREADED_DELTA_SEARCH
+#ifndef NO_PTHREADS
 
 /*
  * The main thread waits on the condition that (at least) one of the workers
@@ -1591,7 +1572,26 @@ struct thread_params {
 	unsigned *processed;
 };
 
-static pthread_cond_t progress_cond = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t progress_cond;
+
+/*
+ * Mutex and conditional variable can't be statically-initialized on Windows.
+ */
+static void init_threaded_search(void)
+{
+	pthread_mutex_init(&read_mutex, NULL);
+	pthread_mutex_init(&cache_mutex, NULL);
+	pthread_mutex_init(&progress_mutex, NULL);
+	pthread_cond_init(&progress_cond, NULL);
+}
+
+static void cleanup_threaded_search(void)
+{
+	pthread_cond_destroy(&progress_cond);
+	pthread_mutex_destroy(&read_mutex);
+	pthread_mutex_destroy(&cache_mutex);
+	pthread_mutex_destroy(&progress_mutex);
+}
 
 static void *threaded_find_deltas(void *arg)
 {
@@ -1630,10 +1630,13 @@ static void ll_find_deltas(struct object_entry **list, unsigned list_size,
 	struct thread_params *p;
 	int i, ret, active_threads = 0;
 
+	init_threaded_search();
+
 	if (!delta_search_threads)	/* --threads=0 means autodetect */
 		delta_search_threads = online_cpus();
 	if (delta_search_threads <= 1) {
 		find_deltas(list, &list_size, window, depth, processed);
+		cleanup_threaded_search();
 		return;
 	}
 	if (progress > pack_to_stdout)
@@ -1748,6 +1751,7 @@ static void ll_find_deltas(struct object_entry **list, unsigned list_size,
 			active_threads--;
 		}
 	}
+	cleanup_threaded_search();
 	free(p);
 }
 
@@ -1875,7 +1879,7 @@ static int git_pack_config(const char *k, const char *v, void *cb)
 		if (delta_search_threads < 0)
 			die("invalid number of threads specified (%d)",
 			    delta_search_threads);
-#ifndef THREADED_DELTA_SEARCH
+#ifdef NO_PTHREADS
 		if (delta_search_threads != 1)
 			warning("no threads support, ignoring %s", k);
 #endif
@@ -2114,13 +2118,6 @@ static void get_object_list(int ac, const char **av)
 		loosen_unused_packed_objects(&revs);
 }
 
-static int adjust_perm(const char *path, mode_t mode)
-{
-	if (chmod(path, mode))
-		return -1;
-	return adjust_shared_perm(path);
-}
-
 int cmd_pack_objects(int argc, const char **argv, const char *prefix)
 {
 	int use_internal_rev_list = 0;
@@ -2179,10 +2176,8 @@ int cmd_pack_objects(int argc, const char **argv, const char *prefix)
 			continue;
 		}
 		if (!prefixcmp(arg, "--max-pack-size=")) {
-			char *end;
 			pack_size_limit_cfg = 0;
-			pack_size_limit = strtoul(arg+16, &end, 0) * 1024 * 1024;
-			if (!arg[16] || *end)
+			if (!git_parse_ulong(arg+16, &pack_size_limit))
 				usage(pack_usage);
 			continue;
 		}
@@ -2203,7 +2198,7 @@ int cmd_pack_objects(int argc, const char **argv, const char *prefix)
 			delta_search_threads = strtoul(arg+10, &end, 0);
 			if (!arg[10] || *end || delta_search_threads < 0)
 				usage(pack_usage);
-#ifndef THREADED_DELTA_SEARCH
+#ifdef NO_PTHREADS
 			if (delta_search_threads != 1)
 				warning("no threads support, "
 					"ignoring %s", arg);
@@ -2322,9 +2317,12 @@ int cmd_pack_objects(int argc, const char **argv, const char *prefix)
 
 	if (!pack_to_stdout && !pack_size_limit)
 		pack_size_limit = pack_size_limit_cfg;
-
 	if (pack_to_stdout && pack_size_limit)
 		die("--max-pack-size cannot be used to build a pack for transfer.");
+	if (pack_size_limit && pack_size_limit < 1024*1024) {
+		warning("minimum pack size limit is 1 MiB");
+		pack_size_limit = 1024*1024;
+	}
 
 	if (!pack_to_stdout && thin)
 		die("--thin cannot be used to build an indexable pack.");
