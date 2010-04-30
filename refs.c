@@ -801,8 +801,8 @@ int check_ref_format(const char *ref)
 		}
 		level++;
 		if (!ch) {
-			if (ref <= cp - 2 && cp[-2] == '.')
-				return CHECK_REF_FORMAT_ERROR;
+//			if (ref <= cp - 2 && cp[-2] == '.')
+//				return CHECK_REF_FORMAT_ERROR;
 			if (level < 2)
 				return CHECK_REF_FORMAT_ONELEVEL;
 			if (has_extension(ref, ".lock"))
