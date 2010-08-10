@@ -119,7 +119,7 @@ run 'git rebase --continue'"
 export GIT_CHERRY_PICK_HELP
 
 warn () {
-	echo "$*" >&2
+	printf '%s\n' "$*" >&2
 }
 
 output () {
@@ -263,10 +263,10 @@ pick_one_preserving_merges () {
 	then
 		if test "$fast_forward" = t
 		then
-			cat "$DOTEST"/current-commit | while read current_commit
+			while read current_commit
 			do
 				git rev-parse HEAD > "$REWRITTEN"/$current_commit
-			done
+			done <"$DOTEST"/current-commit
 			rm "$DOTEST"/current-commit ||
 			die "Cannot write current commit's replacement sha1"
 		fi
@@ -440,9 +440,9 @@ record_in_rewritten() {
 	echo "$oldsha1" >> "$REWRITTEN_PENDING"
 
 	case "$(peek_next_command)" in
-	    squash|s|fixup|f)
+	squash|s|fixup|f)
 		;;
-	    *)
+	*)
 		flush_rewritten_pending
 		;;
 	esac
@@ -450,7 +450,7 @@ record_in_rewritten() {
 
 do_next () {
 	rm -f "$MSG" "$AUTHOR_SCRIPT" "$AMEND" || exit
-	read command sha1 rest < "$TODO"
+	read -r command sha1 rest < "$TODO"
 	case "$command" in
 	'#'*|''|noop)
 		mark_action_done
@@ -591,7 +591,7 @@ do_rest () {
 # skip picking commits whose parents are unchanged
 skip_unnecessary_picks () {
 	fd=3
-	while read command sha1 rest
+	while read -r command sha1 rest
 	do
 		# fd=3 means we skip the command
 		case "$fd,$command,$(git rev-parse --verify --quiet $sha1^)" in
@@ -606,7 +606,7 @@ skip_unnecessary_picks () {
 			fd=1
 			;;
 		esac
-		echo "$command${sha1:+ }$sha1${rest:+ }$rest" >&$fd
+		printf '%s\n' "$command${sha1:+ }$sha1${rest:+ }$rest" >&$fd
 	done <"$TODO" >"$TODO.new" 3>>"$DONE" &&
 	mv -f "$TODO".new "$TODO" &&
 	case "$(peek_next_command)" in
@@ -644,17 +644,17 @@ rearrange_squash () {
 	test -s "$1.sq" || return
 
 	used=
-	while read pick sha1 message
+	while read -r pick sha1 message
 	do
 		case " $used" in
 		*" $sha1 "*) continue ;;
 		esac
-		echo "$pick $sha1 $message"
-		while read squash action msg
+		printf '%s\n' "$pick $sha1 $message"
+		while read -r squash action msg
 		do
 			case "$message" in
 			"$msg"*)
-				echo "$action $squash $action! $msg"
+				printf '%s\n' "$action $squash $action! $msg"
 				used="$used$squash "
 				;;
 			esac
@@ -890,11 +890,12 @@ first and then run 'git rebase --continue' again."
 		git rev-list $MERGES_OPTION --pretty=oneline --abbrev-commit \
 			--abbrev=7 --reverse --left-right --topo-order \
 			$REVISIONS | \
-			sed -n "s/^>//p" | while read shortsha1 rest
+			sed -n "s/^>//p" |
+		while read -r shortsha1 rest
 		do
 			if test t != "$PRESERVE_MERGES"
 			then
-				echo "pick $shortsha1 $rest" >> "$TODO"
+				printf '%s\n' "pick $shortsha1 $rest" >> "$TODO"
 			else
 				sha1=$(git rev-parse $shortsha1)
 				if test -z "$REBASE_ROOT"
@@ -913,7 +914,7 @@ first and then run 'git rebase --continue' again."
 				if test f = "$preserve"
 				then
 					touch "$REWRITTEN"/$sha1
-					echo "pick $shortsha1 $rest" >> "$TODO"
+					printf '%s\n' "pick $shortsha1 $rest" >> "$TODO"
 				fi
 			fi
 		done
