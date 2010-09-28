@@ -160,6 +160,10 @@ extern char *gitbasename(char *);
 #define PRIx32 "x"
 #endif
 
+#ifndef PRIo32
+#define PRIo32 "o"
+#endif
+
 #ifndef PATH_SEP
 #define PATH_SEP ':'
 #endif
@@ -310,6 +314,11 @@ extern size_t gitstrlcpy(char *, const char *, size_t);
 #ifdef NO_STRTOUMAX
 #define strtoumax gitstrtoumax
 extern uintmax_t gitstrtoumax(const char *, char **, int);
+#endif
+
+#ifdef NO_STRTOK_R
+#define strtok_r gitstrtok_r
+extern char *gitstrtok_r(char *s, const char *delim, char **save_ptr);
 #endif
 
 #ifdef NO_HSTRERROR
