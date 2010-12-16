@@ -1,4 +1,4 @@
-#!/usr/bin/perl -w
+#!/usr/bin/perl
 #
 # Copyright 2002,2005 Greg Kroah-Hartman <greg@kroah.com>
 # Copyright 2005 Ryan Anderson <ryan@michonline.com>
@@ -16,6 +16,7 @@
 #    and second line is the subject of the message.
 #
 
+use 5.008;
 use strict;
 use warnings;
 use Term::ReadLine;
@@ -85,6 +86,7 @@ git send-email [options] <file | directory | rev-list options >
     --[no-]validate                * Perform patch sanity checks. Default on.
     --[no-]format-patch            * understand any non optional arguments as
                                      `git format-patch` ones.
+    --force                        * Send even if safety checks would prevent it.
 
 EOT
 	exit(1);
@@ -162,6 +164,7 @@ if ($@) {
 my ($quiet, $dry_run) = (0, 0);
 my $format_patch;
 my $compose_filename;
+my $force = 0;
 
 # Handle interactive edition of files.
 my $multiedit;
@@ -301,6 +304,7 @@ my $rc = GetOptions("sender|from=s" => \$sender,
 		    "validate!" => \$validate,
 		    "format-patch!" => \$format_patch,
 		    "8bit-encoding=s" => \$auto_8bit_encoding,
+		    "force" => \$force,
 	 );
 
 unless ($rc) {
@@ -702,6 +706,16 @@ if (!defined $auto_8bit_encoding && scalar %broken_encoding) {
 				  default => "UTF-8");
 }
 
+if (!$force) {
+	for my $f (@files) {
+		if (get_patch_subject($f) =~ /\*\*\* SUBJECT HERE \*\*\*/) {
+			die "Refusing to send because the patch\n\t$f\n"
+				. "has the template subject '*** SUBJECT HERE ***'. "
+				. "Pass --force if you really want to send.\n";
+		}
+	}
+}
+
 my $prompting = 0;
 if (!defined $sender) {
 	$sender = $repoauthor || $repocommitter || '';
@@ -940,7 +954,7 @@ sub maildomain {
 sub send_message {
 	my @recipients = unique_email_list(@to);
 	@cc = (grep { my $cc = extract_valid_address($_);
-		      not grep { $cc eq $_ } @recipients
+		      not grep { $cc eq $_ || $_ =~ /<\Q${cc}\E>$/ } @recipients
 		    }
 	       map { sanitize_address($_) }
 	       @cc);

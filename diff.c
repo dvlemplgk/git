@@ -1771,8 +1771,14 @@ static void emit_binary_diff(FILE *file, mmfile_t *one, mmfile_t *two, char *pre
 
 static void diff_filespec_load_driver(struct diff_filespec *one)
 {
-	if (!one->driver)
+	/* Use already-loaded driver */
+	if (one->driver)
+		return;
+
+	if (S_ISREG(one->mode))
 		one->driver = userdiff_find_by_path(one->path);
+
+	/* Fallback to default settings */
 	if (!one->driver)
 		one->driver = userdiff_find_by_name("default");
 }
@@ -1820,8 +1826,7 @@ struct userdiff_driver *get_textconv(struct diff_filespec *one)
 {
 	if (!DIFF_FILE_VALID(one))
 		return NULL;
-	if (!S_ISREG(one->mode))
-		return NULL;
+
 	diff_filespec_load_driver(one);
 	if (!one->driver->textconv)
 		return NULL;
@@ -2153,7 +2158,7 @@ static void builtin_checkdiff(const char *name_a, const char *name_b,
 
 			ecbdata.ws_rule = data.ws_rule;
 			check_blank_at_eof(&mf1, &mf2, &ecbdata);
-			blank_at_eof = ecbdata.blank_at_eof_in_preimage;
+			blank_at_eof = ecbdata.blank_at_eof_in_postimage;
 
 			if (blank_at_eof) {
 				static char *err;
@@ -2386,10 +2391,14 @@ int diff_populate_filespec(struct diff_filespec *s, int size_only)
 	}
 	else {
 		enum object_type type;
-		if (size_only)
+		if (size_only) {
 			type = sha1_object_info(s->sha1, &s->size);
-		else {
+			if (type < 0)
+				die("unable to read %s", sha1_to_hex(s->sha1));
+		} else {
 			s->data = read_sha1_file(s->sha1, &type, &s->size);
+			if (!s->data)
+				die("unable to read %s", sha1_to_hex(s->sha1));
 			s->should_free = 1;
 		}
 	}
@@ -3527,7 +3536,7 @@ static void diff_flush_stat(struct diff_filepair *p, struct diff_options *o,
 
 	if ((DIFF_FILE_VALID(p->one) && S_ISDIR(p->one->mode)) ||
 	    (DIFF_FILE_VALID(p->two) && S_ISDIR(p->two->mode)))
-		return; /* no tree diffs in patch format */
+		return; /* no useful stat for tree diffs */
 
 	run_diffstat(p, o, diffstat);
 }
@@ -3540,7 +3549,7 @@ static void diff_flush_checkdiff(struct diff_filepair *p,
 
 	if ((DIFF_FILE_VALID(p->one) && S_ISDIR(p->one->mode)) ||
 	    (DIFF_FILE_VALID(p->two) && S_ISDIR(p->two->mode)))
-		return; /* no tree diffs in patch format */
+		return; /* nothing to check in tree diffs */
 
 	run_checkdiff(p, o);
 }
@@ -3865,7 +3874,7 @@ static int diff_get_patch_id(struct diff_options *options, unsigned char *sha1)
 
 		xpp.flags = 0;
 		xecfg.ctxlen = 3;
-		xecfg.flags = XDL_EMIT_FUNCNAMES;
+		xecfg.flags = 0;
 		xdi_diff_outf(&mf1, &mf2, patch_id_consume, &data,
 			      &xpp, &xecfg);
 	}
