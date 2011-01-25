@@ -7,6 +7,7 @@
 #
 # This program is licensed under the GPLv2
 
+use 5.008;
 use strict;
 use warnings;
 use CGI qw(:standard :escapeHTML -nosticky);
@@ -1355,6 +1356,13 @@ sub esc_url {
 	return $str;
 }
 
+# quote unsafe characters in HTML attributes
+sub esc_attr {
+
+	# for XHTML conformance escaping '"' to '&quot;' is not enough
+	return esc_html(@_);
+}
+
 # replace invalid utf8 character with SUBSTITUTION sequence
 sub esc_html {
 	my $str = shift;
@@ -1760,7 +1768,7 @@ sub format_ref_marker {
 					hash=>$dest
 				)}, $name);
 
-			$markers .= " <span class=\"$class\" title=\"$ref\">" .
+			$markers .= " <span class=\"".esc_attr($class)."\" title=\"".esc_attr($ref)."\">" .
 				$link . "</span>";
 		}
 	}
@@ -1844,7 +1852,7 @@ sub git_get_avatar {
 		return $pre_white .
 		       "<img width=\"$size\" " .
 		            "class=\"avatar\" " .
-		            "src=\"$url\" " .
+		            "src=\"".esc_url($url)."\" " .
 			    "alt=\"\" " .
 		       "/>" . $post_white;
 	} else {
@@ -2555,7 +2563,7 @@ sub git_show_project_tagcloud {
 	} else {
 		my @tags = sort { $cloud->{$a}->{count} <=> $cloud->{$b}->{count} } keys %$cloud;
 		return '<p align="center">' . join (', ', map {
-			"<a href=\"$home_link?by_tag=$_\">$cloud->{$_}->{topname}</a>"
+			$cgi->a({-href=>"$home_link?by_tag=$_"}, $cloud->{$_}->{topname})
 		} splice(@tags, 0, $count)) . '</p>';
 	}
 }
@@ -3386,6 +3394,51 @@ sub get_page_title {
 	return $title;
 }
 
+sub print_feed_meta {
+	if (defined $project) {
+		my %href_params = get_feed_info();
+		if (!exists $href_params{'-title'}) {
+			$href_params{'-title'} = 'log';
+		}
+
+		foreach my $format qw(RSS Atom) {
+			my $type = lc($format);
+			my %link_attr = (
+				'-rel' => 'alternate',
+				'-title' => esc_attr("$project - $href_params{'-title'} - $format feed"),
+				'-type' => "application/$type+xml"
+			);
+
+			$href_params{'action'} = $type;
+			$link_attr{'-href'} = href(%href_params);
+			print "<link ".
+			      "rel=\"$link_attr{'-rel'}\" ".
+			      "title=\"$link_attr{'-title'}\" ".
+			      "href=\"$link_attr{'-href'}\" ".
+			      "type=\"$link_attr{'-type'}\" ".
+			      "/>\n";
+
+			$href_params{'extra_options'} = '--no-merges';
+			$link_attr{'-href'} = href(%href_params);
+			$link_attr{'-title'} .= ' (no merges)';
+			print "<link ".
+			      "rel=\"$link_attr{'-rel'}\" ".
+			      "title=\"$link_attr{'-title'}\" ".
+			      "href=\"$link_attr{'-href'}\" ".
+			      "type=\"$link_attr{'-type'}\" ".
+			      "/>\n";
+		}
+
+	} else {
+		printf('<link rel="alternate" title="%s projects list" '.
+		       'href="%s" type="text/plain; charset=utf-8" />'."\n",
+		       esc_attr($site_name), href(project=>undef, action=>"project_index"));
+		printf('<link rel="alternate" title="%s projects feeds" '.
+		       'href="%s" type="text/x-opml" />'."\n",
+		       esc_attr($site_name), href(project=>undef, action=>"opml"));
+	}
+}
+
 sub git_header_html {
 	my $status = shift || "200 OK";
 	my $expires = shift;
@@ -3428,57 +3481,17 @@ EOF
 	# print out each stylesheet that exist, providing backwards capability
 	# for those people who defined $stylesheet in a config file
 	if (defined $stylesheet) {
-		print '<link rel="stylesheet" type="text/css" href="'.$stylesheet.'"/>'."\n";
+		print '<link rel="stylesheet" type="text/css" href="'.esc_url($stylesheet).'"/>'."\n";
 	} else {
 		foreach my $stylesheet (@stylesheets) {
 			next unless $stylesheet;
-			print '<link rel="stylesheet" type="text/css" href="'.$stylesheet.'"/>'."\n";
+			print '<link rel="stylesheet" type="text/css" href="'.esc_url($stylesheet).'"/>'."\n";
 		}
 	}
-	if (defined $project) {
-		my %href_params = get_feed_info();
-		if (!exists $href_params{'-title'}) {
-			$href_params{'-title'} = 'log';
-		}
-
-		foreach my $format qw(RSS Atom) {
-			my $type = lc($format);
-			my %link_attr = (
-				'-rel' => 'alternate',
-				'-title' => "$project - $href_params{'-title'} - $format feed",
-				'-type' => "application/$type+xml"
-			);
-
-			$href_params{'action'} = $type;
-			$link_attr{'-href'} = href(%href_params);
-			print "<link ".
-			      "rel=\"$link_attr{'-rel'}\" ".
-			      "title=\"$link_attr{'-title'}\" ".
-			      "href=\"$link_attr{'-href'}\" ".
-			      "type=\"$link_attr{'-type'}\" ".
-			      "/>\n";
-
-			$href_params{'extra_options'} = '--no-merges';
-			$link_attr{'-href'} = href(%href_params);
-			$link_attr{'-title'} .= ' (no merges)';
-			print "<link ".
-			      "rel=\"$link_attr{'-rel'}\" ".
-			      "title=\"$link_attr{'-title'}\" ".
-			      "href=\"$link_attr{'-href'}\" ".
-			      "type=\"$link_attr{'-type'}\" ".
-			      "/>\n";
-		}
-
-	} else {
-		printf('<link rel="alternate" title="%s projects list" '.
-		       'href="%s" type="text/plain; charset=utf-8" />'."\n",
-		       $site_name, href(project=>undef, action=>"project_index"));
-		printf('<link rel="alternate" title="%s projects feeds" '.
-		       'href="%s" type="text/x-opml" />'."\n",
-		       $site_name, href(project=>undef, action=>"opml"));
-	}
+	print_feed_meta()
+		if ($status eq '200 OK');
 	if (defined $favicon) {
-		print qq(<link rel="shortcut icon" href="$favicon" type="image/png" />\n);
+		print qq(<link rel="shortcut icon" href=").esc_url($favicon).qq(" type="image/png" />\n);
 	}
 
 	print "</head>\n" .
@@ -3491,7 +3504,7 @@ EOF
 	print "<div class=\"page_header\">\n" .
 	      $cgi->a({-href => esc_url($logo_url),
 	               -title => $logo_label},
-	              qq(<img src="$logo" width="72" height="27" alt="git" class="logo"/>));
+	              qq(<img src=").esc_url($logo).qq(" width="72" height="27" alt="git" class="logo"/>));
 	print $cgi->a({-href => esc_url($home_link)}, $home_link_str) . " / ";
 	if (defined $project) {
 		print $cgi->a({-href => href(action=>"summary")}, esc_html($project));
@@ -3589,7 +3602,7 @@ sub git_footer_html {
 		insert_file($site_footer);
 	}
 
-	print qq!<script type="text/javascript" src="$javascript"></script>\n!;
+	print qq!<script type="text/javascript" src="!.esc_url($javascript).qq!"></script>\n!;
 	if (defined $action &&
 	    $action eq 'blame_incremental') {
 		print qq!<script type="text/javascript">\n!.
@@ -5609,14 +5622,14 @@ sub git_blob {
 	} else {
 		print "<div class=\"page_nav\">\n" .
 		      "<br/><br/></div>\n" .
-		      "<div class=\"title\">$hash</div>\n";
+		      "<div class=\"title\">".esc_html($hash)."</div>\n";
 	}
 	git_print_page_path($file_name, "blob", $hash_base);
 	print "<div class=\"page_body\">\n";
 	if ($mimetype =~ m!^image/!) {
-		print qq!<img type="$mimetype"!;
+		print qq!<img type="!.esc_attr($mimetype).qq!"!;
 		if ($file_name) {
-			print qq! alt="$file_name" title="$file_name"!;
+			print qq! alt="!.esc_attr($file_name).qq!" title="!.esc_attr($file_name).qq!"!;
 		}
 		print qq! src="! .
 		      href(action=>"blob_plain", hash=>$hash,
@@ -5629,7 +5642,7 @@ sub git_blob {
 			$nr++;
 			$line = untabify($line);
 			printf qq!<div class="pre"><a id="l%i" href="%s#l%i" class="linenr">%4i</a> %s</div>\n!,
-			       $nr, href(-replay => 1), $nr, $nr, $syntax ? $line : esc_html($line, -nbsp=>1);
+			       $nr, esc_attr(href(-replay => 1)), $nr, $nr, $syntax ? $line : esc_html($line, -nbsp=>1);
 		}
 	}
 	close $fd
@@ -5691,7 +5704,7 @@ sub git_tree {
 		undef $hash_base;
 		print "<div class=\"page_nav\">\n";
 		print "<br/><br/></div>\n";
-		print "<div class=\"title\">$hash</div>\n";
+		print "<div class=\"title\">".esc_html($hash)."</div>\n";
 	}
 	if (defined $file_name) {
 		$basedir = $file_name;
@@ -6159,7 +6172,7 @@ sub git_blobdiff {
 			git_print_header_div('commit', esc_html($co{'title'}), $hash_base);
 		} else {
 			print "<div class=\"page_nav\"><br/>$formats_nav<br/></div>\n";
-			print "<div class=\"title\">$hash vs $hash_parent</div>\n";
+			print "<div class=\"title\">".esc_html("$hash vs $hash_parent")."</div>\n";
 		}
 		if (defined $file_name) {
 			git_print_page_path($file_name, "blob", $hash_base);
@@ -6857,7 +6870,7 @@ XML
 		if (defined $favicon) {
 			print "<icon>" . esc_url($favicon) . "</icon>\n";
 		}
-		if (defined $logo_url) {
+		if (defined $logo) {
 			# not twice as wide as tall: 72 x 27 pixels
 			print "<logo>" . esc_url($logo) . "</logo>\n";
 		}

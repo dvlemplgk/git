@@ -1262,10 +1262,14 @@ else
 	BLK_SHA1 = 1
 	OPENSSL_LIBSSL =
 endif
+ifdef NO_OPENSSL
+	LIB_4_CRYPTO =
+else
 ifdef NEEDS_SSL_WITH_CRYPTO
 	LIB_4_CRYPTO = $(OPENSSL_LINK) -lcrypto -lssl
 else
 	LIB_4_CRYPTO = $(OPENSSL_LINK) -lcrypto
+endif
 endif
 ifdef NEEDS_LIBICONV
 	ifdef ICONVDIR
@@ -1879,7 +1883,7 @@ builtin/tar-tree.o archive-tar.o: tar.h
 builtin/pack-objects.o: thread-utils.h
 connect.o transport.o http-backend.o: url.h
 http-fetch.o http-walker.o remote-curl.o transport.o walker.o: walker.h
-http.o http-walker.o http-push.o http-fetch.o remote-curl.o: http.h
+http.o http-walker.o http-push.o http-fetch.o remote-curl.o: http.h url.h
 
 xdiff-interface.o $(XDIFF_OBJS): \
 	xdiff/xinclude.h xdiff/xmacros.h xdiff/xdiff.h xdiff/xtypes.h \
@@ -1921,7 +1925,7 @@ git-%$X: %.o $(GITLIBS)
 
 git-imap-send$X: imap-send.o $(GITLIBS)
 	$(QUIET_LINK)$(CC) $(ALL_CFLAGS) -o $@ $(ALL_LDFLAGS) $(filter %.o,$^) \
-		$(LIBS) $(OPENSSL_LINK) $(OPENSSL_LIBSSL)
+		$(LIBS) $(OPENSSL_LINK) $(OPENSSL_LIBSSL) $(LIB_4_CRYPTO)
 
 git-http-fetch$X: revision.o http.o http-walker.o http-fetch.o $(GITLIBS)
 	$(QUIET_LINK)$(CC) $(ALL_CFLAGS) -o $@ $(ALL_LDFLAGS) $(filter %.o,$^) \
@@ -1977,7 +1981,7 @@ cscope:
 	$(FIND) . -name '*.[hcS]' -print | xargs cscope -b
 
 ### Detect prefix changes
-TRACK_CFLAGS = $(subst ','\'',$(ALL_CFLAGS)):\
+TRACK_CFLAGS = $(CC):$(subst ','\'',$(ALL_CFLAGS)):\
              $(bindir_SQ):$(gitexecdir_SQ):$(template_dir_SQ):$(prefix_SQ)
 
 GIT-CFLAGS: FORCE
