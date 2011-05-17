@@ -282,7 +282,15 @@ GIT_PARSE_WITH(iconv))
 GIT_PARSE_WITH_SET_MAKE_VAR(gitconfig, ETC_GITCONFIG,
 			Use VALUE instead of /etc/gitconfig as the
 			global git configuration file.
-			If VALUE is not fully qualified it will be interpretted
+			If VALUE is not fully qualified it will be interpreted
+			as a path relative to the computed prefix at runtime.)
+
+#
+# Allow user to set ETC_GITATTRIBUTES variable
+GIT_PARSE_WITH_SET_MAKE_VAR(gitattributes, ETC_GITATTRIBUTES,
+			Use VALUE instead of /etc/gitattributes as the
+			global git attributes file.
+			If VALUE is not fully qualified it will be interpreted
 			as a path relative to the computed prefix at runtime.)
 
 #
@@ -337,7 +345,7 @@ esac
 AC_CACHE_CHECK([if linker supports -R], git_cv_ld_dashr, [
    SAVE_LDFLAGS="${LDFLAGS}"
    LDFLAGS="${SAVE_LDFLAGS} -R /"
-   AC_LINK_IFELSE(AC_LANG_PROGRAM([], []), [git_cv_ld_dashr=yes], [git_cv_ld_dashr=no])
+   AC_LINK_IFELSE([AC_LANG_PROGRAM([], [])], [git_cv_ld_dashr=yes], [git_cv_ld_dashr=no])
    LDFLAGS="${SAVE_LDFLAGS}"
 ])
 if test "$git_cv_ld_dashr" = "yes"; then
@@ -346,7 +354,7 @@ else
    AC_CACHE_CHECK([if linker supports -Wl,-rpath,], git_cv_ld_wl_rpath, [
       SAVE_LDFLAGS="${LDFLAGS}"
       LDFLAGS="${SAVE_LDFLAGS} -Wl,-rpath,/"
-      AC_LINK_IFELSE(AC_LANG_PROGRAM([], []), [git_cv_ld_wl_rpath=yes], [git_cv_ld_wl_rpath=no])
+      AC_LINK_IFELSE([AC_LANG_PROGRAM([], [])], [git_cv_ld_wl_rpath=yes], [git_cv_ld_wl_rpath=no])
       LDFLAGS="${SAVE_LDFLAGS}"
    ])
    if test "$git_cv_ld_wl_rpath" = "yes"; then
@@ -355,7 +363,7 @@ else
       AC_CACHE_CHECK([if linker supports -rpath], git_cv_ld_rpath, [
          SAVE_LDFLAGS="${LDFLAGS}"
          LDFLAGS="${SAVE_LDFLAGS} -rpath /"
-         AC_LINK_IFELSE(AC_LANG_PROGRAM([], []), [git_cv_ld_rpath=yes], [git_cv_ld_rpath=no])
+         AC_LINK_IFELSE([AC_LANG_PROGRAM([], [])], [git_cv_ld_rpath=yes], [git_cv_ld_rpath=no])
          LDFLAGS="${SAVE_LDFLAGS}"
       ])
       if test "$git_cv_ld_rpath" = "yes"; then
@@ -390,21 +398,21 @@ if test -n "$ASCIIDOC"; then
 	AC_MSG_CHECKING([for asciidoc version])
 	asciidoc_version=`$ASCIIDOC --version 2>/dev/null`
 	case "${asciidoc_version}" in
-	asciidoc' '8*)
-		ASCIIDOC8=YesPlease
+	asciidoc' '7*)
+		ASCIIDOC7=YesPlease
 		AC_MSG_RESULT([${asciidoc_version} > 7])
 		;;
-	asciidoc' '7*)
-		ASCIIDOC8=
+	asciidoc' '8*)
+		ASCIIDOC7=
 		AC_MSG_RESULT([${asciidoc_version}])
 		;;
 	*)
-		ASCIIDOC8=
+		ASCIIDOC7=
 		AC_MSG_RESULT([${asciidoc_version} (unknown)])
 		;;
 	esac
 fi
-AC_SUBST(ASCIIDOC8)
+AC_SUBST(ASCIIDOC7)
 
 
 ## Checks for libraries.
@@ -464,15 +472,9 @@ if test -z "$NO_ICONV"; then
 
 GIT_STASH_FLAGS($ICONVDIR)
 
-AC_DEFUN([ICONVTEST_SRC], [
-#include <iconv.h>
-
-int main(void)
-{
-	iconv_open("", "");
-	return 0;
-}
-])
+AC_DEFUN([ICONVTEST_SRC],
+[AC_LANG_PROGRAM([#include <iconv.h>],
+ [iconv_open("", "");])])
 
 if test -n "$ICONVDIR"; then
    lib_order="-liconv -lc"
@@ -492,7 +494,7 @@ for l in $lib_order; do
     old_LIBS="$LIBS"
     LIBS="$LIBS $l"
     AC_MSG_CHECKING([for iconv in $l])
-    AC_LINK_IFELSE(ICONVTEST_SRC,
+    AC_LINK_IFELSE([ICONVTEST_SRC],
 	[AC_MSG_RESULT([yes])
 	NO_ICONV=
 	break],
@@ -520,18 +522,12 @@ fi
 GIT_STASH_FLAGS($ZLIB_PATH)
 
 AC_DEFUN([ZLIBTEST_SRC], [
-#include <zlib.h>
-
-int main(void)
-{
-	deflateBound(0, 0);
-	return 0;
-}
-])
+AC_LANG_PROGRAM([#include <zlib.h>],
+ [deflateBound(0, 0);])])
 AC_MSG_CHECKING([for deflateBound in -lz])
 old_LIBS="$LIBS"
 LIBS="$LIBS -lz"
-AC_LINK_IFELSE(ZLIBTEST_SRC,
+AC_LINK_IFELSE([ZLIBTEST_SRC],
 	[AC_MSG_RESULT([yes])],
 	[AC_MSG_RESULT([no])
 	NO_DEFLATE_BOUND=yes])
@@ -609,25 +605,33 @@ AC_CHECK_HEADER([sys/select.h],
 [NO_SYS_SELECT_H=UnfortunatelyYes])
 AC_SUBST(NO_SYS_SELECT_H)
 #
+# Define NO_SYS_POLL_H if you don't have sys/poll.h
+AC_CHECK_HEADER([sys/poll.h],
+[NO_SYS_POLL_H=],
+[NO_SYS_POLL_H=UnfortunatelyYes])
+AC_SUBST(NO_SYS_POLL_H)
+#
+# Define NO_INTTYPES_H if you don't have inttypes.h
+AC_CHECK_HEADER([inttypes.h],
+[NO_INTTYPES_H=],
+[NO_INTTYPES_H=UnfortunatelyYes])
+AC_SUBST(NO_INTTYPES_H)
+#
 # Define OLD_ICONV if your library has an old iconv(), where the second
 # (input buffer pointer) parameter is declared with type (const char **).
-AC_DEFUN([OLDICONVTEST_SRC], [[
+AC_DEFUN([OLDICONVTEST_SRC], [
+AC_LANG_PROGRAM([[
 #include <iconv.h>
 
 extern size_t iconv(iconv_t cd,
 		    char **inbuf, size_t *inbytesleft,
 		    char **outbuf, size_t *outbytesleft);
-
-int main(void)
-{
-	return 0;
-}
-]])
+]], [])])
 
 GIT_STASH_FLAGS($ICONVDIR)
 
 AC_MSG_CHECKING([for old iconv()])
-AC_COMPILE_IFELSE(OLDICONVTEST_SRC,
+AC_COMPILE_IFELSE([OLDICONVTEST_SRC],
 	[AC_MSG_RESULT([no])],
 	[AC_MSG_RESULT([yes])
 	OLD_ICONV=UnfortunatelyYes])
@@ -810,6 +814,34 @@ GIT_CHECK_FUNC(strtok_r,
 [NO_STRTOK_R=YesPlease])
 AC_SUBST(NO_STRTOK_R)
 #
+# Define NO_FNMATCH if you don't have fnmatch
+GIT_CHECK_FUNC(fnmatch,
+[NO_FNMATCH=],
+[NO_FNMATCH=YesPlease])
+AC_SUBST(NO_FNMATCH)
+#
+# Define NO_FNMATCH_CASEFOLD if your fnmatch function doesn't have the
+# FNM_CASEFOLD GNU extension.
+AC_CACHE_CHECK([whether the fnmatch function supports the FNMATCH_CASEFOLD GNU extension],
+ [ac_cv_c_excellent_fnmatch], [
+AC_EGREP_CPP(yippeeyeswehaveit,
+	AC_LANG_PROGRAM([
+#include <fnmatch.h>
+],
+[#ifdef FNM_CASEFOLD
+yippeeyeswehaveit
+#endif
+]),
+	[ac_cv_c_excellent_fnmatch=yes],
+	[ac_cv_c_excellent_fnmatch=no])
+])
+if test $ac_cv_c_excellent_fnmatch = yes; then
+	NO_FNMATCH_CASEFOLD=
+else
+	NO_FNMATCH_CASEFOLD=YesPlease
+fi
+AC_SUBST(NO_FNMATCH_CASEFOLD)
+#
 # Define NO_MEMMEM if you don't have memmem.
 GIT_CHECK_FUNC(memmem,
 [NO_MEMMEM=],
@@ -860,6 +892,12 @@ GIT_CHECK_FUNC(mkstemps,
 [NO_MKSTEMPS=YesPlease])
 AC_SUBST(NO_MKSTEMPS)
 #
+# Define NO_INITGROUPS if you don't have initgroups in the C library.
+GIT_CHECK_FUNC(initgroups,
+[NO_INITGROUPS=],
+[NO_INITGROUPS=YesPlease])
+AC_SUBST(NO_INITGROUPS)
+#
 #
 # Define NO_MMAP if you want to avoid mmap.
 #
@@ -877,18 +915,16 @@ AC_SUBST(NO_MKSTEMPS)
 #
 # Define PTHREAD_LIBS to the linker flag used for Pthread support.
 AC_DEFUN([PTHREADTEST_SRC], [
+AC_LANG_PROGRAM([[
 #include <pthread.h>
-
-int main(void)
-{
+]], [[
 	pthread_mutex_t test_mutex;
 	int retcode = 0;
 	retcode |= pthread_mutex_init(&test_mutex,(void *)0);
 	retcode |= pthread_mutex_lock(&test_mutex);
 	retcode |= pthread_mutex_unlock(&test_mutex);
 	return retcode;
-}
-])
+]])])
 
 dnl AC_LANG_CONFTEST([AC_LANG_PROGRAM(
 dnl   [[#include <pthread.h>]],
@@ -908,7 +944,7 @@ elif test -z "$PTHREAD_CFLAGS"; then
      old_CFLAGS="$CFLAGS"
      CFLAGS="$opt $CFLAGS"
      AC_MSG_CHECKING([Checking for POSIX Threads with '$opt'])
-     AC_LINK_IFELSE(PTHREADTEST_SRC,
+     AC_LINK_IFELSE([PTHREADTEST_SRC],
 	[AC_MSG_RESULT([yes])
 		NO_PTHREADS=
 		PTHREAD_LIBS="$opt"
@@ -928,7 +964,7 @@ else
   old_CFLAGS="$CFLAGS"
   CFLAGS="$PTHREAD_CFLAGS $CFLAGS"
   AC_MSG_CHECKING([Checking for POSIX Threads with '$PTHREAD_CFLAGS'])
-  AC_LINK_IFELSE(PTHREADTEST_SRC,
+  AC_LINK_IFELSE([PTHREADTEST_SRC],
 	[AC_MSG_RESULT([yes])
 		NO_PTHREADS=
 		PTHREAD_LIBS="$PTHREAD_CFLAGS"

@@ -161,7 +161,7 @@ static int checkout_merged(int pos, struct checkout *state)
 	 * merge.renormalize set, too
 	 */
 	status = ll_merge(&result_buf, path, &ancestor, "base",
-			  &ours, "ours", &theirs, "theirs", 0);
+			  &ours, "ours", &theirs, "theirs", NULL);
 	free(ancestor.ptr);
 	free(ours.ptr);
 	free(theirs.ptr);
@@ -404,7 +404,7 @@ static int merge_working_tree(struct checkout_opts *opts,
 		topts.dir->exclude_per_dir = ".gitignore";
 		tree = parse_tree_indirect(old->commit ?
 					   old->commit->object.sha1 :
-					   (unsigned char *)EMPTY_TREE_SHA1_BIN);
+					   EMPTY_TREE_SHA1_BIN);
 		init_tree_desc(&trees[0], tree->buffer, tree->size);
 		tree = parse_tree_indirect(new->commit->object.sha1);
 		init_tree_desc(&trees[1], tree->buffer, tree->size);
@@ -678,7 +678,7 @@ static const char *unique_tracking_name(const char *name)
 int cmd_checkout(int argc, const char **argv, const char *prefix)
 {
 	struct checkout_opts opts;
-	unsigned char rev[20];
+	unsigned char rev[20], branch_rev[20];
 	const char *arg;
 	struct branch_info new;
 	struct tree *source_tree = NULL;
@@ -686,7 +686,7 @@ int cmd_checkout(int argc, const char **argv, const char *prefix)
 	int patch_mode = 0;
 	int dwim_new_local_branch = 1;
 	struct option options[] = {
-		OPT__QUIET(&opts.quiet),
+		OPT__QUIET(&opts.quiet, "suppress progress reporting"),
 		OPT_STRING('b', NULL, &opts.new_branch, "branch",
 			   "create and checkout a new branch"),
 		OPT_STRING('B', NULL, &opts.new_branch_force, "branch",
@@ -699,7 +699,7 @@ int cmd_checkout(int argc, const char **argv, const char *prefix)
 			    2),
 		OPT_SET_INT('3', "theirs", &opts.writeout_stage, "checkout their version for unmerged files",
 			    3),
-		OPT_BOOLEAN('f', "force", &opts.force, "force checkout (throw away local modifications)"),
+		OPT__FORCE(&opts.force, "force checkout (throw away local modifications)"),
 		OPT_BOOLEAN('m', "merge", &opts.merge, "perform a 3-way merge with the new branch"),
 		OPT_STRING(0, "conflict", &conflict_style, "style",
 			   "conflict style (merge or diff3)"),
@@ -784,9 +784,9 @@ int cmd_checkout(int argc, const char **argv, const char *prefix)
 	 *   between A and B, A...B names that merge base.
 	 *
 	 *   With no paths, if <something> is _not_ a commit, no -t nor -b
-	 *   was given, and there is a tracking branch whose name is
+	 *   was given, and there is a remote-tracking branch whose name is
 	 *   <something> in one and only one remote, then this is a short-hand
-	 *   to fork local <something> from that remote tracking branch.
+	 *   to fork local <something> from that remote-tracking branch.
 	 *
 	 *   Otherwise <something> shall not be ambiguous.
 	 *   - If it's *only* a reference, treat it like case (1).
@@ -832,18 +832,21 @@ int cmd_checkout(int argc, const char **argv, const char *prefix)
 		argc--;
 
 		new.name = arg;
-		if ((new.commit = lookup_commit_reference_gently(rev, 1))) {
-			setup_branch_path(&new);
+		setup_branch_path(&new);
 
-			if ((check_ref_format(new.path) == CHECK_REF_FORMAT_OK) &&
-			    resolve_ref(new.path, rev, 1, NULL))
-				;
-			else
-				new.path = NULL;
+		if (check_ref_format(new.path) == CHECK_REF_FORMAT_OK &&
+		    resolve_ref(new.path, branch_rev, 1, NULL))
+			hashcpy(rev, branch_rev);
+		else
+			new.path = NULL; /* not an existing branch */
+
+		if (!(new.commit = lookup_commit_reference_gently(rev, 1))) {
+			/* not a commit */
+			source_tree = parse_tree_indirect(rev);
+		} else {
 			parse_commit(new.commit);
 			source_tree = new.commit->tree;
-		} else
-			source_tree = parse_tree_indirect(rev);
+		}
 
 		if (!source_tree)                   /* case (1): want a tree */
 			die("reference is not a tree: %s", arg);

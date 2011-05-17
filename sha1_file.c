@@ -35,6 +35,43 @@ static size_t sz_fmt(size_t s) { return s; }
 
 const unsigned char null_sha1[20];
 
+static int git_open_noatime(const char *name, struct packed_git *p);
+
+/*
+ * This is meant to hold a *small* number of objects that you would
+ * want read_sha1_file() to be able to return, but yet you do not want
+ * to write them into the object store (e.g. a browse-only
+ * application).
+ */
+static struct cached_object {
+	unsigned char sha1[20];
+	enum object_type type;
+	void *buf;
+	unsigned long size;
+} *cached_objects;
+static int cached_object_nr, cached_object_alloc;
+
+static struct cached_object empty_tree = {
+	EMPTY_TREE_SHA1_BIN_LITERAL,
+	OBJ_TREE,
+	"",
+	0
+};
+
+static struct cached_object *find_cached_object(const unsigned char *sha1)
+{
+	int i;
+	struct cached_object *co = cached_objects;
+
+	for (i = 0; i < cached_object_nr; i++, co++) {
+		if (!hashcmp(co->sha1, sha1))
+			return co;
+	}
+	if (!hashcmp(sha1, empty_tree.sha1))
+		return &empty_tree;
+	return NULL;
+}
+
 int safe_create_leading_directories(char *path)
 {
 	char *pos = path + offset_1st_component(path);
@@ -298,7 +335,7 @@ static void read_info_alternates(const char * relative_base, int depth)
 	int fd;
 
 	sprintf(path, "%s/%s", relative_base, alt_file_name);
-	fd = open(path, O_RDONLY);
+	fd = git_open_noatime(path, NULL);
 	if (fd < 0)
 		return;
 	if (fstat(fd, &st) || (st.st_size == 0)) {
@@ -380,6 +417,8 @@ static unsigned int pack_used_ctr;
 static unsigned int pack_mmap_calls;
 static unsigned int peak_pack_open_windows;
 static unsigned int pack_open_windows;
+static unsigned int pack_open_fds;
+static unsigned int pack_max_fds;
 static size_t peak_pack_mapped;
 static size_t pack_mapped;
 struct packed_git *packed_git;
@@ -411,7 +450,7 @@ static int check_packed_git_idx(const char *path,  struct packed_git *p)
 	struct pack_idx_header *hdr;
 	size_t idx_size;
 	uint32_t version, nr, i, *index;
-	int fd = open(path, O_RDONLY);
+	int fd = git_open_noatime(path, p);
 	struct stat st;
 
 	if (fd < 0)
@@ -557,8 +596,10 @@ static int unuse_one_window(struct packed_git *current, int keep_fd)
 			lru_l->next = lru_w->next;
 		else {
 			lru_p->windows = lru_w->next;
-			if (!lru_p->windows && lru_p->pack_fd != keep_fd) {
+			if (!lru_p->windows && lru_p->pack_fd != -1
+				&& lru_p->pack_fd != keep_fd) {
 				close(lru_p->pack_fd);
+				pack_open_fds--;
 				lru_p->pack_fd = -1;
 			}
 		}
@@ -574,6 +615,21 @@ void release_pack_memory(size_t need, int fd)
 	size_t cur = pack_mapped;
 	while (need >= (cur - pack_mapped) && unuse_one_window(NULL, fd))
 		; /* nothing */
+}
+
+void *xmmap(void *start, size_t length,
+	int prot, int flags, int fd, off_t offset)
+{
+	void *ret = mmap(start, length, prot, flags, fd, offset);
+	if (ret == MAP_FAILED) {
+		if (!length)
+			return NULL;
+		release_pack_memory(length, fd);
+		ret = mmap(start, length, prot, flags, fd, offset);
+		if (ret == MAP_FAILED)
+			die_errno("Out of memory? mmap failed");
+	}
+	return ret;
 }
 
 void close_pack_windows(struct packed_git *p)
@@ -628,8 +684,10 @@ void free_pack_by_name(const char *pack_name)
 		if (strcmp(pack_name, p->pack_name) == 0) {
 			clear_delta_base_cache();
 			close_pack_windows(p);
-			if (p->pack_fd != -1)
+			if (p->pack_fd != -1) {
 				close(p->pack_fd);
+				pack_open_fds--;
+			}
 			close_pack_index(p);
 			free(p->bad_object_sha1);
 			*pp = p->next;
@@ -655,11 +713,29 @@ static int open_packed_git_1(struct packed_git *p)
 	if (!p->index_data && open_pack_index(p))
 		return error("packfile %s index unavailable", p->pack_name);
 
-	p->pack_fd = open(p->pack_name, O_RDONLY);
-	while (p->pack_fd < 0 && errno == EMFILE && unuse_one_window(p, -1))
-		p->pack_fd = open(p->pack_name, O_RDONLY);
+	if (!pack_max_fds) {
+		struct rlimit lim;
+		unsigned int max_fds;
+
+		if (getrlimit(RLIMIT_NOFILE, &lim))
+			die_errno("cannot get RLIMIT_NOFILE");
+
+		max_fds = lim.rlim_cur;
+
+		/* Save 3 for stdin/stdout/stderr, 22 for work */
+		if (25 < max_fds)
+			pack_max_fds = max_fds - 25;
+		else
+			pack_max_fds = 1;
+	}
+
+	while (pack_max_fds <= pack_open_fds && unuse_one_window(NULL, -1))
+		; /* nothing */
+
+	p->pack_fd = git_open_noatime(p->pack_name, p);
 	if (p->pack_fd < 0 || fstat(p->pack_fd, &st))
 		return -1;
+	pack_open_fds++;
 
 	/* If we created the struct before we had the pack we lack size. */
 	if (!p->pack_size) {
@@ -711,6 +787,7 @@ static int open_packed_git(struct packed_git *p)
 		return 0;
 	if (p->pack_fd != -1) {
 		close(p->pack_fd);
+		pack_open_fds--;
 		p->pack_fd = -1;
 	}
 	return -1;
@@ -736,14 +813,13 @@ unsigned char *use_pack(struct packed_git *p,
 {
 	struct pack_window *win = *w_cursor;
 
-	if (p->pack_fd == -1 && open_packed_git(p))
-		die("packfile %s cannot be accessed", p->pack_name);
-
 	/* Since packfiles end in a hash of their content and it's
 	 * pointless to ask for an offset into the middle of that
 	 * hash, and the in_window function above wouldn't match
 	 * don't allow an offset too close to the end of the file.
 	 */
+	if (!p->pack_size && p->pack_fd == -1 && open_packed_git(p))
+		die("packfile %s cannot be accessed", p->pack_name);
 	if (offset > (p->pack_size - 20))
 		die("offset beyond end of packfile (truncated pack?)");
 
@@ -757,6 +833,10 @@ unsigned char *use_pack(struct packed_git *p,
 		if (!win) {
 			size_t window_align = packed_git_window_size / 2;
 			off_t len;
+
+			if (p->pack_fd == -1 && open_packed_git(p))
+				die("packfile %s cannot be accessed", p->pack_name);
+
 			win = xcalloc(1, sizeof(*win));
 			win->offset = (offset / window_align) * window_align;
 			len = p->pack_size - win->offset;
@@ -774,6 +854,12 @@ unsigned char *use_pack(struct packed_git *p,
 				die("packfile %s cannot be mapped: %s",
 					p->pack_name,
 					strerror(errno));
+			if (!win->offset && win->len == p->pack_size
+				&& !p->do_not_close) {
+				close(p->pack_fd);
+				pack_open_fds--;
+				p->pack_fd = -1;
+			}
 			pack_mmap_calls++;
 			pack_open_windows++;
 			if (pack_mapped > peak_pack_mapped)
@@ -803,10 +889,21 @@ static struct packed_git *alloc_packed_git(int extra)
 	return p;
 }
 
+static void try_to_free_pack_memory(size_t size)
+{
+	release_pack_memory(size, -1);
+}
+
 struct packed_git *add_packed_git(const char *path, int path_len, int local)
 {
+	static int have_set_try_to_free_routine;
 	struct stat st;
 	struct packed_git *p = alloc_packed_git(path_len + 2);
+
+	if (!have_set_try_to_free_routine) {
+		have_set_try_to_free_routine = 1;
+		set_try_to_free_routine(try_to_free_pack_memory);
+	}
 
 	/*
 	 * Make sure a corresponding .pack file exists and that
@@ -857,6 +954,9 @@ struct packed_git *parse_pack_index(unsigned char *sha1, const char *idx_path)
 
 void install_packed_git(struct packed_git *pack)
 {
+	if (pack->pack_fd != -1)
+		pack_open_fds++;
+
 	pack->next = packed_git;
 	packed_git = pack;
 }
@@ -874,8 +974,6 @@ static void prepare_packed_git_one(char *objdir, int local)
 	sprintf(path, "%s/pack", objdir);
 	len = strlen(path);
 	dir = opendir(path);
-	while (!dir && errno == EMFILE && unuse_one_window(packed_git, -1))
-		dir = opendir(path);
 	if (!dir) {
 		if (errno != ENOENT)
 			error("unable to open object pack directory: %s: %s",
@@ -1003,7 +1101,7 @@ static void mark_bad_packed_object(struct packed_git *p,
 	p->num_bad_objects++;
 }
 
-static int has_packed_and_bad(const unsigned char *sha1)
+static const struct packed_git *has_packed_and_bad(const unsigned char *sha1)
 {
 	struct packed_git *p;
 	unsigned i;
@@ -1011,8 +1109,8 @@ static int has_packed_and_bad(const unsigned char *sha1)
 	for (p = packed_git; p; p = p->next)
 		for (i = 0; i < p->num_bad_objects; i++)
 			if (!hashcmp(sha1, p->bad_object_sha1 + 20 * i))
-				return 1;
-	return 0;
+				return p;
+	return NULL;
 }
 
 int check_sha1_signature(const unsigned char *sha1, void *map, unsigned long size, const char *type)
@@ -1022,18 +1120,23 @@ int check_sha1_signature(const unsigned char *sha1, void *map, unsigned long siz
 	return hashcmp(sha1, real_sha1) ? -1 : 0;
 }
 
-static int git_open_noatime(const char *name)
+static int git_open_noatime(const char *name, struct packed_git *p)
 {
 	static int sha1_file_open_flag = O_NOATIME;
-	int fd = open(name, O_RDONLY | sha1_file_open_flag);
 
-	/* Might the failure be due to O_NOATIME? */
-	if (fd < 0 && errno != ENOENT && sha1_file_open_flag) {
-		fd = open(name, O_RDONLY);
+	for (;;) {
+		int fd = open(name, O_RDONLY | sha1_file_open_flag);
 		if (fd >= 0)
+			return fd;
+
+		/* Might the failure be due to O_NOATIME? */
+		if (errno != ENOENT && sha1_file_open_flag) {
 			sha1_file_open_flag = 0;
+			continue;
+		}
+
+		return -1;
 	}
-	return fd;
 }
 
 static int open_sha1_file(const unsigned char *sha1)
@@ -1042,7 +1145,7 @@ static int open_sha1_file(const unsigned char *sha1)
 	char *name = sha1_file_name(sha1);
 	struct alternate_object_database *alt;
 
-	fd = git_open_noatime(name);
+	fd = git_open_noatime(name, NULL);
 	if (fd >= 0)
 		return fd;
 
@@ -1051,7 +1154,7 @@ static int open_sha1_file(const unsigned char *sha1)
 	for (alt = alt_odb_list; alt; alt = alt->next) {
 		name = alt->name;
 		fill_sha1_path(name, sha1);
-		fd = git_open_noatime(alt->base);
+		fd = git_open_noatime(alt->base, NULL);
 		if (fd >= 0)
 			return fd;
 	}
@@ -1857,6 +1960,27 @@ off_t find_pack_entry_one(const unsigned char *sha1,
 	return 0;
 }
 
+static int is_pack_valid(struct packed_git *p)
+{
+	/* An already open pack is known to be valid. */
+	if (p->pack_fd != -1)
+		return 1;
+
+	/* If the pack has one window completely covering the
+	 * file size, the pack is known to be valid even if
+	 * the descriptor is not currently open.
+	 */
+	if (p->windows) {
+		struct pack_window *w = p->windows;
+
+		if (!w->offset && w->len == p->pack_size)
+			return 1;
+	}
+
+	/* Force the pack to open to prove its valid. */
+	return !open_packed_git(p);
+}
+
 static int find_pack_entry(const unsigned char *sha1, struct pack_entry *e)
 {
 	static struct packed_git *last_found = (void *)1;
@@ -1886,7 +2010,7 @@ static int find_pack_entry(const unsigned char *sha1, struct pack_entry *e)
 			 * it may have been deleted since the index
 			 * was loaded!
 			 */
-			if (p->pack_fd == -1 && open_packed_git(p)) {
+			if (!is_pack_valid(p)) {
 				error("packfile %s cannot be accessed", p->pack_name);
 				goto next;
 			}
@@ -1946,8 +2070,16 @@ static int sha1_loose_object_info(const unsigned char *sha1, unsigned long *size
 
 int sha1_object_info(const unsigned char *sha1, unsigned long *sizep)
 {
+	struct cached_object *co;
 	struct pack_entry e;
 	int status;
+
+	co = find_cached_object(sha1);
+	if (co) {
+		if (sizep)
+			*sizep = co->size;
+		return co->type;
+	}
 
 	if (!find_pack_entry(sha1, &e)) {
 		/* Most likely it's a loose object. */
@@ -1992,41 +2124,6 @@ static void *read_packed_sha1(const unsigned char *sha1,
 		data = read_object(sha1, type, size);
 	}
 	return data;
-}
-
-/*
- * This is meant to hold a *small* number of objects that you would
- * want read_sha1_file() to be able to return, but yet you do not want
- * to write them into the object store (e.g. a browse-only
- * application).
- */
-static struct cached_object {
-	unsigned char sha1[20];
-	enum object_type type;
-	void *buf;
-	unsigned long size;
-} *cached_objects;
-static int cached_object_nr, cached_object_alloc;
-
-static struct cached_object empty_tree = {
-	EMPTY_TREE_SHA1_BIN,
-	OBJ_TREE,
-	"",
-	0
-};
-
-static struct cached_object *find_cached_object(const unsigned char *sha1)
-{
-	int i;
-	struct cached_object *co = cached_objects;
-
-	for (i = 0; i < cached_object_nr; i++, co++) {
-		if (!hashcmp(co->sha1, sha1))
-			return co;
-	}
-	if (!hashcmp(sha1, empty_tree.sha1))
-		return &empty_tree;
-	return NULL;
 }
 
 int pretend_sha1_file(void *buf, unsigned long len, enum object_type type,
@@ -2079,36 +2176,48 @@ static void *read_object(const unsigned char *sha1, enum object_type *type,
 	return read_packed_sha1(sha1, type, size);
 }
 
+/*
+ * This function dies on corrupt objects; the callers who want to
+ * deal with them should arrange to call read_object() and give error
+ * messages themselves.
+ */
 void *read_sha1_file_repl(const unsigned char *sha1,
 			  enum object_type *type,
 			  unsigned long *size,
 			  const unsigned char **replacement)
 {
 	const unsigned char *repl = lookup_replace_object(sha1);
-	void *data = read_object(repl, type, size);
+	void *data;
 	char *path;
+	const struct packed_git *p;
+
+	errno = 0;
+	data = read_object(repl, type, size);
+	if (data) {
+		if (replacement)
+			*replacement = repl;
+		return data;
+	}
+
+	if (errno && errno != ENOENT)
+		die_errno("failed to read object %s", sha1_to_hex(sha1));
 
 	/* die if we replaced an object with one that does not exist */
-	if (!data && repl != sha1)
+	if (repl != sha1)
 		die("replacement %s not found for %s",
 		    sha1_to_hex(repl), sha1_to_hex(sha1));
 
-	/* legacy behavior is to die on corrupted objects */
-	if (!data) {
-		if (has_loose_object(repl)) {
-			path = sha1_file_name(sha1);
-			die("loose object %s (stored in %s) is corrupted", sha1_to_hex(repl), path);
-		}
-		if (has_packed_and_bad(repl)) {
-			path = sha1_pack_name(sha1);
-			die("packed object %s (stored in %s) is corrupted", sha1_to_hex(repl), path);
-		}
+	if (has_loose_object(repl)) {
+		path = sha1_file_name(sha1);
+		die("loose object %s (stored in %s) is corrupt",
+		    sha1_to_hex(repl), path);
 	}
 
-	if (replacement)
-		*replacement = repl;
+	if ((p = has_packed_and_bad(repl)) != NULL)
+		die("packed object %s (stored in %s) is corrupt",
+		    sha1_to_hex(repl), p->pack_name);
 
-	return data;
+	return NULL;
 }
 
 void *read_object_with_reference(const unsigned char *sha1,
@@ -2300,8 +2409,6 @@ static int write_loose_object(const unsigned char *sha1, char *hdr, int hdrlen,
 
 	filename = sha1_file_name(sha1);
 	fd = create_tmpfile(tmpfile, sizeof(tmpfile), filename);
-	while (fd < 0 && errno == EMFILE && unuse_one_window(packed_git, -1))
-		fd = create_tmpfile(tmpfile, sizeof(tmpfile), filename);
 	if (fd < 0) {
 		if (errno == EACCES)
 			return error("insufficient permission for adding an object to repository database %s\n", get_object_directory());

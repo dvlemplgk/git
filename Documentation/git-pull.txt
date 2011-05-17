@@ -26,7 +26,7 @@ With `--rebase`, it runs 'git rebase' instead of 'git merge'.
 <repository> should be the name of a remote repository as
 passed to linkgit:git-fetch[1].  <refspec> can name an
 arbitrary remote ref (for example, the name of a tag) or even
-a collection of refs with corresponding remote tracking branches
+a collection of refs with corresponding remote-tracking branches
 (e.g., refs/heads/{asterisk}:refs/remotes/origin/{asterisk}),
 but usually it is the name of a branch in the remote repository.
 
@@ -84,6 +84,15 @@ must be given before the options meant for 'git fetch'.
 --verbose::
 	Pass --verbose to git-fetch and git-merge.
 
+--[no-]recurse-submodules::
+	This option controls if new commits of all populated submodules should
+	be fetched too (see linkgit:git-config[1] and linkgit:gitmodules[5]).
+	That might be necessary to get the data needed for merging submodule
+	commits, a feature git learned in 1.7.3. Notice that the result of a
+	merge will not be checked out in the submodule, "git submodule update"
+	has to be called afterwards to bring the work tree up to date with the
+	merge result.
+
 Options related to merging
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -137,7 +146,7 @@ and if there is not any such variable, the value on `URL: ` line
 in `$GIT_DIR/remotes/<origin>` file is used.
 
 In order to determine what remote branches to fetch (and
-optionally store in the tracking branches) when the command is
+optionally store in the remote-tracking branches) when the command is
 run without any refspec parameters on the command line, values
 of the configuration variable `remote.<origin>.fetch` are
 consulted, and if there aren't any, `$GIT_DIR/remotes/<origin>`
@@ -150,9 +159,9 @@ refs/heads/*:refs/remotes/origin/*
 ------------
 
 A globbing refspec must have a non-empty RHS (i.e. must store
-what were fetched in tracking branches), and its LHS and RHS
+what were fetched in remote-tracking branches), and its LHS and RHS
 must end with `/*`.  The above specifies that all remote
-branches are tracked using tracking branches in
+branches are tracked using remote-tracking branches in
 `refs/remotes/origin/` hierarchy under the same name.
 
 The rule to determine which remote branch to merge after

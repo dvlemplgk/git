@@ -26,6 +26,17 @@ test_expect_success \
      ! test -f .git/refs/heads/--help
 '
 
+test_expect_success 'branch -h in broken repository' '
+	mkdir broken &&
+	(
+		cd broken &&
+		git init &&
+		>.git/refs/heads/master &&
+		test_expect_code 129 git branch -h >usage 2>&1
+	) &&
+	grep "[Uu]sage" broken/usage
+'
+
 test_expect_success \
     'git branch abc should create a branch' \
     'git branch abc && test -f .git/refs/heads/abc'
@@ -211,6 +222,11 @@ test_expect_success \
 test_expect_success \
     'branch from non-branch HEAD w/--track causes failure' \
     'test_must_fail git branch --track my10 HEAD^'
+
+test_expect_success \
+    'branch from tag w/--track causes failure' \
+    'git tag foobar &&
+     test_must_fail git branch --track my11 foobar'
 
 # Keep this test last, as it changes the current branch
 cat >expect <<EOF
@@ -475,6 +491,15 @@ test_expect_success 'autosetuprebase always on an untracked remote branch' '
 	test "z$(git config branch.myr20.remote)" = z &&
 	test "z$(git config branch.myr20.merge)" = z &&
 	test "z$(git config branch.myr20.rebase)" = z
+'
+
+test_expect_success 'autosetuprebase always on detached HEAD' '
+	git config branch.autosetupmerge always &&
+	test_when_finished git checkout master &&
+	git checkout HEAD^0 &&
+	git branch my11 &&
+	test -z "$(git config branch.my11.remote)" &&
+	test -z "$(git config branch.my11.merge)"
 '
 
 test_expect_success 'detect misconfigured autosetuprebase (bad value)' '

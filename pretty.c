@@ -216,36 +216,53 @@ static int is_rfc2047_special(char ch)
 static void add_rfc2047(struct strbuf *sb, const char *line, int len,
 		       const char *encoding)
 {
-	int i, last;
+	static const int max_length = 78; /* per rfc2822 */
+	int i;
+	int line_len;
+
+	/* How many bytes are already used on the current line? */
+	for (i = sb->len - 1; i >= 0; i--)
+		if (sb->buf[i] == '\n')
+			break;
+	line_len = sb->len - (i+1);
 
 	for (i = 0; i < len; i++) {
 		int ch = line[i];
-		if (non_ascii(ch))
+		if (non_ascii(ch) || ch == '\n')
 			goto needquote;
 		if ((i + 1 < len) && (ch == '=' && line[i+1] == '?'))
 			goto needquote;
 	}
-	strbuf_add(sb, line, len);
+	strbuf_add_wrapped_bytes(sb, line, len, 0, 1, max_length - line_len);
 	return;
 
 needquote:
 	strbuf_grow(sb, len * 3 + strlen(encoding) + 100);
 	strbuf_addf(sb, "=?%s?q?", encoding);
-	for (i = last = 0; i < len; i++) {
+	line_len += strlen(encoding) + 5; /* 5 for =??q? */
+	for (i = 0; i < len; i++) {
 		unsigned ch = line[i] & 0xFF;
+
+		if (line_len >= max_length - 2) {
+			strbuf_addf(sb, "?=\n =?%s?q?", encoding);
+			line_len = strlen(encoding) + 5 + 1; /* =??q? plus SP */
+		}
+
 		/*
 		 * We encode ' ' using '=20' even though rfc2047
 		 * allows using '_' for readability.  Unfortunately,
 		 * many programs do not understand this and just
 		 * leave the underscore in place.
 		 */
-		if (is_rfc2047_special(ch) || ch == ' ') {
-			strbuf_add(sb, line + last, i - last);
+		if (is_rfc2047_special(ch) || ch == ' ' || ch == '\n') {
 			strbuf_addf(sb, "=%02X", ch);
-			last = i + 1;
+			line_len += 3;
+		}
+		else {
+			strbuf_addch(sb, ch);
+			line_len++;
 		}
 	}
-	strbuf_add(sb, line + last, len - last);
 	strbuf_addstr(sb, "?=");
 }
 
@@ -403,8 +420,8 @@ static char *replace_encoding_header(char *buf, const char *encoding)
 	return strbuf_detach(&tmp, NULL);
 }
 
-static char *logmsg_reencode(const struct commit *commit,
-			     const char *output_encoding)
+char *logmsg_reencode(const struct commit *commit,
+		      const char *output_encoding)
 {
 	static const char *utf8 = "UTF-8";
 	const char *use_encoding;
@@ -555,6 +572,7 @@ struct format_commit_context {
 	const struct pretty_print_context *pretty_ctx;
 	unsigned commit_header_parsed:1;
 	unsigned commit_message_parsed:1;
+	char *message;
 	size_t width, indent1, indent2;
 
 	/* These offsets are relative to the start of the commit message. */
@@ -591,7 +609,7 @@ static int add_again(struct strbuf *sb, struct chunk *chunk)
 
 static void parse_commit_header(struct format_commit_context *context)
 {
-	const char *msg = context->commit->buffer;
+	const char *msg = context->message;
 	int i;
 
 	for (i = 0; msg[i]; i++) {
@@ -677,8 +695,8 @@ const char *format_subject(struct strbuf *sb, const char *msg,
 
 static void parse_commit_message(struct format_commit_context *c)
 {
-	const char *msg = c->commit->buffer + c->message_off;
-	const char *start = c->commit->buffer;
+	const char *msg = c->message + c->message_off;
+	const char *start = c->message;
 
 	msg = skip_empty_lines(msg);
 	c->subject_off = msg - start;
@@ -741,7 +759,7 @@ static size_t format_commit_one(struct strbuf *sb, const char *placeholder,
 {
 	struct format_commit_context *c = context;
 	const struct commit *commit = c->commit;
-	const char *msg = commit->buffer;
+	const char *msg = c->message;
 	struct commit_list *p;
 	int h1, h2;
 
@@ -886,8 +904,7 @@ static size_t format_commit_one(struct strbuf *sb, const char *placeholder,
 	case 'N':
 		if (c->pretty_ctx->show_notes) {
 			format_display_notes(commit->object.sha1, sb,
-				    git_log_output_encoding ? git_log_output_encoding
-							    : git_commit_encoding, 0);
+				    get_log_output_encoding(), 0);
 			return 1;
 		}
 		return 0;
@@ -1012,13 +1029,27 @@ void format_commit_message(const struct commit *commit,
 			   const struct pretty_print_context *pretty_ctx)
 {
 	struct format_commit_context context;
+	static const char utf8[] = "UTF-8";
+	const char *enc;
+	const char *output_enc = pretty_ctx->output_encoding;
 
 	memset(&context, 0, sizeof(context));
 	context.commit = commit;
 	context.pretty_ctx = pretty_ctx;
 	context.wrap_start = sb->len;
+	context.message = commit->buffer;
+	if (output_enc) {
+		enc = get_header(commit, "encoding");
+		enc = enc ? enc : utf8;
+		if (strcmp(enc, output_enc))
+			context.message = logmsg_reencode(commit, output_enc);
+	}
+
 	strbuf_expand(sb, format, format_commit_item, &context);
 	rewrap_message_tail(sb, &context, 0, 0, 0);
+
+	if (context.message != commit->buffer)
+		free(context.message);
 }
 
 static void pp_header(enum cmit_fmt fmt,
@@ -1092,11 +1123,10 @@ void pp_title_line(enum cmit_fmt fmt,
 		   const char *encoding,
 		   int need_8bit_cte)
 {
-	const char *line_separator = (fmt == CMIT_FMT_EMAIL) ? "\n " : " ";
 	struct strbuf title;
 
 	strbuf_init(&title, 80);
-	*msg_p = format_subject(&title, *msg_p, line_separator);
+	*msg_p = format_subject(&title, *msg_p, " ");
 
 	strbuf_grow(sb, title.len + 1024);
 	if (subject) {
@@ -1159,11 +1189,7 @@ char *reencode_commit_message(const struct commit *commit, const char **encoding
 {
 	const char *encoding;
 
-	encoding = (git_log_output_encoding
-		    ? git_log_output_encoding
-		    : git_commit_encoding);
-	if (!encoding)
-		encoding = "UTF-8";
+	encoding = get_log_output_encoding();
 	if (encoding_p)
 		*encoding_p = encoding;
 	return logmsg_reencode(commit, encoding);

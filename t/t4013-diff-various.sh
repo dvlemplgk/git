@@ -210,6 +210,12 @@ log -m -p master
 log -SF master
 log -S F master
 log -SF -p master
+log -SF master --max-count=0
+log -SF master --max-count=1
+log -SF master --max-count=2
+log -GF master
+log -GF -p master
+log -GF -p --pickaxe-all master
 log --decorate --all
 log --decorate=full --all
 
@@ -285,6 +291,17 @@ EOF
 
 test_expect_success 'log -S requires an argument' '
 	test_must_fail git log -S
+'
+
+test_expect_success 'diff --cached on unborn branch' '
+	echo ref: refs/heads/unborn >.git/HEAD &&
+	git diff --cached >result &&
+	test_cmp "$TEST_DIRECTORY/t4013/diff.diff_--cached" result
+'
+
+test_expect_success 'diff --cached -- file on unborn branch' '
+	git diff --cached -- file0 >result &&
+	test_cmp "$TEST_DIRECTORY/t4013/diff.diff_--cached_--_file0" result
 '
 
 test_done
