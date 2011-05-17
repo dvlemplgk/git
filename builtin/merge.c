@@ -42,7 +42,7 @@ static const char * const builtin_merge_usage[] = {
 	NULL
 };
 
-static int show_diffstat = 1, option_log, squash;
+static int show_diffstat = 1, shortlog_len, squash;
 static int option_commit = 1, allow_fast_forward = 1;
 static int fast_forward_only;
 static int allow_trivial = 1, have_message;
@@ -57,6 +57,7 @@ static const char *branch;
 static int option_renormalize;
 static int verbosity;
 static int allow_rerere_auto;
+static int abort_current_merge;
 
 static struct strategy all_strategy[] = {
 	{ "recursive",  DEFAULT_TWOHEAD | NO_TRIVIAL },
@@ -177,8 +178,9 @@ static struct option builtin_merge_options[] = {
 	OPT_BOOLEAN(0, "stat", &show_diffstat,
 		"show a diffstat at the end of the merge"),
 	OPT_BOOLEAN(0, "summary", &show_diffstat, "(synonym to --stat)"),
-	OPT_BOOLEAN(0, "log", &option_log,
-		"add list of one-line log to merge commit message"),
+	{ OPTION_INTEGER, 0, "log", &shortlog_len, "n",
+	  "add (at most <n>) entries from shortlog to merge commit message",
+	  PARSE_OPT_OPTARG, NULL, DEFAULT_MERGE_LOG_LEN },
 	OPT_BOOLEAN(0, "squash", &squash,
 		"create a single commit instead of doing a merge"),
 	OPT_BOOLEAN(0, "commit", &option_commit,
@@ -193,9 +195,11 @@ static struct option builtin_merge_options[] = {
 	OPT_CALLBACK('X', "strategy-option", &xopts, "option=value",
 		"option for selected merge strategy", option_parse_x),
 	OPT_CALLBACK('m', "message", &merge_msg, "message",
-		"message to be used for the merge commit (if any)",
+		"merge commit message (for a non-fast-forward merge)",
 		option_parse_message),
 	OPT__VERBOSITY(&verbosity),
+	OPT_BOOLEAN(0, "abort", &abort_current_merge,
+		"abort the current in-progress merge"),
 	OPT_END()
 };
 
@@ -420,7 +424,7 @@ static void merge_name(const char *remote, struct strbuf *msg)
 			goto cleanup;
 		}
 		if (!prefixcmp(found_ref, "refs/remotes/")) {
-			strbuf_addf(msg, "%s\t\tremote branch '%s' of .\n",
+			strbuf_addf(msg, "%s\t\tremote-tracking branch '%s' of .\n",
 				    sha1_to_hex(branch_head), remote);
 			goto cleanup;
 		}
@@ -522,10 +526,17 @@ static int git_merge_config(const char *k, const char *v, void *cb)
 		return git_config_string(&pull_twohead, k, v);
 	else if (!strcmp(k, "pull.octopus"))
 		return git_config_string(&pull_octopus, k, v);
-	else if (!strcmp(k, "merge.log") || !strcmp(k, "merge.summary"))
-		option_log = git_config_bool(k, v);
 	else if (!strcmp(k, "merge.renormalize"))
 		option_renormalize = git_config_bool(k, v);
+	else if (!strcmp(k, "merge.log") || !strcmp(k, "merge.summary")) {
+		int is_bool;
+		shortlog_len = git_config_bool_or_int(k, v, &is_bool);
+		if (!is_bool && shortlog_len < 0)
+			return error("%s: negative length %s", k, v);
+		if (is_bool && shortlog_len)
+			shortlog_len = DEFAULT_MERGE_LOG_LEN;
+		return 0;
+	}
 	return git_diff_ui_config(k, v, cb);
 }
 
@@ -649,25 +660,9 @@ static int try_merge_strategy(const char *strategy, struct commit_list *common,
 
 		o.renormalize = option_renormalize;
 
-		/*
-		 * NEEDSWORK: merge with table in builtin/merge-recursive
-		 */
-		for (x = 0; x < xopts_nr; x++) {
-			if (!strcmp(xopts[x], "ours"))
-				o.recursive_variant = MERGE_RECURSIVE_OURS;
-			else if (!strcmp(xopts[x], "theirs"))
-				o.recursive_variant = MERGE_RECURSIVE_THEIRS;
-			else if (!strcmp(xopts[x], "subtree"))
-				o.subtree_shift = "";
-			else if (!prefixcmp(xopts[x], "subtree="))
-				o.subtree_shift = xopts[x]+8;
-			else if (!strcmp(xopts[x], "renormalize"))
-				o.renormalize = 1;
-			else if (!strcmp(xopts[x], "no-renormalize"))
-				o.renormalize = 0;
-			else
+		for (x = 0; x < xopts_nr; x++)
+			if (parse_merge_opt(&o, xopts[x]))
 				die("Unknown option for merge-recursive: -X%s", xopts[x]);
-		}
 
 		o.branch1 = head_arg;
 		o.branch2 = remoteheads->item->util;
@@ -800,6 +795,32 @@ static void add_strategies(const char *string, unsigned attr)
 
 }
 
+static void write_merge_msg(void)
+{
+	int fd = open(git_path("MERGE_MSG"), O_WRONLY | O_CREAT, 0666);
+	if (fd < 0)
+		die_errno("Could not open '%s' for writing",
+			  git_path("MERGE_MSG"));
+	if (write_in_full(fd, merge_msg.buf, merge_msg.len) != merge_msg.len)
+		die_errno("Could not write to '%s'", git_path("MERGE_MSG"));
+	close(fd);
+}
+
+static void read_merge_msg(void)
+{
+	strbuf_reset(&merge_msg);
+	if (strbuf_read_file(&merge_msg, git_path("MERGE_MSG"), 0) < 0)
+		die_errno("Could not read from '%s'", git_path("MERGE_MSG"));
+}
+
+static void run_prepare_commit_msg(void)
+{
+	write_merge_msg();
+	run_hook(get_index_file(), "prepare-commit-msg",
+		 git_path("MERGE_MSG"), "merge", NULL, NULL);
+	read_merge_msg();
+}
+
 static int merge_trivial(void)
 {
 	unsigned char result_tree[20], result_commit[20];
@@ -811,6 +832,7 @@ static int merge_trivial(void)
 	parent->next = xmalloc(sizeof(*parent->next));
 	parent->next->item = remoteheads->item;
 	parent->next->next = NULL;
+	run_prepare_commit_msg();
 	commit_tree(merge_msg.buf, result_tree, parent, result_commit, NULL);
 	finish(result_commit, "In-index merge");
 	drop_save();
@@ -840,6 +862,7 @@ static int finish_automerge(struct commit_list *common,
 	}
 	free_commit_list(remoteheads);
 	strbuf_addch(&merge_msg, '\n');
+	run_prepare_commit_msg();
 	commit_tree(merge_msg.buf, result_tree, parents, result_commit, NULL);
 	strbuf_addf(&buf, "Merge made by %s.", wt_strategy);
 	finish(result_commit, buf.buf);
@@ -927,22 +950,9 @@ int cmd_merge(int argc, const char **argv, const char *prefix)
 	const char *best_strategy = NULL, *wt_strategy = NULL;
 	struct commit_list **remotes = &remoteheads;
 
-	if (read_cache_unmerged()) {
-		die_resolve_conflict("merge");
-	}
-	if (file_exists(git_path("MERGE_HEAD"))) {
-		/*
-		 * There is no unmerged entry, don't advise 'git
-		 * add/rm <file>', just 'git commit'.
-		 */
-		if (advice_resolve_conflict)
-			die("You have not concluded your merge (MERGE_HEAD exists).\n"
-			    "Please, commit your changes before you can merge.");
-		else
-			die("You have not concluded your merge (MERGE_HEAD exists).");
-	}
+	if (argc == 2 && !strcmp(argv[1], "-h"))
+		usage_with_options(builtin_merge_usage, builtin_merge_options);
 
-	resolve_undo_clear();
 	/*
 	 * Check if we are _not_ on a detached HEAD, i.e. if there is a
 	 * current branch.
@@ -961,6 +971,34 @@ int cmd_merge(int argc, const char **argv, const char *prefix)
 
 	argc = parse_options(argc, argv, prefix, builtin_merge_options,
 			builtin_merge_usage, 0);
+
+	if (abort_current_merge) {
+		int nargc = 2;
+		const char *nargv[] = {"reset", "--merge", NULL};
+
+		if (!file_exists(git_path("MERGE_HEAD")))
+			die("There is no merge to abort (MERGE_HEAD missing).");
+
+		/* Invoke 'git reset --merge' */
+		return cmd_reset(nargc, nargv, prefix);
+	}
+
+	if (read_cache_unmerged())
+		die_resolve_conflict("merge");
+
+	if (file_exists(git_path("MERGE_HEAD"))) {
+		/*
+		 * There is no unmerged entry, don't advise 'git
+		 * add/rm <file>', just 'git commit'.
+		 */
+		if (advice_resolve_conflict)
+			die("You have not concluded your merge (MERGE_HEAD exists).\n"
+			    "Please, commit your changes before you can merge.");
+		else
+			die("You have not concluded your merge (MERGE_HEAD exists).");
+	}
+	resolve_undo_clear();
+
 	if (verbosity < 0)
 		show_diffstat = 0;
 
@@ -1030,14 +1068,12 @@ int cmd_merge(int argc, const char **argv, const char *prefix)
 		for (i = 0; i < argc; i++)
 			merge_name(argv[i], &merge_names);
 
-		if (have_message && option_log)
-			fmt_merge_msg_shortlog(&merge_names, &merge_msg);
-		else if (!have_message)
-			fmt_merge_msg(option_log, &merge_names, &merge_msg);
-
-
-		if (!(have_message && !option_log) && merge_msg.len)
-			strbuf_setlen(&merge_msg, merge_msg.len-1);
+		if (!have_message || shortlog_len) {
+			fmt_merge_msg(&merge_names, &merge_msg, !have_message,
+				      shortlog_len);
+			if (merge_msg.len)
+				strbuf_setlen(&merge_msg, merge_msg.len - 1);
+		}
 	}
 
 	if (head_invalid || !argc)
@@ -1308,14 +1344,7 @@ int cmd_merge(int argc, const char **argv, const char *prefix)
 			die_errno("Could not write to '%s'", git_path("MERGE_HEAD"));
 		close(fd);
 		strbuf_addch(&merge_msg, '\n');
-		fd = open(git_path("MERGE_MSG"), O_WRONLY | O_CREAT, 0666);
-		if (fd < 0)
-			die_errno("Could not open '%s' for writing",
-				  git_path("MERGE_MSG"));
-		if (write_in_full(fd, merge_msg.buf, merge_msg.len) !=
-			merge_msg.len)
-			die_errno("Could not write to '%s'", git_path("MERGE_MSG"));
-		close(fd);
+		write_merge_msg();
 		fd = open(git_path("MERGE_MODE"), O_WRONLY | O_CREAT | O_TRUNC, 0666);
 		if (fd < 0)
 			die_errno("Could not open '%s' for writing",

@@ -157,7 +157,7 @@ EOF
 
 test_expect_success 'stash branch' '
 	echo foo > file &&
-	git commit file -m first
+	git commit file -m first &&
 	echo bar > file &&
 	echo bar2 > file2 &&
 	git add file2 &&
@@ -255,7 +255,7 @@ test_expect_success 'stash rm and ignore' '
 	echo file >.gitignore &&
 	git stash save "rm and ignore" &&
 	test bar = "$(cat file)" &&
-	test file = "$(cat .gitignore)"
+	test file = "$(cat .gitignore)" &&
 	git stash apply &&
 	! test -r file &&
 	test file = "$(cat .gitignore)"
@@ -268,7 +268,7 @@ test_expect_success 'stash rm and ignore (stage .gitignore)' '
 	git add .gitignore &&
 	git stash save "rm and ignore (stage .gitignore)" &&
 	test bar = "$(cat file)" &&
-	! test -r .gitignore
+	! test -r .gitignore &&
 	git stash apply &&
 	! test -r file &&
 	test file = "$(cat .gitignore)"
@@ -554,6 +554,25 @@ test_expect_success 'stash branch should not drop the stash if the branch exists
 	git stash &&
 	test_must_fail git stash branch master stash@{0} &&
 	git rev-parse stash@{0} --
+'
+
+test_expect_success 'stash apply shows status same as git status (relative to current directory)' '
+	git stash clear &&
+	echo 1 >subdir/subfile1 &&
+	echo 2 >subdir/subfile2 &&
+	git add subdir/subfile1 &&
+	git commit -m subdir &&
+	(
+		cd subdir &&
+		echo x >subfile1 &&
+		echo x >../file &&
+		git status >../expect &&
+		git stash &&
+		sane_unset GIT_MERGE_VERBOSITY &&
+		git stash apply
+	) |
+	sed -e 1,2d >actual && # drop "Saved..." and "HEAD is now..."
+	test_cmp expect actual
 '
 
 test_done

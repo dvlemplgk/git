@@ -180,7 +180,7 @@ int cmd_gc(int argc, const char **argv, const char *prefix)
 	char buf[80];
 
 	struct option builtin_gc_options[] = {
-		OPT__QUIET(&quiet),
+		OPT__QUIET(&quiet, "suppress progress reporting"),
 		{ OPTION_STRING, 0, "prune", &prune_expire, "date",
 			"prune unreferenced objects",
 			PARSE_OPT_OPTARG, NULL, (intptr_t)prune_expire },
@@ -188,6 +188,9 @@ int cmd_gc(int argc, const char **argv, const char *prefix)
 		OPT_BOOLEAN(0, "auto", &auto_gc, "enable auto-gc mode"),
 		OPT_END()
 	};
+
+	if (argc == 2 && !strcmp(argv[1], "-h"))
+		usage_with_options(builtin_gc_usage, builtin_gc_options);
 
 	git_config(gc_config, NULL);
 

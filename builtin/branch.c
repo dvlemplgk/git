@@ -134,7 +134,7 @@ static int branch_merged(int kind, const char *name,
 	    in_merge_bases(rev, &head_rev, 1) != merged) {
 		if (merged)
 			warning("deleting branch '%s' that has been merged to\n"
-				"         '%s', but it is not yet merged to HEAD.",
+				"         '%s', but not yet been merged to HEAD.",
 				name, reference_name);
 		else
 			warning("not deleting branch '%s' that is not yet merged to\n"
@@ -313,12 +313,7 @@ static int append_ref(const char *refname, const unsigned char *sha1, int flags,
 					   (struct object *)commit, refname);
 	}
 
-	/* Resize buffer */
-	if (ref_list->index >= ref_list->alloc) {
-		ref_list->alloc = alloc_nr(ref_list->alloc);
-		ref_list->list = xrealloc(ref_list->list,
-				ref_list->alloc * sizeof(struct ref_item));
-	}
+	ALLOC_GROW(ref_list->list, ref_list->index + 1, ref_list->alloc);
 
 	/* Record the new item */
 	newitem = &(ref_list->list[ref_list->index++]);
@@ -395,6 +390,30 @@ static int matches_merge_filter(struct commit *commit)
 	return (is_merged == (merge_filter == SHOW_MERGED));
 }
 
+static void add_verbose_info(struct strbuf *out, struct ref_item *item,
+			     int verbose, int abbrev)
+{
+	struct strbuf subject = STRBUF_INIT, stat = STRBUF_INIT;
+	const char *sub = " **** invalid ref ****";
+	struct commit *commit = item->commit;
+
+	if (commit && !parse_commit(commit)) {
+		struct pretty_print_context ctx = {0};
+		pretty_print_commit(CMIT_FMT_ONELINE, commit,
+				    &subject, &ctx);
+		sub = subject.buf;
+	}
+
+	if (item->kind == REF_LOCAL_BRANCH)
+		fill_tracking_info(&stat, item->name, verbose > 1);
+
+	strbuf_addf(out, " %s %s%s",
+		find_unique_abbrev(item->commit->object.sha1, abbrev),
+		stat.buf, sub);
+	strbuf_release(&stat);
+	strbuf_release(&subject);
+}
+
 static void print_ref_item(struct ref_item *item, int maxwidth, int verbose,
 			   int abbrev, int current, char *prefix)
 {
@@ -435,27 +454,9 @@ static void print_ref_item(struct ref_item *item, int maxwidth, int verbose,
 
 	if (item->dest)
 		strbuf_addf(&out, " -> %s", item->dest);
-	else if (verbose) {
-		struct strbuf subject = STRBUF_INIT, stat = STRBUF_INIT;
-		const char *sub = " **** invalid ref ****";
-
-		commit = item->commit;
-		if (commit && !parse_commit(commit)) {
-			struct pretty_print_context ctx = {0};
-			pretty_print_commit(CMIT_FMT_ONELINE, commit,
-					    &subject, &ctx);
-			sub = subject.buf;
-		}
-
-		if (item->kind == REF_LOCAL_BRANCH)
-			fill_tracking_info(&stat, item->name, verbose > 1);
-
-		strbuf_addf(&out, " %s %s%s",
-			find_unique_abbrev(item->commit->object.sha1, abbrev),
-			stat.buf, sub);
-		strbuf_release(&stat);
-		strbuf_release(&subject);
-	}
+	else if (verbose)
+		/* " f7c0c00 [ahead 58, behind 197] vcs-svn: drop obj_pool.h" */
+		add_verbose_info(&out, item, verbose, abbrev);
 	printf("%s\n", out.buf);
 	strbuf_release(&name);
 	strbuf_release(&out);
@@ -621,7 +622,8 @@ int cmd_branch(int argc, const char **argv, const char *prefix)
 
 	struct option options[] = {
 		OPT_GROUP("Generic options"),
-		OPT__VERBOSE(&verbose),
+		OPT__VERBOSE(&verbose,
+			"show hash and subject, give twice for upstream branch"),
 		OPT_SET_INT('t', "track",  &track, "set up tracking mode (see git-pull(1))",
 			BRANCH_TRACK_EXPLICIT),
 		OPT_SET_INT( 0, "set-upstream",  &track, "change upstream info",
@@ -651,7 +653,7 @@ int cmd_branch(int argc, const char **argv, const char *prefix)
 		OPT_BIT('m', NULL, &rename, "move/rename a branch and its reflog", 1),
 		OPT_BIT('M', NULL, &rename, "move/rename a branch, even if target exists", 2),
 		OPT_BOOLEAN('l', NULL, &reflog, "create the branch's reflog"),
-		OPT_BOOLEAN('f', "force", &force_create, "force creation (when already exists)"),
+		OPT__FORCE(&force_create, "force creation (when already exists)"),
 		{
 			OPTION_CALLBACK, 0, "no-merged", &merge_filter_ref,
 			"commit", "print only not merged branches",
@@ -666,6 +668,9 @@ int cmd_branch(int argc, const char **argv, const char *prefix)
 		},
 		OPT_END(),
 	};
+
+	if (argc == 2 && !strcmp(argv[1], "-h"))
+		usage_with_options(builtin_branch_usage, options);
 
 	git_config(git_branch_config, NULL);
 

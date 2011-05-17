@@ -66,7 +66,7 @@ COMMANDS
 	Set the 'rewriteRoot' option in the [svn-remote] config.
 --rewrite-uuid=<UUID>;;
 	Set the 'rewriteUUID' option in the [svn-remote] config.
---username=<USER>;;
+--username=<user>;;
 	For transports that SVN handles authentication for (http,
 	https, and plain svn), specify the username.  For other
 	transports (eg svn+ssh://), you must include the username in
@@ -216,6 +216,13 @@ config key: svn.commiturl (overwrites all svn-remote.<name>.commiturl options)
 +
 Using this option for any other purpose (don't ask) is very strongly
 discouraged.
+
+--mergeinfo=<mergeinfo>;;
+	Add the given merge information during the dcommit
+	(e.g. `--mergeinfo="/branches/foo:1-10"`). All svn server versions can
+	store this information (as a property), and svn clients starting from
+	version 1.5 can make use of it. 'git svn' currently does not use it
+	and does not set it automatically.
 
 'branch'::
 	Create a branch in the SVN repository.
@@ -443,8 +450,8 @@ OPTIONS
 	Only used with the 'init' command.
 	These are passed directly to 'git init'.
 
--r <ARG>::
---revision <ARG>::
+-r <arg>::
+--revision <arg>::
 	   Used with the 'fetch' command.
 +
 This allows revision ranges for partial/cauterized history
@@ -613,7 +620,7 @@ old references to SVN revision numbers in existing documentation, bug
 reports and archives.  If you plan to eventually migrate from SVN to git
 and are certain about dropping SVN history, consider
 linkgit:git-filter-branch[1] instead.  filter-branch also allows
-reformating of metadata for ease-of-reading and rewriting authorship
+reformatting of metadata for ease-of-reading and rewriting authorship
 info for non-"svn.authorsFile" users.
 
 svn.useSvmProps::
@@ -729,8 +736,11 @@ have each person clone that repository with 'git clone':
 	cd project
 	git init
 	git remote add origin server:/pub/project
-	git config --add remote.origin.fetch '+refs/remotes/*:refs/remotes/*'
+	git config --replace-all remote.origin.fetch '+refs/remotes/*:refs/remotes/*'
 	git fetch
+# Prevent fetch/pull from remote git server in the future,
+# we only want to use git svn for future updates
+	git config --remove-section remote.origin
 # Create a local branch from one of the branches just fetched
 	git checkout -b master FETCH_HEAD
 # Initialize 'git svn' locally (be sure to use the same URL and -T/-b/-t options as were used on server)
