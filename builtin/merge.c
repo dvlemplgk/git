@@ -339,13 +339,14 @@ static void squash_message(void)
 
 	ctx.abbrev = rev.abbrev;
 	ctx.date_mode = rev.date_mode;
+	ctx.fmt = rev.commit_format;
 
 	strbuf_addstr(&out, "Squashed commit of the following:\n");
 	while ((commit = get_revision(&rev)) != NULL) {
 		strbuf_addch(&out, '\n');
 		strbuf_addf(&out, "commit %s\n",
 			sha1_to_hex(commit->object.sha1));
-		pretty_print_commit(rev.commit_format, commit, &out, &ctx);
+		pretty_print_commit(&ctx, commit, &out);
 	}
 	if (write(fd, out.buf, out.len) < 0)
 		die_errno(_("Writing SQUASH_MSG"));
@@ -549,6 +550,15 @@ static int git_merge_config(const char *k, const char *v, void *cb)
 			return error(_("%s: negative length %s"), k, v);
 		if (is_bool && shortlog_len)
 			shortlog_len = DEFAULT_MERGE_LOG_LEN;
+		return 0;
+	} else if (!strcmp(k, "merge.ff")) {
+		int boolval = git_config_maybe_bool(k, v);
+		if (0 <= boolval) {
+			allow_fast_forward = boolval;
+		} else if (v && !strcmp(v, "only")) {
+			allow_fast_forward = 1;
+			fast_forward_only = 1;
+		} /* do not barf on values from future versions of git */
 		return 0;
 	} else if (!strcmp(k, "merge.defaulttoupstream")) {
 		default_to_upstream = git_config_bool(k, v);
@@ -1081,9 +1091,12 @@ int cmd_merge(int argc, const char **argv, const char *prefix)
 	if (!allow_fast_forward && fast_forward_only)
 		die(_("You cannot combine --no-ff with --ff-only."));
 
-	if (!argc && !abort_current_merge && default_to_upstream)
-		argc = setup_with_upstream(&argv);
-
+	if (!abort_current_merge) {
+		if (!argc && default_to_upstream)
+			argc = setup_with_upstream(&argv);
+		else if (argc == 1 && !strcmp(argv[0], "-"))
+			argv[0] = "@{-1}";
+	}
 	if (!argc)
 		usage_with_options(builtin_merge_usage,
 			builtin_merge_options);

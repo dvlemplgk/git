@@ -102,9 +102,7 @@ int run_diff_files(struct rev_info *revs, unsigned int option)
 		int changed;
 		unsigned dirty_submodule = 0;
 
-		if (DIFF_OPT_TST(&revs->diffopt, QUICK) &&
-		    !revs->diffopt.filter &&
-		    DIFF_OPT_TST(&revs->diffopt, HAS_CHANGES))
+		if (diff_can_quit_early(&revs->diffopt))
 			break;
 
 		if (!ce_path_match(ce, &revs->prune_data))
@@ -381,7 +379,8 @@ static void do_oneway_diff(struct unpack_trees_options *o,
 	if (cached && idx && ce_stage(idx)) {
 		struct diff_filepair *pair;
 		pair = diff_unmerge(&revs->diffopt, idx->name);
-		fill_filespec(pair->one, idx->sha1, idx->ce_mode);
+		if (tree)
+			fill_filespec(pair->one, tree->sha1, tree->ce_mode);
 		return;
 	}
 
@@ -435,8 +434,13 @@ static int oneway_diff(struct cache_entry **src, struct unpack_trees_options *o)
 	if (tree == o->df_conflict_entry)
 		tree = NULL;
 
-	if (ce_path_match(idx ? idx : tree, &revs->prune_data))
+	if (ce_path_match(idx ? idx : tree, &revs->prune_data)) {
 		do_oneway_diff(o, idx, tree);
+		if (diff_can_quit_early(&revs->diffopt)) {
+			o->exiting_early = 1;
+			return -1;
+		}
+	}
 
 	return 0;
 }

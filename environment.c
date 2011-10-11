@@ -42,8 +42,8 @@ const char *editor_program;
 const char *askpass_program;
 const char *excludes_file;
 enum auto_crlf auto_crlf = AUTO_CRLF_FALSE;
-int read_replace_refs = 1;
-enum eol eol = EOL_UNSET;
+int read_replace_refs = 1; /* NEEDSWORK: rename to use_replace_refs */
+enum eol core_eol = EOL_UNSET;
 enum safe_crlf safe_crlf = SAFE_CRLF_WARN;
 unsigned whitespace_rule_cfg = WS_DEFAULT_RULE;
 enum branch_track git_branch_track = BRANCH_TRACK_REMOTE;
@@ -91,7 +91,7 @@ static void setup_git_env(void)
 	git_dir = getenv(GIT_DIR_ENVIRONMENT);
 	git_dir = git_dir ? xstrdup(git_dir) : NULL;
 	if (!git_dir) {
-		git_dir = read_gitfile_gently(DEFAULT_GIT_DIR_ENVIRONMENT);
+		git_dir = read_gitfile(DEFAULT_GIT_DIR_ENVIRONMENT);
 		git_dir = git_dir ? xstrdup(git_dir) : NULL;
 	}
 	if (!git_dir)

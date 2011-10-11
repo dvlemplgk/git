@@ -14,6 +14,15 @@ static struct string_list config_fetch_recurse_submodules_for_name;
 static struct string_list config_ignore_for_name;
 static int config_fetch_recurse_submodules = RECURSE_SUBMODULES_ON_DEMAND;
 static struct string_list changed_submodule_paths;
+/*
+ * The following flag is set if the .gitmodules file is unmerged. We then
+ * disable recursion for all submodules where .git/config doesn't have a
+ * matching config entry because we can't guess what might be configured in
+ * .gitmodules unless the user resolves the conflict. When a command line
+ * option is given (which always overrides configuration) this flag will be
+ * ignored.
+ */
+static int gitmodules_is_unmerged;
 
 static int add_submodule_odb(const char *path)
 {
@@ -23,7 +32,7 @@ static int add_submodule_odb(const char *path)
 	const char *git_dir;
 
 	strbuf_addf(&objects_directory, "%s/.git", path);
-	git_dir = read_gitfile_gently(objects_directory.buf);
+	git_dir = read_gitfile(objects_directory.buf);
 	if (git_dir) {
 		strbuf_reset(&objects_directory);
 		strbuf_addstr(&objects_directory, git_dir);
@@ -63,6 +72,8 @@ void set_diffopt_flags_from_submodule_config(struct diff_options *diffopt,
 		ignore_option = unsorted_string_list_lookup(&config_ignore_for_name, path_option->util);
 		if (ignore_option)
 			handle_ignore_submodules_arg(diffopt, ignore_option->util);
+		else if (gitmodules_is_unmerged)
+			DIFF_OPT_SET(diffopt, IGNORE_SUBMODULES);
 	}
 }
 
@@ -82,9 +93,24 @@ void gitmodules_config(void)
 	const char *work_tree = get_git_work_tree();
 	if (work_tree) {
 		struct strbuf gitmodules_path = STRBUF_INIT;
+		int pos;
 		strbuf_addstr(&gitmodules_path, work_tree);
 		strbuf_addstr(&gitmodules_path, "/.gitmodules");
-		git_config_from_file(submodule_config, gitmodules_path.buf, NULL);
+		if (read_cache() < 0)
+			die("index file corrupt");
+		pos = cache_name_pos(".gitmodules", 11);
+		if (pos < 0) { /* .gitmodules not found or isn't merged */
+			pos = -1 - pos;
+			if (active_nr > pos) {  /* there is a .gitmodules */
+				const struct cache_entry *ce = active_cache[pos];
+				if (ce_namelen(ce) == 11 &&
+				    !memcmp(ce->name, ".gitmodules", 11))
+					gitmodules_is_unmerged = 1;
+			}
+		}
+
+		if (!gitmodules_is_unmerged)
+			git_config_from_file(submodule_config, gitmodules_path.buf, NULL);
 		strbuf_release(&gitmodules_path);
 	}
 }
@@ -347,6 +373,10 @@ void check_for_new_submodule_commits(unsigned char new_sha1[20])
 	const char *argv[] = {NULL, NULL, "--not", "--all", NULL};
 	int argc = ARRAY_SIZE(argv) - 1;
 
+	/* No need to check if there are no submodules configured */
+	if (!config_name_for_path.nr)
+		return;
+
 	init_revisions(&rev, NULL);
 	argv[1] = xstrdup(sha1_to_hex(new_sha1));
 	setup_revisions(argc, argv, &rev, NULL);
@@ -362,6 +392,7 @@ void check_for_new_submodule_commits(unsigned char new_sha1[20])
 		while (parent) {
 			struct diff_options diff_opts;
 			diff_setup(&diff_opts);
+			DIFF_OPT_SET(&diff_opts, RECURSIVE);
 			diff_opts.output_format |= DIFF_FORMAT_CALLBACK;
 			diff_opts.format_callback = submodule_collect_changed_cb;
 			if (diff_setup_done(&diff_opts) < 0)
@@ -434,7 +465,8 @@ int fetch_populated_submodules(int num_options, const char **options,
 					default_argv = "on-demand";
 				}
 			} else {
-				if (config_fetch_recurse_submodules == RECURSE_SUBMODULES_OFF)
+				if ((config_fetch_recurse_submodules == RECURSE_SUBMODULES_OFF) ||
+				    gitmodules_is_unmerged)
 					continue;
 				if (config_fetch_recurse_submodules == RECURSE_SUBMODULES_ON_DEMAND) {
 					if (!unsorted_string_list_lookup(&changed_submodule_paths, ce->name))
@@ -451,7 +483,7 @@ int fetch_populated_submodules(int num_options, const char **options,
 		strbuf_addf(&submodule_path, "%s/%s", work_tree, ce->name);
 		strbuf_addf(&submodule_git_dir, "%s/.git", submodule_path.buf);
 		strbuf_addf(&submodule_prefix, "%s%s/", prefix, ce->name);
-		git_dir = read_gitfile_gently(submodule_git_dir.buf);
+		git_dir = read_gitfile(submodule_git_dir.buf);
 		if (!git_dir)
 			git_dir = submodule_git_dir.buf;
 		if (is_directory(git_dir)) {
@@ -489,7 +521,7 @@ unsigned is_submodule_modified(const char *path, int ignore_untracked)
 	const char *git_dir;
 
 	strbuf_addf(&buf, "%s/.git", path);
-	git_dir = read_gitfile_gently(buf.buf);
+	git_dir = read_gitfile(buf.buf);
 	if (!git_dir)
 		git_dir = buf.buf;
 	if (!is_directory(git_dir)) {

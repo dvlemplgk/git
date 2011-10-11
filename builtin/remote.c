@@ -193,8 +193,8 @@ static int add(int argc, const char **argv)
 
 	if (mirror && master)
 		die("specifying a master branch makes no sense with --mirror");
-	if (mirror && track.nr)
-		die("specifying branches to track makes no sense with --mirror");
+	if (mirror && !(mirror & MIRROR_FETCH) && track.nr)
+		die("specifying branches to track makes sense only with fetch mirrors");
 
 	name = argv[0];
 	url = argv[1];
@@ -1113,7 +1113,7 @@ static int show(int argc, const char **argv)
 			url = states.remote->url;
 			url_nr = states.remote->url_nr;
 		}
-		for (i=0; i < url_nr; i++)
+		for (i = 0; i < url_nr; i++)
 			printf("  Push  URL: %s\n", url[i]);
 		if (!i)
 			printf("  Push  URL: %s\n", "(no URL)");

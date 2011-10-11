@@ -793,6 +793,22 @@ test_expect_success 'format-patch wraps extremely long headers (rfc2047)' '
 	test_cmp expect subject
 '
 
+M8="foo_bar_"
+M64=$M8$M8$M8$M8$M8$M8$M8$M8
+cat >expect <<EOF
+From: $M64
+ <foobar@foo.bar>
+EOF
+test_expect_success 'format-patch wraps non-quotable headers' '
+	rm -rf patches/ &&
+	echo content >>file &&
+	git add file &&
+	git commit -mfoo --author "$M64 <foobar@foo.bar>" &&
+	git format-patch --stdout -1 >patch &&
+	sed -n "/^From: /p; /^ /p; /^$/q" <patch >from &&
+	test_cmp expect from
+'
+
 check_author() {
 	echo content >>file &&
 	git add file &&
@@ -831,6 +847,24 @@ test_expect_success 'subject lines do not have 822 atom-quoting' '
 	git add file &&
 	git commit -m "header with . in it" &&
 	git format-patch -k -1 --stdout >patch &&
+	grep ^Subject: patch >actual &&
+	test_cmp expect actual
+'
+
+cat >expect <<'EOF'
+Subject: [PREFIX 1/1] header with . in it
+EOF
+test_expect_success 'subject prefixes have space prepended' '
+	git format-patch -n -1 --stdout --subject-prefix=PREFIX >patch &&
+	grep ^Subject: patch >actual &&
+	test_cmp expect actual
+'
+
+cat >expect <<'EOF'
+Subject: [1/1] header with . in it
+EOF
+test_expect_success 'empty subject prefix does not have extra space' '
+	git format-patch -n -1 --stdout --subject-prefix= >patch &&
 	grep ^Subject: patch >actual &&
 	test_cmp expect actual
 '
