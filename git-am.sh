@@ -305,7 +305,8 @@ split_patches () {
 		msgnum=
 		;;
 	*)
-		if test -n "$parse_patch" ; then
+		if test -n "$patch_format"
+		then
 			clean_abort "Patch format $patch_format is not supported."
 		else
 			clean_abort "Patch format detection failed."
@@ -506,6 +507,8 @@ else
 		fi
 	fi
 fi
+
+git update-index -q --refresh
 
 case "$resolved" in
 '')

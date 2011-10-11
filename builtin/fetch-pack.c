@@ -226,7 +226,7 @@ static void insert_one_alternate_ref(const struct ref *ref, void *unused)
 
 static void insert_alternate_refs(void)
 {
-	foreach_alt_odb(refs_from_alternate_cb, insert_one_alternate_ref);
+	for_each_alternate_ref(insert_one_alternate_ref, NULL);
 }
 
 #define INITIAL_FLUSH 16
@@ -395,6 +395,8 @@ static int find_common(int fd[2], unsigned char *result_sha1,
 				case ACK_continue: {
 					struct commit *commit =
 						lookup_commit(result_sha1);
+					if (!commit)
+						die("invalid commit %s", sha1_to_hex(result_sha1));
 					if (args.stateless_rpc
 					 && ack == ACK_common
 					 && !(commit->object.flags & COMMON)) {
@@ -472,8 +474,10 @@ static int mark_complete(const char *path, const unsigned char *sha1, int flag, 
 	}
 	if (o && o->type == OBJ_COMMIT) {
 		struct commit *commit = (struct commit *)o;
-		commit->object.flags |= COMPLETE;
-		commit_list_insert_by_date(commit, &complete);
+		if (!(commit->object.flags & COMPLETE)) {
+			commit->object.flags |= COMPLETE;
+			commit_list_insert_by_date(commit, &complete);
+		}
 	}
 	return 0;
 }

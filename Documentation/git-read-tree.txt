@@ -8,6 +8,7 @@ git-read-tree - Reads tree information into the index
 
 SYNOPSIS
 --------
+[verse]
 'git read-tree' [[-m [--trivial] [--aggressive] | --reset | --prefix=<prefix>]
 		[-u [--exclude-per-directory=<gitignore>] | -i]]
 		[--index-output=<file>] [--no-sparse-checkout]
@@ -52,6 +53,11 @@ OPTIONS
 	tree and is meant to be used when creating a merge of
 	trees that are not directly related to the current
 	working tree status into a temporary index file.
+
+-n::
+--dry-run::
+	Check if the command would error out, without updating the index
+	nor the files in the working tree for real.
 
 -v::
 	Show the progress of checking files out.

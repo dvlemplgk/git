@@ -16,13 +16,27 @@
 #endif
 
 #include <zlib.h>
-#if defined(NO_DEFLATE_BOUND) || ZLIB_VERNUM < 0x1200
-#define deflateBound(c,s)  ((s) + (((s) + 7) >> 3) + (((s) + 63) >> 6) + 11)
-#endif
+typedef struct git_zstream {
+	z_stream z;
+	unsigned long avail_in;
+	unsigned long avail_out;
+	unsigned long total_in;
+	unsigned long total_out;
+	unsigned char *next_in;
+	unsigned char *next_out;
+} git_zstream;
 
-void git_inflate_init(z_streamp strm);
-void git_inflate_end(z_streamp strm);
-int git_inflate(z_streamp strm, int flush);
+void git_inflate_init(git_zstream *);
+void git_inflate_init_gzip_only(git_zstream *);
+void git_inflate_end(git_zstream *);
+int git_inflate(git_zstream *, int flush);
+
+void git_deflate_init(git_zstream *, int level);
+void git_deflate_init_gzip(git_zstream *, int level);
+void git_deflate_end(git_zstream *);
+int git_deflate_end_gently(git_zstream *);
+int git_deflate(git_zstream *, int flush);
+unsigned long git_deflate_bound(git_zstream *, unsigned long);
 
 #if defined(DT_UNKNOWN) && !defined(NO_D_TYPE_IN_DIRENT)
 #define DTYPE(de)	((de)->d_type)
@@ -420,7 +434,7 @@ extern char *get_index_file(void);
 extern char *get_graft_file(void);
 extern int set_git_dir(const char *path);
 extern const char *get_git_work_tree(void);
-extern const char *read_gitfile_gently(const char *path);
+extern const char *read_gitfile(const char *path);
 extern void set_git_work_tree(const char *tree);
 
 #define ALTERNATE_DB_ENVIRONMENT "GIT_ALTERNATE_OBJECT_DIRECTORIES"
@@ -511,15 +525,18 @@ struct pathspec {
 	struct pathspec_item {
 		const char *match;
 		int len;
-		unsigned int has_wildcard:1;
+		unsigned int use_wildcard:1;
 	} *items;
 };
 
 extern int init_pathspec(struct pathspec *, const char **);
 extern void free_pathspec(struct pathspec *);
 extern int ce_path_match(const struct cache_entry *ce, const struct pathspec *pathspec);
-extern int index_fd(unsigned char *sha1, int fd, struct stat *st, int write_object, enum object_type type, const char *path, int format_check);
-extern int index_path(unsigned char *sha1, const char *path, struct stat *st, int write_object);
+
+#define HASH_WRITE_OBJECT 1
+#define HASH_FORMAT_CHECK 2
+extern int index_fd(unsigned char *sha1, int fd, struct stat *st, enum object_type type, const char *path, unsigned flags);
+extern int index_path(unsigned char *sha1, const char *path, struct stat *st, unsigned flags);
 extern void fill_stat_cache_info(struct cache_entry *ce, struct stat *st);
 
 #define REFRESH_REALLY		0x0001	/* ignore_valid */
@@ -606,7 +623,7 @@ enum eol {
 #endif
 };
 
-extern enum eol eol;
+extern enum eol core_eol;
 
 enum branch_track {
 	BRANCH_TRACK_UNSPECIFIED = -1,
@@ -676,14 +693,24 @@ extern char *sha1_pack_name(const unsigned char *sha1);
 extern char *sha1_pack_index_name(const unsigned char *sha1);
 extern const char *find_unique_abbrev(const unsigned char *sha1, int);
 extern const unsigned char null_sha1[20];
-static inline int is_null_sha1(const unsigned char *sha1)
-{
-	return !memcmp(sha1, null_sha1, 20);
-}
+
 static inline int hashcmp(const unsigned char *sha1, const unsigned char *sha2)
 {
-	return memcmp(sha1, sha2, 20);
+	int i;
+
+	for (i = 0; i < 20; i++, sha1++, sha2++) {
+		if (*sha1 != *sha2)
+			return *sha1 - *sha2;
+	}
+
+	return 0;
 }
+
+static inline int is_null_sha1(const unsigned char *sha1)
+{
+	return !hashcmp(sha1, null_sha1);
+}
+
 static inline void hashcpy(unsigned char *sha_dst, const unsigned char *sha_src)
 {
 	memcpy(sha_dst, sha_src, 20);
@@ -746,13 +773,23 @@ char *strip_path_suffix(const char *path, const char *suffix);
 int daemon_avoid_alias(const char *path);
 int offset_1st_component(const char *path);
 
-/* Read and unpack a sha1 file into memory, write memory to a sha1 file */
-extern int sha1_object_info(const unsigned char *, unsigned long *);
-extern void *read_sha1_file_repl(const unsigned char *sha1, enum object_type *type, unsigned long *size, const unsigned char **replacement);
+/* object replacement */
+#define READ_SHA1_FILE_REPLACE 1
+extern void *read_sha1_file_extended(const unsigned char *sha1, enum object_type *type, unsigned long *size, unsigned flag);
 static inline void *read_sha1_file(const unsigned char *sha1, enum object_type *type, unsigned long *size)
 {
-	return read_sha1_file_repl(sha1, type, size, NULL);
+	return read_sha1_file_extended(sha1, type, size, READ_SHA1_FILE_REPLACE);
 }
+extern const unsigned char *do_lookup_replace_object(const unsigned char *sha1);
+static inline const unsigned char *lookup_replace_object(const unsigned char *sha1)
+{
+	if (!read_replace_refs)
+		return sha1;
+	return do_lookup_replace_object(sha1);
+}
+
+/* Read and unpack a sha1 file into memory, write memory to a sha1 file */
+extern int sha1_object_info(const unsigned char *, unsigned long *);
 extern int hash_sha1_file(const void *buf, unsigned long len, const char *type, unsigned char *sha1);
 extern int write_sha1_file(const void *buf, unsigned long len, const char *type, unsigned char *return_sha1);
 extern int pretend_sha1_file(void *, unsigned long, enum object_type, unsigned char *);
@@ -790,15 +827,15 @@ struct object_context {
 };
 
 extern int get_sha1(const char *str, unsigned char *sha1);
-extern int get_sha1_with_mode_1(const char *str, unsigned char *sha1, unsigned *mode, int gently, const char *prefix);
+extern int get_sha1_with_mode_1(const char *str, unsigned char *sha1, unsigned *mode, int only_to_die, const char *prefix);
 static inline int get_sha1_with_mode(const char *str, unsigned char *sha1, unsigned *mode)
 {
-	return get_sha1_with_mode_1(str, sha1, mode, 1, NULL);
+	return get_sha1_with_mode_1(str, sha1, mode, 0, NULL);
 }
-extern int get_sha1_with_context_1(const char *name, unsigned char *sha1, struct object_context *orc, int gently, const char *prefix);
+extern int get_sha1_with_context_1(const char *name, unsigned char *sha1, struct object_context *orc, int only_to_die, const char *prefix);
 static inline int get_sha1_with_context(const char *str, unsigned char *sha1, struct object_context *orc)
 {
-	return get_sha1_with_context_1(str, sha1, orc, 1, NULL);
+	return get_sha1_with_context_1(str, sha1, orc, 0, NULL);
 }
 extern int get_sha1_hex(const char *hex, unsigned char *sha1);
 extern char *sha1_to_hex(const unsigned char *sha1);	/* static buffer result! */
@@ -986,7 +1023,7 @@ extern struct packed_git *find_sha1_pack(const unsigned char *sha1,
 extern void pack_report(void);
 extern int open_pack_index(struct packed_git *);
 extern void close_pack_index(struct packed_git *);
-extern unsigned char *use_pack(struct packed_git *, struct pack_window **, off_t, unsigned int *);
+extern unsigned char *use_pack(struct packed_git *, struct pack_window **, off_t, unsigned long *);
 extern void close_pack_windows(struct packed_git *);
 extern void unuse_pack(struct pack_window **);
 extern void free_pack_by_name(const char *);
@@ -1002,6 +1039,16 @@ extern const char *packed_object_info_detail(struct packed_git *, off_t, unsigne
 
 /* Dumb servers support */
 extern int update_server_info(int);
+
+/* git_config_parse_key() returns these negated: */
+#define CONFIG_INVALID_KEY 1
+#define CONFIG_NO_SECTION_OR_NAME 2
+/* git_config_set(), git_config_set_multivar() return the above or these: */
+#define CONFIG_NO_LOCK -1
+#define CONFIG_INVALID_FILE 3
+#define CONFIG_NO_WRITE 4
+#define CONFIG_NOTHING_SET 5
+#define CONFIG_INVALID_PATTERN 6
 
 typedef int (*config_fn_t)(const char *, const char *, void *);
 extern int git_default_config(const char *, const char *, void *);
@@ -1142,7 +1189,7 @@ extern int ws_blank_line(const char *line, int len, unsigned ws_rule);
 #define ws_tab_width(rule)     ((rule) & WS_TAB_WIDTH_MASK)
 
 /* ls-files */
-int report_path_error(const char *ps_matched, const char **pathspec, int prefix_offset);
+int report_path_error(const char *ps_matched, const char **pathspec, const char *prefix);
 void overlay_tree_on_cache(const char *tree_name, const char *prefix);
 
 char *alias_lookup(const char *alias);

@@ -11,6 +11,7 @@
 #include "pack.h"
 #include "blob.h"
 #include "commit.h"
+#include "run-command.h"
 #include "tag.h"
 #include "tree.h"
 #include "tree-walk.h"
@@ -379,7 +380,7 @@ void add_to_alternates_file(const char *reference)
 {
 	struct lock_file *lock = xcalloc(1, sizeof(struct lock_file));
 	int fd = hold_lock_file_for_append(lock, git_path("objects/info/alternates"), LOCK_DIE_ON_ERROR);
-	char *alt = mkpath("%s/objects\n", reference);
+	char *alt = mkpath("%s\n", reference);
 	write_or_die(fd, alt, strlen(alt));
 	if (commit_lock_file(lock))
 		die("could not close alternates file");
@@ -833,7 +834,7 @@ static int in_window(struct pack_window *win, off_t offset)
 unsigned char *use_pack(struct packed_git *p,
 		struct pack_window **w_cursor,
 		off_t offset,
-		unsigned int *left)
+		unsigned long *left)
 {
 	struct pack_window *win = *w_cursor;
 
@@ -1204,20 +1205,29 @@ static void *map_sha1_file(const unsigned char *sha1, unsigned long *size)
 	return map;
 }
 
-static int legacy_loose_object(unsigned char *map)
+/*
+ * There used to be a second loose object header format which
+ * was meant to mimic the in-pack format, allowing for direct
+ * copy of the object data.  This format turned up not to be
+ * really worth it and we no longer write loose objects in that
+ * format.
+ */
+static int experimental_loose_object(unsigned char *map)
 {
 	unsigned int word;
 
 	/*
 	 * Is it a zlib-compressed buffer? If so, the first byte
 	 * must be 0x78 (15-bit window size, deflated), and the
-	 * first 16-bit word is evenly divisible by 31
+	 * first 16-bit word is evenly divisible by 31. If so,
+	 * we are looking at the official format, not the experimental
+	 * one.
 	 */
 	word = (map[0] << 8) + map[1];
 	if (map[0] == 0x78 && !(word % 31))
-		return 1;
-	else
 		return 0;
+	else
+		return 1;
 }
 
 unsigned long unpack_object_header_buffer(const unsigned char *buf,
@@ -1244,7 +1254,7 @@ unsigned long unpack_object_header_buffer(const unsigned char *buf,
 	return used;
 }
 
-static int unpack_sha1_header(z_stream *stream, unsigned char *map, unsigned long mapsize, void *buffer, unsigned long bufsiz)
+static int unpack_sha1_header(git_zstream *stream, unsigned char *map, unsigned long mapsize, void *buffer, unsigned long bufsiz)
 {
 	unsigned long size, used;
 	static const char valid_loose_object_type[8] = {
@@ -1261,37 +1271,32 @@ static int unpack_sha1_header(z_stream *stream, unsigned char *map, unsigned lon
 	stream->next_out = buffer;
 	stream->avail_out = bufsiz;
 
-	if (legacy_loose_object(map)) {
+	if (experimental_loose_object(map)) {
+		/*
+		 * The old experimental format we no longer produce;
+		 * we can still read it.
+		 */
+		used = unpack_object_header_buffer(map, mapsize, &type, &size);
+		if (!used || !valid_loose_object_type[type])
+			return -1;
+		map += used;
+		mapsize -= used;
+
+		/* Set up the stream for the rest.. */
+		stream->next_in = map;
+		stream->avail_in = mapsize;
 		git_inflate_init(stream);
-		return git_inflate(stream, 0);
+
+		/* And generate the fake traditional header */
+		stream->total_out = 1 + snprintf(buffer, bufsiz, "%s %lu",
+						 typename(type), size);
+		return 0;
 	}
-
-
-	/*
-	 * There used to be a second loose object header format which
-	 * was meant to mimic the in-pack format, allowing for direct
-	 * copy of the object data.  This format turned up not to be
-	 * really worth it and we don't write it any longer.  But we
-	 * can still read it.
-	 */
-	used = unpack_object_header_buffer(map, mapsize, &type, &size);
-	if (!used || !valid_loose_object_type[type])
-		return -1;
-	map += used;
-	mapsize -= used;
-
-	/* Set up the stream for the rest.. */
-	stream->next_in = map;
-	stream->avail_in = mapsize;
 	git_inflate_init(stream);
-
-	/* And generate the fake traditional header */
-	stream->total_out = 1 + snprintf(buffer, bufsiz, "%s %lu",
-					 typename(type), size);
-	return 0;
+	return git_inflate(stream, 0);
 }
 
-static void *unpack_sha1_rest(z_stream *stream, void *buffer, unsigned long size, const unsigned char *sha1)
+static void *unpack_sha1_rest(git_zstream *stream, void *buffer, unsigned long size, const unsigned char *sha1)
 {
 	int bytes = strlen(buffer) + 1;
 	unsigned char *buf = xmallocz(size);
@@ -1390,7 +1395,7 @@ static int parse_sha1_header(const char *hdr, unsigned long *sizep)
 static void *unpack_sha1_file(void *map, unsigned long mapsize, enum object_type *type, unsigned long *size, const unsigned char *sha1)
 {
 	int ret;
-	z_stream stream;
+	git_zstream stream;
 	char hdr[8192];
 
 	ret = unpack_sha1_header(&stream, map, mapsize, hdr, sizeof(hdr));
@@ -1406,7 +1411,7 @@ unsigned long get_size_from_delta(struct packed_git *p,
 {
 	const unsigned char *data;
 	unsigned char delta_head[20], *in;
-	z_stream stream;
+	git_zstream stream;
 	int st;
 
 	memset(&stream, 0, sizeof(stream));
@@ -1528,7 +1533,7 @@ static int unpack_object_header(struct packed_git *p,
 				unsigned long *sizep)
 {
 	unsigned char *base;
-	unsigned int left;
+	unsigned long left;
 	unsigned long used;
 	enum object_type type;
 
@@ -1641,7 +1646,7 @@ static void *unpack_compressed_entry(struct packed_git *p,
 				    unsigned long size)
 {
 	int st;
-	z_stream stream;
+	git_zstream stream;
 	unsigned char *buffer, *in;
 
 	buffer = xmallocz(size);
@@ -2074,7 +2079,7 @@ static int sha1_loose_object_info(const unsigned char *sha1, unsigned long *size
 	int status;
 	unsigned long mapsize, size;
 	void *map;
-	z_stream stream;
+	git_zstream stream;
 	char hdr[32];
 
 	map = map_sha1_file(sha1, &mapsize);
@@ -2205,23 +2210,21 @@ static void *read_object(const unsigned char *sha1, enum object_type *type,
  * deal with them should arrange to call read_object() and give error
  * messages themselves.
  */
-void *read_sha1_file_repl(const unsigned char *sha1,
-			  enum object_type *type,
-			  unsigned long *size,
-			  const unsigned char **replacement)
+void *read_sha1_file_extended(const unsigned char *sha1,
+			      enum object_type *type,
+			      unsigned long *size,
+			      unsigned flag)
 {
-	const unsigned char *repl = lookup_replace_object(sha1);
 	void *data;
 	char *path;
 	const struct packed_git *p;
+	const unsigned char *repl = (flag & READ_SHA1_FILE_REPLACE)
+		? lookup_replace_object(sha1) : sha1;
 
 	errno = 0;
 	data = read_object(repl, type, size);
-	if (data) {
-		if (replacement)
-			*replacement = repl;
+	if (data)
 		return data;
-	}
 
 	if (errno && errno != ENOENT)
 		die_errno("failed to read object %s", sha1_to_hex(sha1));
@@ -2425,7 +2428,7 @@ static int write_loose_object(const unsigned char *sha1, char *hdr, int hdrlen,
 {
 	int fd, ret;
 	unsigned char compressed[4096];
-	z_stream stream;
+	git_zstream stream;
 	git_SHA_CTX c;
 	unsigned char parano_sha1[20];
 	char *filename;
@@ -2442,7 +2445,7 @@ static int write_loose_object(const unsigned char *sha1, char *hdr, int hdrlen,
 
 	/* Set it up */
 	memset(&stream, 0, sizeof(stream));
-	deflateInit(&stream, zlib_compression_level);
+	git_deflate_init(&stream, zlib_compression_level);
 	stream.next_out = compressed;
 	stream.avail_out = sizeof(compressed);
 	git_SHA1_Init(&c);
@@ -2450,8 +2453,8 @@ static int write_loose_object(const unsigned char *sha1, char *hdr, int hdrlen,
 	/* First header.. */
 	stream.next_in = (unsigned char *)hdr;
 	stream.avail_in = hdrlen;
-	while (deflate(&stream, 0) == Z_OK)
-		/* nothing */;
+	while (git_deflate(&stream, 0) == Z_OK)
+		; /* nothing */
 	git_SHA1_Update(&c, hdr, hdrlen);
 
 	/* Then the data itself.. */
@@ -2459,7 +2462,7 @@ static int write_loose_object(const unsigned char *sha1, char *hdr, int hdrlen,
 	stream.avail_in = len;
 	do {
 		unsigned char *in0 = stream.next_in;
-		ret = deflate(&stream, Z_FINISH);
+		ret = git_deflate(&stream, Z_FINISH);
 		git_SHA1_Update(&c, in0, stream.next_in - in0);
 		if (write_buffer(fd, compressed, stream.next_out - compressed) < 0)
 			die("unable to write sha1 file");
@@ -2469,7 +2472,7 @@ static int write_loose_object(const unsigned char *sha1, char *hdr, int hdrlen,
 
 	if (ret != Z_STREAM_END)
 		die("unable to deflate new object %s (%d)", sha1_to_hex(sha1), ret);
-	ret = deflateEnd(&stream);
+	ret = git_deflate_end_gently(&stream);
 	if (ret != Z_OK)
 		die("deflateEnd on object %s failed (%d)", sha1_to_hex(sha1), ret);
 	git_SHA1_Final(parano_sha1, &c);
@@ -2580,10 +2583,11 @@ static void check_tag(const void *buf, size_t size)
 }
 
 static int index_mem(unsigned char *sha1, void *buf, size_t size,
-		     int write_object, enum object_type type,
-		     const char *path, int format_check)
+		     enum object_type type,
+		     const char *path, unsigned flags)
 {
 	int ret, re_allocated = 0;
+	int write_object = flags & HASH_WRITE_OBJECT;
 
 	if (!type)
 		type = OBJ_BLOB;
@@ -2599,7 +2603,7 @@ static int index_mem(unsigned char *sha1, void *buf, size_t size,
 			re_allocated = 1;
 		}
 	}
-	if (format_check) {
+	if (flags & HASH_FORMAT_CHECK) {
 		if (type == OBJ_TREE)
 			check_tree(buf, size);
 		if (type == OBJ_COMMIT)
@@ -2617,44 +2621,141 @@ static int index_mem(unsigned char *sha1, void *buf, size_t size,
 	return ret;
 }
 
+static int index_pipe(unsigned char *sha1, int fd, enum object_type type,
+		      const char *path, unsigned flags)
+{
+	struct strbuf sbuf = STRBUF_INIT;
+	int ret;
+
+	if (strbuf_read(&sbuf, fd, 4096) >= 0)
+		ret = index_mem(sha1, sbuf.buf, sbuf.len, type,	path, flags);
+	else
+		ret = -1;
+	strbuf_release(&sbuf);
+	return ret;
+}
+
 #define SMALL_FILE_SIZE (32*1024)
 
-int index_fd(unsigned char *sha1, int fd, struct stat *st, int write_object,
-	     enum object_type type, const char *path, int format_check)
+static int index_core(unsigned char *sha1, int fd, size_t size,
+		      enum object_type type, const char *path,
+		      unsigned flags)
 {
 	int ret;
-	size_t size = xsize_t(st->st_size);
 
-	if (!S_ISREG(st->st_mode)) {
-		struct strbuf sbuf = STRBUF_INIT;
-		if (strbuf_read(&sbuf, fd, 4096) >= 0)
-			ret = index_mem(sha1, sbuf.buf, sbuf.len, write_object,
-					type, path, format_check);
-		else
-			ret = -1;
-		strbuf_release(&sbuf);
-	} else if (!size) {
-		ret = index_mem(sha1, NULL, size, write_object, type, path,
-				format_check);
+	if (!size) {
+		ret = index_mem(sha1, NULL, size, type, path, flags);
 	} else if (size <= SMALL_FILE_SIZE) {
 		char *buf = xmalloc(size);
 		if (size == read_in_full(fd, buf, size))
-			ret = index_mem(sha1, buf, size, write_object, type,
-					path, format_check);
+			ret = index_mem(sha1, buf, size, type, path, flags);
 		else
 			ret = error("short read %s", strerror(errno));
 		free(buf);
 	} else {
 		void *buf = xmmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
-		ret = index_mem(sha1, buf, size, write_object, type, path,
-				format_check);
+		ret = index_mem(sha1, buf, size, type, path, flags);
 		munmap(buf, size);
 	}
+	return ret;
+}
+
+/*
+ * This creates one packfile per large blob, because the caller
+ * immediately wants the result sha1, and fast-import can report the
+ * object name via marks mechanism only by closing the created
+ * packfile.
+ *
+ * This also bypasses the usual "convert-to-git" dance, and that is on
+ * purpose. We could write a streaming version of the converting
+ * functions and insert that before feeding the data to fast-import
+ * (or equivalent in-core API described above), but the primary
+ * motivation for trying to stream from the working tree file and to
+ * avoid mmaping it in core is to deal with large binary blobs, and
+ * by definition they do _not_ want to get any conversion.
+ */
+static int index_stream(unsigned char *sha1, int fd, size_t size,
+			enum object_type type, const char *path,
+			unsigned flags)
+{
+	struct child_process fast_import;
+	char export_marks[512];
+	const char *argv[] = { "fast-import", "--quiet", export_marks, NULL };
+	char tmpfile[512];
+	char fast_import_cmd[512];
+	char buf[512];
+	int len, tmpfd;
+
+	strcpy(tmpfile, git_path("hashstream_XXXXXX"));
+	tmpfd = git_mkstemp_mode(tmpfile, 0600);
+	if (tmpfd < 0)
+		die_errno("cannot create tempfile: %s", tmpfile);
+	if (close(tmpfd))
+		die_errno("cannot close tempfile: %s", tmpfile);
+	sprintf(export_marks, "--export-marks=%s", tmpfile);
+
+	memset(&fast_import, 0, sizeof(fast_import));
+	fast_import.in = -1;
+	fast_import.argv = argv;
+	fast_import.git_cmd = 1;
+	if (start_command(&fast_import))
+		die_errno("index-stream: git fast-import failed");
+
+	len = sprintf(fast_import_cmd, "blob\nmark :1\ndata %lu\n",
+		      (unsigned long) size);
+	write_or_whine(fast_import.in, fast_import_cmd, len,
+		       "index-stream: feeding fast-import");
+	while (size) {
+		char buf[10240];
+		size_t sz = size < sizeof(buf) ? size : sizeof(buf);
+		size_t actual;
+
+		actual = read_in_full(fd, buf, sz);
+		if (actual < 0)
+			die_errno("index-stream: reading input");
+		if (write_in_full(fast_import.in, buf, actual) != actual)
+			die_errno("index-stream: feeding fast-import");
+		size -= actual;
+	}
+	if (close(fast_import.in))
+		die_errno("index-stream: closing fast-import");
+	if (finish_command(&fast_import))
+		die_errno("index-stream: finishing fast-import");
+
+	tmpfd = open(tmpfile, O_RDONLY);
+	if (tmpfd < 0)
+		die_errno("index-stream: cannot open fast-import mark");
+	len = read(tmpfd, buf, sizeof(buf));
+	if (len < 0)
+		die_errno("index-stream: reading fast-import mark");
+	if (close(tmpfd) < 0)
+		die_errno("index-stream: closing fast-import mark");
+	if (unlink(tmpfile))
+		die_errno("index-stream: unlinking fast-import mark");
+	if (len != 44 ||
+	    memcmp(":1 ", buf, 3) ||
+	    get_sha1_hex(buf + 3, sha1))
+		die_errno("index-stream: unexpected fast-import mark: <%s>", buf);
+	return 0;
+}
+
+int index_fd(unsigned char *sha1, int fd, struct stat *st,
+	     enum object_type type, const char *path, unsigned flags)
+{
+	int ret;
+	size_t size = xsize_t(st->st_size);
+
+	if (!S_ISREG(st->st_mode))
+		ret = index_pipe(sha1, fd, type, path, flags);
+	else if (size <= big_file_threshold || type != OBJ_BLOB)
+		ret = index_core(sha1, fd, size, type, path, flags);
+	else
+		ret = index_stream(sha1, fd, size, type, path, flags);
 	close(fd);
 	return ret;
 }
 
-int index_path(unsigned char *sha1, const char *path, struct stat *st, int write_object)
+int index_path(unsigned char *sha1, const char *path, struct stat *st, unsigned flags)
 {
 	int fd;
 	struct strbuf sb = STRBUF_INIT;
@@ -2665,7 +2766,7 @@ int index_path(unsigned char *sha1, const char *path, struct stat *st, int write
 		if (fd < 0)
 			return error("open(\"%s\"): %s", path,
 				     strerror(errno));
-		if (index_fd(sha1, fd, st, write_object, OBJ_BLOB, path, 0) < 0)
+		if (index_fd(sha1, fd, st, OBJ_BLOB, path, flags) < 0)
 			return error("%s: failed to insert into database",
 				     path);
 		break;
@@ -2675,7 +2776,7 @@ int index_path(unsigned char *sha1, const char *path, struct stat *st, int write
 			return error("readlink(\"%s\"): %s", path,
 			             errstr);
 		}
-		if (!write_object)
+		if (!(flags & HASH_WRITE_OBJECT))
 			hash_sha1_file(sb.buf, sb.len, blob_type, sha1);
 		else if (write_sha1_file(sb.buf, sb.len, blob_type, sha1))
 			return error("%s: failed to insert into database",

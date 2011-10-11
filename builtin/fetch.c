@@ -875,6 +875,7 @@ static int fetch_one(struct remote *remote, int argc, const char **argv)
 {
 	int i;
 	static const char **refs = NULL;
+	struct refspec *refspec;
 	int ref_nr = 0;
 	int exit_code;
 
@@ -915,8 +916,9 @@ static int fetch_one(struct remote *remote, int argc, const char **argv)
 
 	sigchain_push_common(unlock_pack_on_signal);
 	atexit(unlock_pack);
-	exit_code = do_fetch(transport,
-			parse_fetch_refspec(ref_nr, refs), ref_nr);
+	refspec = parse_fetch_refspec(ref_nr, refs);
+	exit_code = do_fetch(transport, refspec, ref_nr);
+	free(refspec);
 	transport_disconnect(transport);
 	transport = NULL;
 	return exit_code;
@@ -938,6 +940,15 @@ int cmd_fetch(int argc, const char **argv, const char *prefix)
 
 	argc = parse_options(argc, argv, prefix,
 			     builtin_fetch_options, builtin_fetch_usage, 0);
+
+	if (recurse_submodules != RECURSE_SUBMODULES_OFF) {
+		if (recurse_submodules_default) {
+			int arg = parse_fetch_recurse_submodules_arg("--recurse-submodules-default", recurse_submodules_default);
+			set_config_fetch_recurse_submodules(arg);
+		}
+		gitmodules_config();
+		git_config(submodule_config, NULL);
+	}
 
 	if (all) {
 		if (argc == 1)
@@ -974,12 +985,6 @@ int cmd_fetch(int argc, const char **argv, const char *prefix)
 	if (!result && (recurse_submodules != RECURSE_SUBMODULES_OFF)) {
 		const char *options[10];
 		int num_options = 0;
-		if (recurse_submodules_default) {
-			int arg = parse_fetch_recurse_submodules_arg("--recurse-submodules-default", recurse_submodules_default);
-			set_config_fetch_recurse_submodules(arg);
-		}
-		gitmodules_config();
-		git_config(submodule_config, NULL);
 		add_options_to_argv(&num_options, options);
 		result = fetch_populated_submodules(num_options, options,
 						    submodule_prefix,
