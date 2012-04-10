@@ -399,6 +399,8 @@ static void finish(struct commit *head_commit,
 	if (new_head && show_diffstat) {
 		struct diff_options opts;
 		diff_setup(&opts);
+		opts.stat_width = -1; /* use full terminal width */
+		opts.stat_graph_width = -1; /* respect statGraphWidth config */
 		opts.output_format |=
 			DIFF_FORMAT_SUMMARY | DIFF_FORMAT_DIFFSTAT;
 		opts.detect_rename = DIFF_DETECT_RENAME;
@@ -903,12 +905,12 @@ static void prepare_to_commit(void)
 	write_merge_msg(&msg);
 	run_hook(get_index_file(), "prepare-commit-msg",
 		 git_path("MERGE_MSG"), "merge", NULL, NULL);
-	if (option_edit) {
+	if (0 < option_edit) {
 		if (launch_editor(git_path("MERGE_MSG"), NULL, NULL))
 			abort_commit(NULL);
 	}
 	read_merge_msg(&msg);
-	stripspace(&msg, option_edit);
+	stripspace(&msg, 0 < option_edit);
 	if (!msg.len)
 		abort_commit(_("Empty commit message."));
 	strbuf_release(&merge_msg);
@@ -1109,6 +1111,33 @@ static void write_merge_state(void)
 	close(fd);
 }
 
+static int default_edit_option(void)
+{
+	static const char name[] = "GIT_MERGE_AUTOEDIT";
+	const char *e = getenv(name);
+	struct stat st_stdin, st_stdout;
+
+	if (have_message)
+		/* an explicit -m msg without --[no-]edit */
+		return 0;
+
+	if (e) {
+		int v = git_config_maybe_bool(name, e);
+		if (v < 0)
+			die("Bad value '%s' in environment '%s'", e, name);
+		return v;
+	}
+
+	/* Use editor if stdin and stdout are the same and is a tty */
+	return (!fstat(0, &st_stdin) &&
+		!fstat(1, &st_stdout) &&
+		isatty(0) && isatty(1) &&
+		st_stdin.st_dev == st_stdout.st_dev &&
+		st_stdin.st_ino == st_stdout.st_ino &&
+		st_stdin.st_mode == st_stdout.st_mode);
+}
+
+
 int cmd_merge(int argc, const char **argv, const char *prefix)
 {
 	unsigned char result_tree[20];
@@ -1296,15 +1325,12 @@ int cmd_merge(int argc, const char **argv, const char *prefix)
 		if (!fast_forward_only &&
 		    merge_remote_util(commit) &&
 		    merge_remote_util(commit)->obj &&
-		    merge_remote_util(commit)->obj->type == OBJ_TAG) {
-			if (option_edit < 0)
-				option_edit = 1;
+		    merge_remote_util(commit)->obj->type == OBJ_TAG)
 			allow_fast_forward = 0;
-		}
 	}
 
 	if (option_edit < 0)
-		option_edit = 0;
+		option_edit = default_edit_option();
 
 	if (!use_strategies) {
 		if (!remoteheads->next)
