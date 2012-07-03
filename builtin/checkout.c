@@ -343,7 +343,7 @@ static int reset_tree(struct tree *tree, struct checkout_opts *o, int worktree)
 	opts.reset = 1;
 	opts.merge = 1;
 	opts.fn = oneway_merge;
-	opts.verbose_update = !o->quiet;
+	opts.verbose_update = !o->quiet && isatty(2);
 	opts.src_index = &the_index;
 	opts.dst_index = &the_index;
 	parse_tree(tree);
@@ -420,7 +420,7 @@ static int merge_working_tree(struct checkout_opts *opts,
 		topts.update = 1;
 		topts.merge = 1;
 		topts.gently = opts->merge && old->commit;
-		topts.verbose_update = !opts->quiet;
+		topts.verbose_update = !opts->quiet && isatty(2);
 		topts.fn = twoway_merge;
 		if (opts->overwrite_ignore) {
 			topts.dir = xcalloc(1, sizeof(*topts.dir));
@@ -671,10 +671,10 @@ static void suggest_reattach(struct commit *commit, struct rev_info *revs)
  * HEAD.  If it is not reachable from any ref, this is the last chance
  * for the user to do so without resorting to reflog.
  */
-static void orphaned_commit_warning(struct commit *commit)
+static void orphaned_commit_warning(struct commit *old, struct commit *new)
 {
 	struct rev_info revs;
-	struct object *object = &commit->object;
+	struct object *object = &old->object;
 	struct object_array refs;
 
 	init_revisions(&revs, NULL);
@@ -684,16 +684,17 @@ static void orphaned_commit_warning(struct commit *commit)
 	add_pending_object(&revs, object, sha1_to_hex(object->sha1));
 
 	for_each_ref(add_pending_uninteresting_ref, &revs);
+	add_pending_sha1(&revs, "HEAD", new->object.sha1, UNINTERESTING);
 
 	refs = revs.pending;
 	revs.leak_pending = 1;
 
 	if (prepare_revision_walk(&revs))
 		die(_("internal error in revision walk"));
-	if (!(commit->object.flags & UNINTERESTING))
-		suggest_reattach(commit, &revs);
+	if (!(old->object.flags & UNINTERESTING))
+		suggest_reattach(old, &revs);
 	else
-		describe_detached_head(_("Previous HEAD position was"), commit);
+		describe_detached_head(_("Previous HEAD position was"), old);
 
 	clear_commit_marks_for_object_array(&refs, ALL_REV_FLAGS);
 	free(refs.objects);
@@ -730,7 +731,7 @@ static int switch_branches(struct checkout_opts *opts, struct branch_info *new)
 	}
 
 	if (!opts->quiet && !old.path && old.commit && new->commit != old.commit)
-		orphaned_commit_warning(old.commit);
+		orphaned_commit_warning(old.commit, new->commit);
 
 	update_refs_for_switch(opts, &old, new);
 
@@ -1090,7 +1091,7 @@ int cmd_checkout(int argc, const char **argv, const char *prefix)
 	if (opts.writeout_stage)
 		die(_("--ours/--theirs is incompatible with switching branches."));
 
-	if (!new.commit) {
+	if (!new.commit && opts.new_branch) {
 		unsigned char rev[20];
 		int flag;
 
