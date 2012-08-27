@@ -543,6 +543,7 @@ static void update_refs_for_switch(struct checkout_opts *opts,
 				      opts->new_branch_force ? 1 : 0,
 				      opts->new_branch_log,
 				      opts->new_branch_force ? 1 : 0,
+				      opts->quiet,
 				      opts->track);
 		new->name = opts->new_branch;
 		setup_branch_path(new);
@@ -604,7 +605,7 @@ static int add_pending_uninteresting_ref(const char *refname,
 					 const unsigned char *sha1,
 					 int flags, void *cb_data)
 {
-	add_pending_sha1(cb_data, refname, sha1, flags | UNINTERESTING);
+	add_pending_sha1(cb_data, refname, sha1, UNINTERESTING);
 	return 0;
 }
 
@@ -914,6 +915,8 @@ static int switch_unborn_to_new_branch(struct checkout_opts *opts)
 	int status;
 	struct strbuf branch_ref = STRBUF_INIT;
 
+	if (!opts->new_branch)
+		die(_("You are on a branch yet to be born"));
 	strbuf_addf(&branch_ref, "refs/heads/%s", opts->new_branch);
 	status = create_symref("HEAD", branch_ref.buf, "checkout -b");
 	strbuf_release(&branch_ref);

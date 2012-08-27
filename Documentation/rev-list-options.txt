@@ -622,6 +622,7 @@ These options are mostly targeted for packing of git repositories.
 --no-walk::
 
 	Only show the given revs, but do not traverse their ancestors.
+	This has no effect if a range is specified.
 
 --do-walk::
 
@@ -759,7 +760,7 @@ options may be given. See linkgit:git-diff-files[1] for more options.
 
 --cc::
 
-	This flag implies the '-c' options and further compresses the
+	This flag implies the '-c' option and further compresses the
 	patch output by omitting uninteresting hunks whose contents in
 	the parents have only two variants and the merge result picks
 	one of them without modification.

@@ -24,6 +24,7 @@ ignore-space-change pass it through git-apply
 ignore-whitespace pass it through git-apply
 directory=      pass it through git-apply
 exclude=        pass it through git-apply
+include=        pass it through git-apply
 C=              pass it through git-apply
 p=              pass it through git-apply
 patch-format=   format the patch(es) are in
@@ -138,6 +139,12 @@ fall_back_3way () {
     say Using index info to reconstruct a base tree...
 
     cmd='GIT_INDEX_FILE="$dotest/patch-merge-tmp-index"'
+
+    if test -z "$GIT_QUIET"
+    then
+	eval "$cmd git diff-index --cached --diff-filter=AM --name-status HEAD"
+    fi
+
     cmd="$cmd git apply --cached $git_apply_opt"' <"$dotest/patch"'
     if eval "$cmd"
     then
@@ -412,7 +419,7 @@ do
 		;;
 	--resolvemsg)
 		shift; resolvemsg=$1 ;;
-	--whitespace|--directory|--exclude)
+	--whitespace|--directory|--exclude|--include)
 		git_apply_opt="$git_apply_opt $(sq "$1=$2")"; shift ;;
 	-C|-p)
 		git_apply_opt="$git_apply_opt $(sq "$1$2")"; shift ;;
@@ -848,6 +855,11 @@ did you forget to use 'git add'?"
 	if test $apply_status != 0
 	then
 		eval_gettextln 'Patch failed at $msgnum $FIRSTLINE'
+		if test "$(git config --bool advice.amworkdir)" != false
+		then
+			eval_gettextln "The copy of the patch that failed is found in:
+   $dotest/patch"
+		fi
 		stop_here_user_resolve $this
 	fi
 
