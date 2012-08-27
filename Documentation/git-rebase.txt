@@ -238,6 +238,10 @@ leave out at most one of A and B, in which case it defaults to HEAD.
 	will be reset to where it was when the rebase operation was
 	started.
 
+--keep-empty::
+	Keep the commits that do not change anything from its
+	parents in the result.
+
 --skip::
 	Restart the rebasing process by skipping the current patch.
 
@@ -269,7 +273,7 @@ which makes little sense.
 	Pass the <strategy-option> through to the merge strategy.
 	This implies `--merge` and, if no strategy has been
 	specified, `-s recursive`.  Note the reversal of 'ours' and
-	'theirs' as noted in above for the `-m` option.
+	'theirs' as noted above for the `-m` option.
 
 -q::
 --quiet::

@@ -76,11 +76,11 @@ test_decode_color () {
 }
 
 nul_to_q () {
-	perl -pe 'y/\000/Q/'
+	"$PERL_PATH" -pe 'y/\000/Q/'
 }
 
 q_to_nul () {
-	perl -pe 'y/Q/\000/'
+	"$PERL_PATH" -pe 'y/Q/\000/'
 }
 
 q_to_cr () {
@@ -143,10 +143,19 @@ test_pause () {
 # Both <file> and <contents> default to <message>.
 
 test_commit () {
-	file=${2:-"$1.t"}
+	notick= &&
+	if test "z$1" = "z--notick"
+	then
+		notick=yes
+		shift
+	fi &&
+	file=${2:-"$1.t"} &&
 	echo "${3-$1}" > "$file" &&
 	git add "$file" &&
-	test_tick &&
+	if test -z "$notick"
+	then
+		test_tick
+	fi &&
 	git commit -m "$1" &&
 	git tag "$1"
 }

@@ -433,8 +433,11 @@ static struct ref *wanted_peer_refs(const struct ref *refs,
 
 		if (!option_branch)
 			remote_head = guess_remote_head(head, refs, 0);
-		else
-			remote_head = find_remote_branch(refs, option_branch);
+		else {
+			local_refs = NULL;
+			tail = &local_refs;
+			remote_head = copy_ref(find_remote_branch(refs, option_branch));
+		}
 
 		if (!remote_head && option_branch)
 			warning(_("Could not find remote branch %s to clone."),
@@ -705,7 +708,7 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 		if (safe_create_leading_directories_const(work_tree) < 0)
 			die_errno(_("could not create leading directories of '%s'"),
 				  work_tree);
-		if (!dest_exists && mkdir(work_tree, 0755))
+		if (!dest_exists && mkdir(work_tree, 0777))
 			die_errno(_("could not create work tree dir '%s'."),
 				  work_tree);
 		set_git_work_tree(work_tree);
