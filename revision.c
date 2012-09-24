@@ -345,6 +345,7 @@ static int tree_difference = REV_TREE_SAME;
 static void file_add_remove(struct diff_options *options,
 		    int addremove, unsigned mode,
 		    const unsigned char *sha1,
+		    int sha1_valid,
 		    const char *fullpath, unsigned dirty_submodule)
 {
 	int diff = addremove == '+' ? REV_TREE_NEW : REV_TREE_OLD;
@@ -358,6 +359,7 @@ static void file_change(struct diff_options *options,
 		 unsigned old_mode, unsigned new_mode,
 		 const unsigned char *old_sha1,
 		 const unsigned char *new_sha1,
+		 int old_sha1_valid, int new_sha1_valid,
 		 const char *fullpath,
 		 unsigned old_dirty_submodule, unsigned new_dirty_submodule)
 {
@@ -1132,15 +1134,27 @@ int handle_revision_arg(const char *arg_, struct rev_info *revs,
 		const char *this = arg;
 		int symmetric = *next == '.';
 		unsigned int flags_exclude = flags ^ UNINTERESTING;
+		static const char head_by_default[] = "HEAD";
 		unsigned int a_flags;
 
 		*dotdot = 0;
 		next += symmetric;
 
 		if (!*next)
-			next = "HEAD";
+			next = head_by_default;
 		if (dotdot == arg)
-			this = "HEAD";
+			this = head_by_default;
+		if (this == head_by_default && next == head_by_default &&
+		    !symmetric) {
+			/*
+			 * Just ".."?  That is not a range but the
+			 * pathspec for the parent directory.
+			 */
+			if (!cant_be_filename) {
+				*dotdot = '.';
+				return -1;
+			}
+		}
 		if (!get_sha1(this, from_sha1) &&
 		    !get_sha1(next, sha1)) {
 			struct commit *a, *b;
@@ -1853,8 +1867,7 @@ int setup_revisions(int argc, const char **argv, struct rev_info *revs, struct s
 	if (revs->combine_merges)
 		revs->ignore_merges = 0;
 	revs->diffopt.abbrev = revs->abbrev;
-	if (diff_setup_done(&revs->diffopt) < 0)
-		die("diff_setup_done failed");
+	diff_setup_done(&revs->diffopt);
 
 	compile_grep_patterns(&revs->grep_filter);
 
