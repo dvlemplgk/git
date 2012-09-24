@@ -495,6 +495,7 @@ TEST_PROGRAMS_NEED_X += test-mergesort
 TEST_PROGRAMS_NEED_X += test-mktemp
 TEST_PROGRAMS_NEED_X += test-parse-options
 TEST_PROGRAMS_NEED_X += test-path-utils
+TEST_PROGRAMS_NEED_X += test-regex
 TEST_PROGRAMS_NEED_X += test-revision-walking
 TEST_PROGRAMS_NEED_X += test-run-command
 TEST_PROGRAMS_NEED_X += test-scrap-cache-tree
@@ -1005,6 +1006,7 @@ ifeq ($(uname_S),SunOS)
 	NO_REGEX = YesPlease
 	NO_FNMATCH_CASEFOLD = YesPlease
 	NO_MSGFMT_EXTENDED_OPTIONS = YesPlease
+	HAVE_DEV_TTY = YesPlease
 	ifeq ($(uname_R),5.6)
 		SOCKLEN_T = int
 		NO_HSTRERROR = YesPlease
