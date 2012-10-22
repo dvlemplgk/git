@@ -4,6 +4,7 @@
 #include "run-command.h"
 #include "url.h"
 #include "credential.h"
+#include "version.h"
 
 int active_requests;
 int http_is_verbose;
@@ -299,7 +300,7 @@ static CURL *get_curl_handle(void)
 		curl_easy_setopt(result, CURLOPT_VERBOSE, 1);
 
 	curl_easy_setopt(result, CURLOPT_USERAGENT,
-		user_agent ? user_agent : GIT_HTTP_USER_AGENT);
+		user_agent ? user_agent : git_user_agent());
 
 	if (curl_ftp_no_epsv)
 		curl_easy_setopt(result, CURLOPT_FTP_USE_EPSV, 0);
@@ -744,10 +745,9 @@ char *get_remote_object_url(const char *url, const char *hex,
 	return strbuf_detach(&buf, NULL);
 }
 
-int handle_curl_result(struct active_request_slot *slot)
+int handle_curl_result(struct active_request_slot *slot,
+		       struct slot_results *results)
 {
-	struct slot_results *results = slot->results;
-
 	if (results->curl_result == CURLE_OK) {
 		credential_approve(&http_auth);
 		return HTTP_OK;
@@ -763,10 +763,12 @@ int handle_curl_result(struct active_request_slot *slot)
 			return HTTP_REAUTH;
 		}
 	} else {
+#if LIBCURL_VERSION_NUM >= 0x070c00
 		if (!curl_errorstr[0])
 			strlcpy(curl_errorstr,
 				curl_easy_strerror(results->curl_result),
 				sizeof(curl_errorstr));
+#endif
 		return HTTP_ERROR;
 	}
 }
@@ -815,10 +817,11 @@ static int http_request(const char *url, void *result, int target, int options)
 
 	curl_easy_setopt(slot->curl, CURLOPT_URL, url);
 	curl_easy_setopt(slot->curl, CURLOPT_HTTPHEADER, headers);
+	curl_easy_setopt(slot->curl, CURLOPT_ENCODING, "gzip");
 
 	if (start_active_slot(slot)) {
 		run_active_slot(slot);
-		ret = handle_curl_result(slot);
+		ret = handle_curl_result(slot, &results);
 	} else {
 		error("Unable to start HTTP request for %s", url);
 		ret = HTTP_START_FAILED;
