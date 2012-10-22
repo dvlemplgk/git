@@ -95,7 +95,7 @@ static struct discovery* discover_refs(const char *service)
 	struct strbuf buffer = STRBUF_INIT;
 	struct discovery *last = last_discovery;
 	char *refs_url;
-	int http_ret, is_http = 0, proto_git_candidate = 1;
+	int http_ret, is_http = 0;
 
 	if (last && !strcmp(service, last->service))
 		return last;
@@ -113,19 +113,6 @@ static struct discovery* discover_refs(const char *service)
 	refs_url = strbuf_detach(&buffer, NULL);
 
 	http_ret = http_get_strbuf(refs_url, &buffer, HTTP_NO_CACHE);
-
-	/* try again with "plain" url (no ? or & appended) */
-	if (http_ret != HTTP_OK && http_ret != HTTP_NOAUTH) {
-		free(refs_url);
-		strbuf_reset(&buffer);
-
-		proto_git_candidate = 0;
-		strbuf_addf(&buffer, "%sinfo/refs", url);
-		refs_url = strbuf_detach(&buffer, NULL);
-
-		http_ret = http_get_strbuf(refs_url, &buffer, HTTP_NO_CACHE);
-	}
-
 	switch (http_ret) {
 	case HTTP_OK:
 		break;
@@ -144,8 +131,7 @@ static struct discovery* discover_refs(const char *service)
 	last->buf_alloc = strbuf_detach(&buffer, &last->len);
 	last->buf = last->buf_alloc;
 
-	if (is_http && proto_git_candidate
-		&& 5 <= last->len && last->buf[4] == '#') {
+	if (is_http && 5 <= last->len && last->buf[4] == '#') {
 		/* smart HTTP response; validate that the service
 		 * pkt-line matches our request.
 		 */
@@ -369,7 +355,7 @@ static int run_slot(struct active_request_slot *slot)
 	slot->curl_result = curl_easy_perform(slot->curl);
 	finish_active_slot(slot);
 
-	err = handle_curl_result(slot);
+	err = handle_curl_result(slot, &results);
 	if (err != HTTP_OK && err != HTTP_REAUTH) {
 		error("RPC failed; result=%d, HTTP code = %ld",
 		      results.curl_result, results.http_code);
@@ -393,7 +379,7 @@ static int probe_rpc(struct rpc_state *rpc)
 	curl_easy_setopt(slot->curl, CURLOPT_NOBODY, 0);
 	curl_easy_setopt(slot->curl, CURLOPT_POST, 1);
 	curl_easy_setopt(slot->curl, CURLOPT_URL, rpc->service_url);
-	curl_easy_setopt(slot->curl, CURLOPT_ENCODING, "");
+	curl_easy_setopt(slot->curl, CURLOPT_ENCODING, NULL);
 	curl_easy_setopt(slot->curl, CURLOPT_POSTFIELDS, "0000");
 	curl_easy_setopt(slot->curl, CURLOPT_POSTFIELDSIZE, 4);
 	curl_easy_setopt(slot->curl, CURLOPT_HTTPHEADER, headers);
@@ -449,7 +435,7 @@ static int post_rpc(struct rpc_state *rpc)
 	curl_easy_setopt(slot->curl, CURLOPT_NOBODY, 0);
 	curl_easy_setopt(slot->curl, CURLOPT_POST, 1);
 	curl_easy_setopt(slot->curl, CURLOPT_URL, rpc->service_url);
-	curl_easy_setopt(slot->curl, CURLOPT_ENCODING, "");
+	curl_easy_setopt(slot->curl, CURLOPT_ENCODING, "gzip");
 
 	headers = curl_slist_append(headers, rpc->hdr_content_type);
 	headers = curl_slist_append(headers, rpc->hdr_accept);
