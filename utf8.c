@@ -353,7 +353,7 @@ retry:
 
 		c = *text;
 		if (!c || isspace(c)) {
-			if (w < width || !space) {
+			if (w <= width || !space) {
 				const char *start = bol;
 				if (!c && text == start)
 					return w;
@@ -421,6 +421,13 @@ int is_encoding_utf8(const char *name)
 	if (!strcasecmp(name, "utf-8") || !strcasecmp(name, "utf8"))
 		return 1;
 	return 0;
+}
+
+int same_encoding(const char *src, const char *dst)
+{
+	if (is_encoding_utf8(src) && is_encoding_utf8(dst))
+		return 1;
+	return !strcasecmp(src, dst);
 }
 
 /*

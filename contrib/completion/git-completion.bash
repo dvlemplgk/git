@@ -321,7 +321,7 @@ __git_refs ()
 				if [[ "$ref" == "$cur"* ]]; then
 					echo "$ref"
 				fi
-			done | uniq -u
+			done | sort | uniq -u
 		fi
 		return
 	fi
@@ -989,6 +989,8 @@ _git_clone ()
 			--upload-pack
 			--template=
 			--depth
+			--single-branch
+			--branch
 			"
 		return
 		;;
