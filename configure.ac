@@ -1021,10 +1021,20 @@ if test -n "$USER_NOPTHREAD"; then
 # -D_REENTRANT' or some such.
 elif test -z "$PTHREAD_CFLAGS"; then
   threads_found=no
-  for opt in -mt -pthread -lpthread; do
+  # Attempt to compile and link some code using pthreads to determine
+  # required linker flags. The order is somewhat important here: We
+  # first try it without any extra flags, to catch systems where
+  # pthreads are part of the C library, then go on testing various other
+  # flags. We do so to avoid false positives. For example, on Mac OS X
+  # pthreads are part of the C library; moreover, the compiler allows us
+  # to add "-mt" to the CFLAGS (although it will do nothing except
+  # trigger a warning about an unused flag). Hence if we checked for
+  # "-mt" before "" we would end up picking it. But unfortunately this
+  # would then trigger compiler warnings on every single file we compile.
+  for opt in "" -mt -pthread -lpthread; do
      old_CFLAGS="$CFLAGS"
      CFLAGS="$opt $CFLAGS"
-     AC_MSG_CHECKING([Checking for POSIX Threads with '$opt'])
+     AC_MSG_CHECKING([for POSIX Threads with '$opt'])
      AC_LINK_IFELSE([PTHREADTEST_SRC],
 	[AC_MSG_RESULT([yes])
 		NO_PTHREADS=
@@ -1044,7 +1054,7 @@ elif test -z "$PTHREAD_CFLAGS"; then
 else
   old_CFLAGS="$CFLAGS"
   CFLAGS="$PTHREAD_CFLAGS $CFLAGS"
-  AC_MSG_CHECKING([Checking for POSIX Threads with '$PTHREAD_CFLAGS'])
+  AC_MSG_CHECKING([for POSIX Threads with '$PTHREAD_CFLAGS'])
   AC_LINK_IFELSE([PTHREADTEST_SRC],
 	[AC_MSG_RESULT([yes])
 		NO_PTHREADS=

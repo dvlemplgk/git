@@ -155,7 +155,7 @@ test_expect_failure 'additional command line cc (rfc822)' '
 	git config --replace-all format.headers "Cc: R E Cipient <rcipient@example.com>" &&
 	git format-patch --cc="S. E. Cipient <scipient@example.com>" --stdout master..side | sed -e "/^\$/q" >patch5 &&
 	grep "^Cc: R E Cipient <rcipient@example.com>,\$" patch5 &&
-	grep "^ *"S. E. Cipient" <scipient@example.com>\$" patch5
+	grep "^ *\"S. E. Cipient\" <scipient@example.com>\$" patch5
 '
 
 test_expect_success 'command line headers' '
@@ -183,7 +183,7 @@ test_expect_success 'command line To: header (ascii)' '
 test_expect_failure 'command line To: header (rfc822)' '
 
 	git format-patch --to="R. E. Cipient <rcipient@example.com>" --stdout master..side | sed -e "/^\$/q" >patch8 &&
-	grep "^To: "R. E. Cipient" <rcipient@example.com>\$" patch8
+	grep "^To: \"R. E. Cipient\" <rcipient@example.com>\$" patch8
 '
 
 test_expect_failure 'command line To: header (rfc2047)' '
@@ -203,7 +203,7 @@ test_expect_failure 'configuration To: header (rfc822)' '
 
 	git config format.to "R. E. Cipient <rcipient@example.com>" &&
 	git format-patch --stdout master..side | sed -e "/^\$/q" >patch9 &&
-	grep "^To: "R. E. Cipient" <rcipient@example.com>\$" patch9
+	grep "^To: \"R. E. Cipient\" <rcipient@example.com>\$" patch9
 '
 
 test_expect_failure 'configuration To: header (rfc2047)' '
@@ -650,8 +650,19 @@ test_expect_success 'format-patch --in-reply-to' '
 '
 
 test_expect_success 'format-patch --signoff' '
-	git format-patch -1 --signoff --stdout |
-	grep "^Signed-off-by: $GIT_COMMITTER_NAME <$GIT_COMMITTER_EMAIL>"
+	git format-patch -1 --signoff --stdout >out &&
+	grep "^Signed-off-by: $GIT_COMMITTER_NAME <$GIT_COMMITTER_EMAIL>" out
+'
+
+test_expect_success 'format-patch --notes --signoff' '
+	git notes --ref test add -m "test message" HEAD &&
+	git format-patch -1 --signoff --stdout --notes=test >out &&
+	# Three dashes must come after S-o-b
+	! sed "/^Signed-off-by: /q" out | grep "test message" &&
+	sed "1,/^Signed-off-by: /d" out | grep "test message" &&
+	# Notes message must come after three dashes
+	! sed "/^---$/q" out | grep "test message" &&
+	sed "1,/^---$/d" out | grep "test message"
 '
 
 echo "fatal: --name-only does not make sense" > expect.name-only

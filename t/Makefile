@@ -6,13 +6,14 @@
 -include ../config.mak.autogen
 -include ../config.mak
 
-#GIT_TEST_OPTS=--verbose --debug
+#GIT_TEST_OPTS = --verbose --debug
 SHELL_PATH ?= $(SHELL)
 PERL_PATH ?= /usr/bin/perl
 TAR ?= $(TAR)
 RM ?= rm -f
 PROVE ?= prove
 DEFAULT_TEST_TARGET ?= test
+TEST_LINT ?= test-lint-duplicates test-lint-executable
 
 # Shell quote;
 SHELL_PATH_SQ = $(subst ','\'',$(SHELL_PATH))

@@ -567,7 +567,7 @@ char *logmsg_reencode(const struct commit *commit,
 	char *encoding;
 	char *out;
 
-	if (!*output_encoding)
+	if (!output_encoding || !*output_encoding)
 		return NULL;
 	encoding = get_header(commit, "encoding");
 	use_encoding = encoding ? encoding : utf8;
@@ -1100,9 +1100,8 @@ static size_t format_commit_one(struct strbuf *sb, const char *placeholder,
 		}
 		return 0;	/* unknown %g placeholder */
 	case 'N':
-		if (c->pretty_ctx->show_notes) {
-			format_display_notes(commit->object.sha1, sb,
-				    get_log_output_encoding(), 0);
+		if (c->pretty_ctx->notes_message) {
+			strbuf_addstr(sb, c->pretty_ctx->notes_message);
 			return 1;
 		}
 		return 0;
@@ -1251,23 +1250,15 @@ void format_commit_message(const struct commit *commit,
 			   const struct pretty_print_context *pretty_ctx)
 {
 	struct format_commit_context context;
-	static const char utf8[] = "UTF-8";
 	const char *output_enc = pretty_ctx->output_encoding;
 
 	memset(&context, 0, sizeof(context));
 	context.commit = commit;
 	context.pretty_ctx = pretty_ctx;
 	context.wrap_start = sb->len;
-	context.message = commit->buffer;
-	if (output_enc) {
-		char *enc = get_header(commit, "encoding");
-		if (strcmp(enc ? enc : utf8, output_enc)) {
-			context.message = logmsg_reencode(commit, output_enc);
-			if (!context.message)
-				context.message = commit->buffer;
-		}
-		free(enc);
-	}
+	context.message = logmsg_reencode(commit, output_enc);
+	if (!context.message)
+		context.message = commit->buffer;
 
 	strbuf_expand(sb, format, format_commit_item, &context);
 	rewrap_message_tail(sb, &context, 0, 0, 0);
@@ -1414,16 +1405,6 @@ void pp_remainder(const struct pretty_print_context *pp,
 	}
 }
 
-char *reencode_commit_message(const struct commit *commit, const char **encoding_p)
-{
-	const char *encoding;
-
-	encoding = get_log_output_encoding();
-	if (encoding_p)
-		*encoding_p = encoding;
-	return logmsg_reencode(commit, encoding);
-}
-
 void pretty_print_commit(const struct pretty_print_context *pp,
 			 const struct commit *commit,
 			 struct strbuf *sb)
@@ -1440,7 +1421,8 @@ void pretty_print_commit(const struct pretty_print_context *pp,
 		return;
 	}
 
-	reencoded = reencode_commit_message(commit, &encoding);
+	encoding = get_log_output_encoding();
+	reencoded = logmsg_reencode(commit, encoding);
 	if (reencoded) {
 		msg = reencoded;
 	}
@@ -1499,10 +1481,6 @@ void pretty_print_commit(const struct pretty_print_context *pp,
 	 */
 	if (pp->fmt == CMIT_FMT_EMAIL && sb->len <= beginning_of_body)
 		strbuf_addch(sb, '\n');
-
-	if (pp->show_notes)
-		format_display_notes(commit->object.sha1, sb, encoding,
-				     NOTES_SHOW_HEADER | NOTES_INDENT);
 
 	free(reencoded);
 }

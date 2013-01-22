@@ -15,7 +15,8 @@ extern const char git_more_info_string[];
 extern void prune_packed_objects(int);
 
 struct fmt_merge_msg_opts {
-	unsigned add_title:1;
+	unsigned add_title:1,
+		credit_people:1;
 	int shortlog_len;
 };
 
@@ -36,10 +37,6 @@ struct notes_rewrite_cfg *init_copy_notes_for_rewrite(const char *cmd);
 int copy_note_for_rewrite(struct notes_rewrite_cfg *c,
 			  const unsigned char *from_obj, const unsigned char *to_obj);
 void finish_copy_notes_for_rewrite(struct notes_rewrite_cfg *c);
-
-extern int check_pager_config(const char *cmd);
-struct diff_options;
-extern void setup_diff_pager(struct diff_options *);
 
 extern int textconv_object(const char *path, unsigned mode, const unsigned char *sha1, int sha1_valid, char **buf, unsigned long *buf_size);
 

@@ -1370,6 +1370,16 @@ int branch_merge_matches(struct branch *branch,
 	return refname_match(branch->merge[i]->src, refname, ref_fetch_rules);
 }
 
+static int ignore_symref_update(const char *refname)
+{
+	unsigned char sha1[20];
+	int flag;
+
+	if (!resolve_ref_unsafe(refname, sha1, 0, &flag))
+		return 0; /* non-existing refs are OK */
+	return (flag & REF_ISSYMREF);
+}
+
 static struct ref *get_expanded_map(const struct ref *remote_refs,
 				    const struct refspec *refspec)
 {
@@ -1383,7 +1393,8 @@ static struct ref *get_expanded_map(const struct ref *remote_refs,
 		if (strchr(ref->name, '^'))
 			continue; /* a dereference item */
 		if (match_name_with_pattern(refspec->src, ref->name,
-					    refspec->dst, &expn_name)) {
+					    refspec->dst, &expn_name) &&
+		    !ignore_symref_update(expn_name)) {
 			struct ref *cpy = copy_ref(ref);
 
 			cpy->peer_ref = alloc_ref(expn_name);
@@ -1458,8 +1469,8 @@ int get_fetch_map(const struct ref *remote_refs,
 
 	for (rmp = &ref_map; *rmp; ) {
 		if ((*rmp)->peer_ref) {
-			if (check_refname_format((*rmp)->peer_ref->name + 5,
-				REFNAME_ALLOW_ONELEVEL)) {
+			if (prefixcmp((*rmp)->peer_ref->name, "refs/") ||
+			    check_refname_format((*rmp)->peer_ref->name, 0)) {
 				struct ref *ignore = *rmp;
 				error("* Ignoring funny ref '%s' locally",
 				      (*rmp)->peer_ref->name);
@@ -1627,13 +1638,16 @@ int format_tracking_info(struct branch *branch, struct strbuf *sb)
 
 	base = branch->merge[0]->dst;
 	base = shorten_unambiguous_ref(base, 0);
-	if (!num_theirs)
+	if (!num_theirs) {
 		strbuf_addf(sb,
 			Q_("Your branch is ahead of '%s' by %d commit.\n",
 			   "Your branch is ahead of '%s' by %d commits.\n",
 			   num_ours),
 			base, num_ours);
-	else if (!num_ours)
+		if (advice_status_hints)
+			strbuf_addf(sb,
+				_("  (use \"git push\" to publish your local commits)\n"));
+	} else if (!num_ours) {
 		strbuf_addf(sb,
 			Q_("Your branch is behind '%s' by %d commit, "
 			       "and can be fast-forwarded.\n",
@@ -1641,7 +1655,10 @@ int format_tracking_info(struct branch *branch, struct strbuf *sb)
 			       "and can be fast-forwarded.\n",
 			   num_theirs),
 			base, num_theirs);
-	else
+		if (advice_status_hints)
+			strbuf_addf(sb,
+				_("  (use \"git pull\" to update your local branch)\n"));
+	} else {
 		strbuf_addf(sb,
 			Q_("Your branch and '%s' have diverged,\n"
 			       "and have %d and %d different commit each, "
@@ -1651,6 +1668,10 @@ int format_tracking_info(struct branch *branch, struct strbuf *sb)
 			       "respectively.\n",
 			   num_theirs),
 			base, num_ours, num_theirs);
+		if (advice_status_hints)
+			strbuf_addf(sb,
+				_("  (use \"git pull\" to merge the remote branch into yours)\n"));
+	}
 	return 1;
 }
 
