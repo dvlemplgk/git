@@ -85,7 +85,8 @@ unset VISUAL EMAIL LANGUAGE COLUMNS $("$PERL_PATH" -e '
 		.*_TEST
 		PROVE
 		VALGRIND
-		PERF_AGGREGATING_LATER
+		UNZIP
+		PERF_
 	));
 	my @vars = grep(/^GIT_/ && !/^GIT_($ok)/o, @env);
 	print join("\n", @vars);
@@ -128,6 +129,7 @@ fi
 unset CDPATH
 
 unset GREP_OPTIONS
+unset UNZIP
 
 case $(echo $GIT_TRACE |tr "[A-Z]" "[a-z]") in
 1|2|true)

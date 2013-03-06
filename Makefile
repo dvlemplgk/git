@@ -653,7 +653,7 @@ LIB_H += list-objects.h
 LIB_H += ll-merge.h
 LIB_H += log-tree.h
 LIB_H += mailmap.h
-LIB_H += merge-file.h
+LIB_H += merge-blobs.h
 LIB_H += merge-recursive.h
 LIB_H += mergesort.h
 LIB_H += notes-cache.h
@@ -769,7 +769,7 @@ LIB_OBJS += log-tree.o
 LIB_OBJS += mailmap.o
 LIB_OBJS += match-trees.o
 LIB_OBJS += merge.o
-LIB_OBJS += merge-file.o
+LIB_OBJS += merge-blobs.o
 LIB_OBJS += merge-recursive.o
 LIB_OBJS += mergesort.o
 LIB_OBJS += name-hash.o
@@ -1475,7 +1475,8 @@ endif
 
 ifeq ($(COMPUTE_HEADER_DEPENDENCIES),auto)
 dep_check = $(shell $(CC) $(ALL_CFLAGS) \
-	-c -MF /dev/null -MMD -MP -x c /dev/null -o /dev/null 2>&1; \
+	-c -MF /dev/null -MQ /dev/null -MMD -MP \
+	-x c /dev/null -o /dev/null 2>&1; \
 	echo $$?)
 ifeq ($(dep_check),0)
 override COMPUTE_HEADER_DEPENDENCIES = yes
@@ -2271,12 +2272,14 @@ $(patsubst %.py,%,$(SCRIPT_PYTHON)): % : unimplemented.sh
 	mv $@+ $@
 endif # NO_PYTHON
 
+CONFIGURE_RECIPE = $(RM) configure configure.ac+ && \
+		   sed -e 's/@@GIT_VERSION@@/$(GIT_VERSION)/g' \
+			configure.ac >configure.ac+ && \
+		   autoconf -o configure configure.ac+ && \
+		   $(RM) configure.ac+
+
 configure: configure.ac GIT-VERSION-FILE
-	$(QUIET_GEN)$(RM) $@ $<+ && \
-	sed -e 's/@@GIT_VERSION@@/$(GIT_VERSION)/g' \
-	    $< > $<+ && \
-	autoconf -o $@ $<+ && \
-	$(RM) $<+
+	$(QUIET_GEN)$(CONFIGURE_RECIPE)
 
 ifdef AUTOCONFIGURED
 # We avoid depending on 'configure' here, because it gets rebuilt
@@ -2285,7 +2288,7 @@ ifdef AUTOCONFIGURED
 # do want to recheck when the platform/environment detection logic
 # changes, hence this depends on configure.ac.
 config.status: configure.ac
-	$(QUIET_GEN)$(MAKE) configure && \
+	$(QUIET_GEN)$(CONFIGURE_RECIPE) && \
 	if test -f config.status; then \
 	  ./config.status --recheck; \
 	else \
@@ -2329,7 +2332,7 @@ $(dep_dirs):
 
 missing_dep_dirs := $(filter-out $(wildcard $(dep_dirs)),$(dep_dirs))
 dep_file = $(dir $@).depend/$(notdir $@).d
-dep_args = -MF $(dep_file) -MMD -MP
+dep_args = -MF $(dep_file) -MQ $@ -MMD -MP
 ifdef CHECK_HEADER_DEPENDENCIES
 $(error cannot compute header dependencies outside a normal build. \
 Please unset CHECK_HEADER_DEPENDENCIES and try again)

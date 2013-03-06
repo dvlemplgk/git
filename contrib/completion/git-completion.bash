@@ -397,7 +397,7 @@ __git_complete_revlist_file ()
 		*)   pfx="$ref:$pfx" ;;
 		esac
 
-		__gitcomp_nl "$(git --git-dir="$(__gitdir)" ls-tree "$ls" \
+		__gitcomp_nl "$(git --git-dir="$(__gitdir)" ls-tree "$ls" 2>/dev/null \
 				| sed '/^100... blob /{
 				           s,^.*	,,
 				           s,$, ,
@@ -531,10 +531,19 @@ __git_complete_strategy ()
 	return 1
 }
 
+__git_commands () {
+	if test -n "${GIT_TESTING_COMMAND_COMPLETION:-}"
+	then
+		printf "%s" "${GIT_TESTING_COMMAND_COMPLETION}"
+	else
+		git help -a|egrep '^  [a-zA-Z0-9]'
+	fi
+}
+
 __git_list_all_commands ()
 {
 	local i IFS=" "$'\n'
-	for i in $(git help -a|egrep '^  [a-zA-Z0-9]')
+	for i in $(__git_commands)
 	do
 		case $i in
 		*--*)             : helper pattern;;
@@ -2431,7 +2440,7 @@ if [[ -n ${ZSH_VERSION-} ]]; then
 				--*=*|*.) ;;
 				*) c="$c " ;;
 				esac
-				array+=("$c")
+				array[$#array+1]="$c"
 			done
 			compset -P '*[=:]'
 			compadd -Q -S '' -p "${2-}" -a -- array && _ret=0
