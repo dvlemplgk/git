@@ -66,7 +66,14 @@ int check_filename(const char *prefix, const char *arg)
 	const char *name;
 	struct stat st;
 
-	name = prefix ? prefix_filename(prefix, strlen(prefix), arg) : arg;
+	if (!prefixcmp(arg, ":/")) {
+		if (arg[2] == '\0') /* ":/" is root dir, always exists */
+			return 1;
+		name = arg + 2;
+	} else if (prefix)
+		name = prefix_filename(prefix, strlen(prefix), arg);
+	else
+		name = arg;
 	if (!lstat(name, &st))
 		return 1; /* file exists */
 	if (errno == ENOENT || errno == ENOTDIR)
@@ -246,6 +253,25 @@ static const char *prefix_pathspec(const char *prefix, int prefixlen, const char
 		return prefix_path(prefix, prefixlen, copyfrom);
 }
 
+/*
+ * N.B. get_pathspec() is deprecated in favor of the "struct pathspec"
+ * based interface - see pathspec_magic above.
+ *
+ * Arguments:
+ *  - prefix - a path relative to the root of the working tree
+ *  - pathspec - a list of paths underneath the prefix path
+ *
+ * Iterates over pathspec, prepending each path with prefix,
+ * and return the resulting list.
+ *
+ * If pathspec is empty, return a singleton list containing prefix.
+ *
+ * If pathspec and prefix are both empty, return an empty list.
+ *
+ * This is typically used by built-in commands such as add.c, in order
+ * to normalize argv arguments provided to the built-in into a list of
+ * paths to process, all relative to the root of the working tree.
+ */
 const char **get_pathspec(const char *prefix, const char **pathspec)
 {
 	const char *entry = *pathspec;
@@ -624,22 +650,32 @@ static dev_t get_device_or_die(const char *path, const char *prefix, int prefix_
 /*
  * A "string_list_each_func_t" function that canonicalizes an entry
  * from GIT_CEILING_DIRECTORIES using real_path_if_valid(), or
- * discards it if unusable.
+ * discards it if unusable.  The presence of an empty entry in
+ * GIT_CEILING_DIRECTORIES turns off canonicalization for all
+ * subsequent entries.
  */
 static int canonicalize_ceiling_entry(struct string_list_item *item,
-				      void *unused)
+				      void *cb_data)
 {
+	int *empty_entry_found = cb_data;
 	char *ceil = item->string;
-	const char *real_path;
 
-	if (!*ceil || !is_absolute_path(ceil))
+	if (!*ceil) {
+		*empty_entry_found = 1;
 		return 0;
-	real_path = real_path_if_valid(ceil);
-	if (!real_path)
+	} else if (!is_absolute_path(ceil)) {
 		return 0;
-	free(item->string);
-	item->string = xstrdup(real_path);
-	return 1;
+	} else if (*empty_entry_found) {
+		/* Keep entry but do not canonicalize it */
+		return 1;
+	} else {
+		const char *real_path = real_path_if_valid(ceil);
+		if (!real_path)
+			return 0;
+		free(item->string);
+		item->string = xstrdup(real_path);
+		return 1;
+	}
 }
 
 /*
@@ -679,9 +715,11 @@ static const char *setup_git_directory_gently_1(int *nongit_ok)
 		return setup_explicit_git_dir(gitdirenv, cwd, len, nongit_ok);
 
 	if (env_ceiling_dirs) {
+		int empty_entry_found = 0;
+
 		string_list_split(&ceiling_dirs, env_ceiling_dirs, PATH_SEP, -1);
 		filter_string_list(&ceiling_dirs, 0,
-				   canonicalize_ceiling_entry, NULL);
+				   canonicalize_ceiling_entry, &empty_entry_found);
 		ceil_offset = longest_ancestor_length(cwd, &ceiling_dirs);
 		string_list_clear(&ceiling_dirs, 0);
 	}
