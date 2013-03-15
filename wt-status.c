@@ -45,7 +45,7 @@ static void status_vprintf(struct wt_status *s, int at_bol, const char *color,
 
 	strbuf_vaddf(&sb, fmt, ap);
 	if (!sb.len) {
-		strbuf_addch(&sb, '#');
+		strbuf_addch(&sb, comment_line_char);
 		if (!trail)
 			strbuf_addch(&sb, ' ');
 		color_print_strbuf(s->fp, color, &sb);
@@ -59,7 +59,7 @@ static void status_vprintf(struct wt_status *s, int at_bol, const char *color,
 
 		strbuf_reset(&linebuf);
 		if (at_bol) {
-			strbuf_addch(&linebuf, '#');
+			strbuf_addch(&linebuf, comment_line_char);
 			if (*line != '\n' && *line != '\t')
 				strbuf_addch(&linebuf, ' ');
 		}
@@ -762,8 +762,10 @@ static void wt_status_print_tracking(struct wt_status *s)
 
 	for (cp = sb.buf; (ep = strchr(cp, '\n')) != NULL; cp = ep + 1)
 		color_fprintf_ln(s->fp, color(WT_STATUS_HEADER, s),
-				 "# %.*s", (int)(ep - cp), cp);
-	color_fprintf_ln(s->fp, color(WT_STATUS_HEADER, s), "#");
+				 "%c %.*s", comment_line_char,
+				 (int)(ep - cp), cp);
+	color_fprintf_ln(s->fp, color(WT_STATUS_HEADER, s), "%c",
+			 comment_line_char);
 }
 
 static int has_unmerged(struct wt_status *s)
@@ -872,7 +874,14 @@ static void show_rebase_in_progress(struct wt_status *s,
 	struct stat st;
 
 	if (has_unmerged(s)) {
-		status_printf_ln(s, color, _("You are currently rebasing."));
+		if (state->branch)
+			status_printf_ln(s, color,
+					 _("You are currently rebasing branch '%s' on '%s'."),
+					 state->branch,
+					 state->onto);
+		else
+			status_printf_ln(s, color,
+					 _("You are currently rebasing."));
 		if (advice_status_hints) {
 			status_printf_ln(s, color,
 				_("  (fix conflicts and then run \"git rebase --continue\")"));
@@ -882,17 +891,38 @@ static void show_rebase_in_progress(struct wt_status *s,
 				_("  (use \"git rebase --abort\" to check out the original branch)"));
 		}
 	} else if (state->rebase_in_progress || !stat(git_path("MERGE_MSG"), &st)) {
-		status_printf_ln(s, color, _("You are currently rebasing."));
+		if (state->branch)
+			status_printf_ln(s, color,
+					 _("You are currently rebasing branch '%s' on '%s'."),
+					 state->branch,
+					 state->onto);
+		else
+			status_printf_ln(s, color,
+					 _("You are currently rebasing."));
 		if (advice_status_hints)
 			status_printf_ln(s, color,
 				_("  (all conflicts fixed: run \"git rebase --continue\")"));
 	} else if (split_commit_in_progress(s)) {
-		status_printf_ln(s, color, _("You are currently splitting a commit during a rebase."));
+		if (state->branch)
+			status_printf_ln(s, color,
+					 _("You are currently splitting a commit while rebasing branch '%s' on '%s'."),
+					 state->branch,
+					 state->onto);
+		else
+			status_printf_ln(s, color,
+					 _("You are currently splitting a commit during a rebase."));
 		if (advice_status_hints)
 			status_printf_ln(s, color,
 				_("  (Once your working directory is clean, run \"git rebase --continue\")"));
 	} else {
-		status_printf_ln(s, color, _("You are currently editing a commit during a rebase."));
+		if (state->branch)
+			status_printf_ln(s, color,
+					 _("You are currently editing a commit while rebasing branch '%s' on '%s'."),
+					 state->branch,
+					 state->onto);
+		else
+			status_printf_ln(s, color,
+					 _("You are currently editing a commit during a rebase."));
 		if (advice_status_hints && !s->amend) {
 			status_printf_ln(s, color,
 				_("  (use \"git commit --amend\" to amend the current commit)"));
@@ -923,16 +953,57 @@ static void show_bisect_in_progress(struct wt_status *s,
 				struct wt_status_state *state,
 				const char *color)
 {
-	status_printf_ln(s, color, _("You are currently bisecting."));
+	if (state->branch)
+		status_printf_ln(s, color,
+				 _("You are currently bisecting branch '%s'."),
+				 state->branch);
+	else
+		status_printf_ln(s, color,
+				 _("You are currently bisecting."));
 	if (advice_status_hints)
 		status_printf_ln(s, color,
 			_("  (use \"git bisect reset\" to get back to the original branch)"));
 	wt_status_print_trailer(s);
 }
 
+/*
+ * Extract branch information from rebase/bisect
+ */
+static void read_and_strip_branch(struct strbuf *sb,
+				  const char **branch,
+				  const char *path)
+{
+	unsigned char sha1[20];
+
+	strbuf_reset(sb);
+	if (strbuf_read_file(sb, git_path("%s", path), 0) <= 0)
+		return;
+
+	while (sb->len && sb->buf[sb->len - 1] == '\n')
+		strbuf_setlen(sb, sb->len - 1);
+	if (!sb->len)
+		return;
+	if (!prefixcmp(sb->buf, "refs/heads/"))
+		*branch = sb->buf + strlen("refs/heads/");
+	else if (!prefixcmp(sb->buf, "refs/"))
+		*branch = sb->buf;
+	else if (!get_sha1_hex(sb->buf, sha1)) {
+		const char *abbrev;
+		abbrev = find_unique_abbrev(sha1, DEFAULT_ABBREV);
+		strbuf_reset(sb);
+		strbuf_addstr(sb, abbrev);
+		*branch = sb->buf;
+	} else if (!strcmp(sb->buf, "detached HEAD")) /* rebase */
+		;
+	else			/* bisect */
+		*branch = sb->buf;
+}
+
 static void wt_status_print_state(struct wt_status *s)
 {
 	const char *state_color = color(WT_STATUS_HEADER, s);
+	struct strbuf branch = STRBUF_INIT;
+	struct strbuf onto = STRBUF_INIT;
 	struct wt_status_state state;
 	struct stat st;
 
@@ -947,17 +1018,28 @@ static void wt_status_print_state(struct wt_status *s)
 				state.am_empty_patch = 1;
 		} else {
 			state.rebase_in_progress = 1;
+			read_and_strip_branch(&branch, &state.branch,
+					      "rebase-apply/head-name");
+			read_and_strip_branch(&onto, &state.onto,
+					      "rebase-apply/onto");
 		}
 	} else if (!stat(git_path("rebase-merge"), &st)) {
 		if (!stat(git_path("rebase-merge/interactive"), &st))
 			state.rebase_interactive_in_progress = 1;
 		else
 			state.rebase_in_progress = 1;
+		read_and_strip_branch(&branch, &state.branch,
+				      "rebase-merge/head-name");
+		read_and_strip_branch(&onto, &state.onto,
+				      "rebase-merge/onto");
 	} else if (!stat(git_path("CHERRY_PICK_HEAD"), &st)) {
 		state.cherry_pick_in_progress = 1;
 	}
-	if (!stat(git_path("BISECT_LOG"), &st))
+	if (!stat(git_path("BISECT_LOG"), &st)) {
 		state.bisect_in_progress = 1;
+		read_and_strip_branch(&branch, &state.branch,
+				      "BISECT_START");
+	}
 
 	if (state.merge_in_progress)
 		show_merge_in_progress(s, &state, state_color);
@@ -969,6 +1051,8 @@ static void wt_status_print_state(struct wt_status *s)
 		show_cherry_pick_in_progress(s, &state, state_color);
 	if (state.bisect_in_progress)
 		show_bisect_in_progress(s, &state, state_color);
+	strbuf_release(&branch);
+	strbuf_release(&onto);
 }
 
 void wt_status_print(struct wt_status *s)
