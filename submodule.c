@@ -216,6 +216,7 @@ static int prepare_submodule_summary(struct rev_info *rev, const char *path,
 }
 
 static void print_submodule_summary(struct rev_info *rev, FILE *f,
+		const char *line_prefix,
 		const char *del, const char *add, const char *reset)
 {
 	static const char format[] = "  %m %s";
@@ -226,6 +227,7 @@ static void print_submodule_summary(struct rev_info *rev, FILE *f,
 		struct pretty_print_context ctx = {0};
 		ctx.date_mode = rev->date_mode;
 		strbuf_setlen(&sb, 0);
+		strbuf_addstr(&sb, line_prefix);
 		if (commit->object.flags & SYMMETRIC_LEFT) {
 			if (del)
 				strbuf_addstr(&sb, del);
@@ -256,12 +258,13 @@ int parse_fetch_recurse_submodules_arg(const char *opt, const char *arg)
 }
 
 void show_submodule_summary(FILE *f, const char *path,
+		const char *line_prefix,
 		unsigned char one[20], unsigned char two[20],
 		unsigned dirty_submodule, const char *meta,
 		const char *del, const char *add, const char *reset)
 {
 	struct rev_info rev;
-	struct commit *left = left, *right = right;
+	struct commit *left = NULL, *right = NULL;
 	const char *message = NULL;
 	struct strbuf sb = STRBUF_INIT;
 	int fast_forward = 0, fast_backward = 0;
@@ -275,23 +278,23 @@ void show_submodule_summary(FILE *f, const char *path,
 	else if (!(left = lookup_commit_reference(one)) ||
 		 !(right = lookup_commit_reference(two)))
 		message = "(commits not present)";
-
-	if (!message &&
-	    prepare_submodule_summary(&rev, path, left, right,
-					&fast_forward, &fast_backward))
+	else if (prepare_submodule_summary(&rev, path, left, right,
+					   &fast_forward, &fast_backward))
 		message = "(revision walker failed)";
 
 	if (dirty_submodule & DIRTY_SUBMODULE_UNTRACKED)
-		fprintf(f, "Submodule %s contains untracked content\n", path);
+		fprintf(f, "%sSubmodule %s contains untracked content\n",
+			line_prefix, path);
 	if (dirty_submodule & DIRTY_SUBMODULE_MODIFIED)
-		fprintf(f, "Submodule %s contains modified content\n", path);
+		fprintf(f, "%sSubmodule %s contains modified content\n",
+			line_prefix, path);
 
 	if (!hashcmp(one, two)) {
 		strbuf_release(&sb);
 		return;
 	}
 
-	strbuf_addf(&sb, "%sSubmodule %s %s..", meta, path,
+	strbuf_addf(&sb, "%s%sSubmodule %s %s..", line_prefix, meta, path,
 			find_unique_abbrev(one, DEFAULT_ABBREV));
 	if (!fast_backward && !fast_forward)
 		strbuf_addch(&sb, '.');
@@ -302,11 +305,12 @@ void show_submodule_summary(FILE *f, const char *path,
 		strbuf_addf(&sb, "%s:%s\n", fast_backward ? " (rewind)" : "", reset);
 	fwrite(sb.buf, sb.len, 1, f);
 
-	if (!message) {
-		print_submodule_summary(&rev, f, del, add, reset);
+	if (!message) /* only NULL if we succeeded in setting up the walk */
+		print_submodule_summary(&rev, f, line_prefix, del, add, reset);
+	if (left)
 		clear_commit_marks(left, ~0);
+	if (right)
 		clear_commit_marks(right, ~0);
-	}
 
 	strbuf_release(&sb);
 }

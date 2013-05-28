@@ -358,32 +358,38 @@ STRIP ?= strip
 # Among the variables below, these:
 #   gitexecdir
 #   template_dir
-#   mandir
-#   infodir
-#   htmldir
 #   sysconfdir
 # can be specified as a relative path some/where/else;
 # this is interpreted as relative to $(prefix) and "git" at
 # runtime figures out where they are based on the path to the executable.
+# Additionally, the following will be treated as relative by "git" if they
+# begin with "$(prefix)/":
+#   mandir
+#   infodir
+#   htmldir
 # This can help installing the suite in a relocatable way.
 
 prefix = $(HOME)
 bindir_relative = bin
 bindir = $(prefix)/$(bindir_relative)
-mandir = share/man
-infodir = share/info
+mandir = $(prefix)/share/man
+infodir = $(prefix)/share/info
 gitexecdir = libexec/git-core
 mergetoolsdir = $(gitexecdir)/mergetools
 sharedir = $(prefix)/share
 gitwebdir = $(sharedir)/gitweb
 localedir = $(sharedir)/locale
 template_dir = share/git-core/templates
-htmldir = share/doc/git-doc
+htmldir = $(prefix)/share/doc/git-doc
 ETC_GITCONFIG = $(sysconfdir)/gitconfig
 ETC_GITATTRIBUTES = $(sysconfdir)/gitattributes
 lib = lib
 # DESTDIR =
 pathsep = :
+
+mandir_relative = $(patsubst $(prefix)/%,%,$(mandir))
+infodir_relative = $(patsubst $(prefix)/%,%,$(infodir))
+htmldir_relative = $(patsubst $(prefix)/%,%,$(htmldir))
 
 export prefix bindir sharedir sysconfdir gitwebdir localedir
 
@@ -617,22 +623,6 @@ LIB_FILE = libgit.a
 XDIFF_LIB = xdiff/lib.a
 VCSSVN_LIB = vcs-svn/lib.a
 
-LIB_H += xdiff/xinclude.h
-LIB_H += xdiff/xmacros.h
-LIB_H += xdiff/xdiff.h
-LIB_H += xdiff/xtypes.h
-LIB_H += xdiff/xutils.h
-LIB_H += xdiff/xprepare.h
-LIB_H += xdiff/xdiffi.h
-LIB_H += xdiff/xemit.h
-
-LIB_H += vcs-svn/line_buffer.h
-LIB_H += vcs-svn/sliding_window.h
-LIB_H += vcs-svn/repo_tree.h
-LIB_H += vcs-svn/fast_export.h
-LIB_H += vcs-svn/svndiff.h
-LIB_H += vcs-svn/svndump.h
-
 GENERATED_H += common-cmds.h
 
 LIB_H += advice.h
@@ -734,11 +724,24 @@ LIB_H += url.h
 LIB_H += userdiff.h
 LIB_H += utf8.h
 LIB_H += varint.h
+LIB_H += vcs-svn/fast_export.h
+LIB_H += vcs-svn/line_buffer.h
+LIB_H += vcs-svn/repo_tree.h
+LIB_H += vcs-svn/sliding_window.h
+LIB_H += vcs-svn/svndiff.h
+LIB_H += vcs-svn/svndump.h
 LIB_H += walker.h
 LIB_H += wildmatch.h
 LIB_H += wt-status.h
 LIB_H += xdiff-interface.h
 LIB_H += xdiff/xdiff.h
+LIB_H += xdiff/xdiffi.h
+LIB_H += xdiff/xemit.h
+LIB_H += xdiff/xinclude.h
+LIB_H += xdiff/xmacros.h
+LIB_H += xdiff/xprepare.h
+LIB_H += xdiff/xtypes.h
+LIB_H += xdiff/xutils.h
 
 LIB_OBJS += abspath.o
 LIB_OBJS += advice.o
@@ -1542,12 +1545,12 @@ ETC_GITATTRIBUTES_SQ = $(subst ','\'',$(ETC_GITATTRIBUTES))
 DESTDIR_SQ = $(subst ','\'',$(DESTDIR))
 bindir_SQ = $(subst ','\'',$(bindir))
 bindir_relative_SQ = $(subst ','\'',$(bindir_relative))
-mandir_SQ = $(subst ','\'',$(mandir))
-infodir_SQ = $(subst ','\'',$(infodir))
+mandir_relative_SQ = $(subst ','\'',$(mandir_relative))
+infodir_relative_SQ = $(subst ','\'',$(infodir_relative))
 localedir_SQ = $(subst ','\'',$(localedir))
 gitexecdir_SQ = $(subst ','\'',$(gitexecdir))
 template_dir_SQ = $(subst ','\'',$(template_dir))
-htmldir_SQ = $(subst ','\'',$(htmldir))
+htmldir_relative_SQ = $(subst ','\'',$(htmldir_relative))
 prefix_SQ = $(subst ','\'',$(prefix))
 gitwebdir_SQ = $(subst ','\'',$(gitwebdir))
 
@@ -1679,9 +1682,9 @@ strip: $(PROGRAMS) git$X
 
 git.sp git.s git.o: GIT-PREFIX
 git.sp git.s git.o: EXTRA_CPPFLAGS = \
-	'-DGIT_HTML_PATH="$(htmldir_SQ)"' \
-	'-DGIT_MAN_PATH="$(mandir_SQ)"' \
-	'-DGIT_INFO_PATH="$(infodir_SQ)"'
+	'-DGIT_HTML_PATH="$(htmldir_relative_SQ)"' \
+	'-DGIT_MAN_PATH="$(mandir_relative_SQ)"' \
+	'-DGIT_INFO_PATH="$(infodir_relative_SQ)"'
 
 git$X: git.o GIT-LDFLAGS $(BUILTIN_OBJS) $(GITLIBS)
 	$(QUIET_LINK)$(CC) $(ALL_CFLAGS) -o $@ git.o \
@@ -1691,9 +1694,9 @@ help.sp help.s help.o: common-cmds.h
 
 builtin/help.sp builtin/help.s builtin/help.o: common-cmds.h GIT-PREFIX
 builtin/help.sp builtin/help.s builtin/help.o: EXTRA_CPPFLAGS = \
-	'-DGIT_HTML_PATH="$(htmldir_SQ)"' \
-	'-DGIT_MAN_PATH="$(mandir_SQ)"' \
-	'-DGIT_INFO_PATH="$(infodir_SQ)"'
+	'-DGIT_HTML_PATH="$(htmldir_relative_SQ)"' \
+	'-DGIT_MAN_PATH="$(mandir_relative_SQ)"' \
+	'-DGIT_INFO_PATH="$(infodir_relative_SQ)"'
 
 version.sp version.s version.o: GIT-VERSION-FILE GIT-USER-AGENT
 version.sp version.s version.o: EXTRA_CPPFLAGS = \

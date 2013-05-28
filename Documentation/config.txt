@@ -178,6 +178,10 @@ advice.*::
 		the template shown when writing commit messages in
 		linkgit:git-commit[1], and in the help message shown
 		by linkgit:git-checkout[1] when switching branch.
+	statusUoption::
+		Advise to consider using the `-u` option to linkgit:git-status[1]
+		when the command takes more than 2 seconds to enumerate untracked
+		files.
 	commitBeforeMerge::
 		Advice shown when linkgit:git-merge[1] refuses to
 		merge to avoid overwriting local changes.
@@ -408,7 +412,7 @@ repository's usual working tree).
 core.logAllRefUpdates::
 	Enable the reflog. Updates to a ref <ref> is logged to the file
 	"$GIT_DIR/logs/<ref>", by appending the new and old
-	SHA1, the date/time and the reason of the update, but
+	SHA-1, the date/time and the reason of the update, but
 	only when the file exists.  If this configuration
 	variable is set to true, missing "$GIT_DIR/logs/<ref>"
 	file is automatically created for branch heads (i.e. under
@@ -443,7 +447,7 @@ core.sharedRepository::
 
 core.warnAmbiguousRefs::
 	If true, Git will warn you if the ref name you passed it is ambiguous
-	and might match multiple refs in the .git/refs/ tree. True by default.
+	and might match multiple refs in the repository. True by default.
 
 core.compression::
 	An integer -1..9, indicating a default compression level.
@@ -551,7 +555,7 @@ core.commentchar::
 	(default '#').
 
 sequence.editor::
-	Text editor used by `git rebase -i` for editing the rebase insn file.
+	Text editor used by `git rebase -i` for editing the rebase instruction file.
 	The value is meant to be interpreted by the shell when it is used.
 	It can be overridden by the `GIT_SEQUENCE_EDITOR` environment variable.
 	When not configured the default commit message editor is used instead.
@@ -723,9 +727,22 @@ branch.autosetuprebase::
 	This option defaults to never.
 
 branch.<name>.remote::
-	When in branch <name>, it tells 'git fetch' and 'git push' which
-	remote to fetch from/push to.  It defaults to `origin` if no remote is
-	configured. `origin` is also used if you are not on any branch.
+	When on branch <name>, it tells 'git fetch' and 'git push'
+	which remote to fetch from/push to.  The remote to push to
+	may be overridden with `remote.pushdefault` (for all branches).
+	The remote to push to, for the current branch, may be further
+	overridden by `branch.<name>.pushremote`.  If no remote is
+	configured, or if you are not on any branch, it defaults to
+	`origin` for fetching and `remote.pushdefault` for pushing.
+
+branch.<name>.pushremote::
+	When on branch <name>, it overrides `branch.<name>.remote` for
+	pushing.  It also overrides `remote.pushdefault` for pushing
+	from branch <name>.  When you pull from one place (e.g. your
+	upstream) and push to another place (e.g. your own publishing
+	repository), you would want to set `remote.pushdefault` to
+	specify the remote to push to for all branches, and use this
+	option to override it for a specific branch.
 
 branch.<name>.merge::
 	Defines, together with branch.<name>.remote, the upstream branch
@@ -790,7 +807,8 @@ color.branch::
 color.branch.<slot>::
 	Use customized color for branch coloration. `<slot>` is one of
 	`current` (the current branch), `local` (a local branch),
-	`remote` (a remote-tracking branch in refs/remotes/), `plain` (other
+	`remote` (a remote-tracking branch in refs/remotes/),
+	`upstream` (upstream tracking branch), `plain` (other
 	refs).
 +
 The value for these configuration variables is a list of colors (at most
@@ -1086,11 +1104,16 @@ format.thread::
 	value disables threading.
 
 format.signoff::
-    A boolean value which lets you enable the `-s/--signoff` option of
-    format-patch by default. *Note:* Adding the Signed-off-by: line to a
-    patch should be a conscious act and means that you certify you have
-    the rights to submit this work under the same open source license.
-    Please see the 'SubmittingPatches' document for further discussion.
+	A boolean value which lets you enable the `-s/--signoff` option of
+	format-patch by default. *Note:* Adding the Signed-off-by: line to a
+	patch should be a conscious act and means that you certify you have
+	the rights to submit this work under the same open source license.
+	Please see the 'SubmittingPatches' document for further discussion.
+
+format.coverLetter::
+	A boolean that controls whether to generate a cover-letter when
+	format-patch is invoked, but in addition can be set to "auto", to
+	generate a cover-letter only when there's more than one patch.
 
 filter.<driver>.clean::
 	The command which is used to convert the content of a worktree
@@ -1202,7 +1225,7 @@ gitcvs.dbname::
 
 gitcvs.dbdriver::
 	Used Perl DBI driver. You can specify any available driver
-        for this here, but it might not work. git-cvsserver is tested
+	for this here, but it might not work. git-cvsserver is tested
 	with 'DBD::SQLite', reported to work with 'DBD::Pg', and
 	reported *not* to work with 'DBD::mysql'. Experimental feature.
 	May not contain double colons (`:`). Default: 'SQLite'.
@@ -1442,6 +1465,14 @@ http.sslCAPath::
 	Path containing files with the CA certificates to verify the peer
 	with when fetching or pushing over HTTPS. Can be overridden
 	by the 'GIT_SSL_CAPATH' environment variable.
+
+http.sslTry::
+	Attempt to use AUTH SSL/TLS and encrypted data transfers
+	when connecting via regular FTP protocol. This might be needed
+	if the FTP server requires it for security reasons or you wish
+	to connect securely whenever remote FTP server supports it.
+	Default is false since it might trigger certificate verification
+	errors on misconfigured servers.
 
 http.maxRequests::
 	How many HTTP requests to launch in parallel. Can be overridden
@@ -1894,6 +1925,11 @@ receive.updateserverinfo::
 	If set to true, git-receive-pack will run git-update-server-info
 	after receiving data from git-push and updating refs.
 
+remote.pushdefault::
+	The remote to push to by default.  Overrides
+	`branch.<name>.remote` for all branches, and is overridden by
+	`branch.<name>.pushremote` for specific branches.
+
 remote.<name>.url::
 	The URL of a remote repository.  See linkgit:git-fetch[1] or
 	linkgit:git-push[1].
@@ -1994,6 +2030,7 @@ sendemail.<identity>.*::
 
 sendemail.aliasesfile::
 sendemail.aliasfiletype::
+sendemail.annotate::
 sendemail.bcc::
 sendemail.cc::
 sendemail.cccmd::
@@ -2119,7 +2156,13 @@ uploadpack.hiderefs::
 	are under the hierarchies listed on the value of this
 	variable is excluded, and is hidden from `git ls-remote`,
 	`git fetch`, etc.  An attempt to fetch a hidden ref by `git
-	fetch` will fail.
+	fetch` will fail.  See also `uploadpack.allowtipsha1inwant`.
+
+uploadpack.allowtipsha1inwant::
+	When `uploadpack.hiderefs` is in effect, allow `upload-pack`
+	to accept a fetch request that asks for an object at the tip
+	of a hidden ref (by default, such a request is rejected).
+	see also `uploadpack.hiderefs`.
 
 url.<base>.insteadOf::
 	Any URL that starts with this value will be rewritten to

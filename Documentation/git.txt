@@ -43,14 +43,18 @@ unreleased) version of Git, that is available from 'master'
 branch of the `git.git` repository.
 Documentation for older releases are available here:
 
-* link:v1.8.2/git.html[documentation for release 1.8.2]
+* link:v1.8.2.3/git.html[documentation for release 1.8.2.3]
 
 * release notes for
+  link:RelNotes/1.8.2.3.txt[1.8.2.3].
+  link:RelNotes/1.8.2.2.txt[1.8.2.2].
+  link:RelNotes/1.8.2.1.txt[1.8.2.1].
   link:RelNotes/1.8.2.txt[1.8.2].
 
-* link:v1.8.1.5/git.html[documentation for release 1.8.1.5]
+* link:v1.8.1.6/git.html[documentation for release 1.8.1.6]
 
 * release notes for
+  link:RelNotes/1.8.1.6.txt[1.8.1.6],
   link:RelNotes/1.8.1.5.txt[1.8.1.5],
   link:RelNotes/1.8.1.4.txt[1.8.1.4],
   link:RelNotes/1.8.1.3.txt[1.8.1.3],
@@ -739,7 +743,7 @@ where:
 
 	<old|new>-file:: are files GIT_EXTERNAL_DIFF can use to read the
                          contents of <old|new>,
-	<old|new>-hex:: are the 40-hexdigit SHA1 hashes,
+	<old|new>-hex:: are the 40-hexdigit SHA-1 hashes,
 	<old|new>-mode:: are the octal representation of the file modes.
 +
 The file parameters can point at the user's working file
@@ -774,9 +778,12 @@ other
 	If this environment variable is set then 'git fetch'
 	and 'git push' will use this command instead
 	of 'ssh' when they need to connect to a remote system.
-	The '$GIT_SSH' command will be given exactly two arguments:
-	the 'username@host' (or just 'host') from the URL and the
-	shell command to execute on that remote system.
+	The '$GIT_SSH' command will be given exactly two or
+	four arguments: the 'username@host' (or just 'host')
+	from the URL and the shell command to execute on that
+	remote system, optionally preceded by '-p' (literally) and
+	the 'port' from the URL when it specifies something other
+	than the default SSH port.
 +
 To pass options to the program that you want to list in GIT_SSH
 you will need to wrap the program and options into a shell script,
@@ -859,7 +866,7 @@ The commit, equivalent to what other systems call a "changeset" or
 represents an immediately preceding step.  Commits with more than one
 parent represent merges of independent lines of development.
 
-All objects are named by the SHA1 hash of their contents, normally
+All objects are named by the SHA-1 hash of their contents, normally
 written as a string of 40 hex digits.  Such names are globally unique.
 The entire history leading up to a commit can be vouched for by signing
 just that commit.  A fourth object type, the tag, is provided for this
@@ -869,9 +876,9 @@ When first created, objects are stored in individual files, but for
 efficiency may later be compressed together into "pack files".
 
 Named pointers called refs mark interesting points in history.  A ref
-may contain the SHA1 name of an object or the name of another ref.  Refs
-with names beginning `ref/head/` contain the SHA1 name of the most
-recent commit (or "head") of a branch under development.  SHA1 names of
+may contain the SHA-1 name of an object or the name of another ref.  Refs
+with names beginning `ref/head/` contain the SHA-1 name of the most
+recent commit (or "head") of a branch under development.  SHA-1 names of
 tags of interest are stored under `ref/tags/`.  A special ref named
 `HEAD` contains the name of the currently checked-out branch.
 

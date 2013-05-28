@@ -14,8 +14,8 @@ SYNOPSIS
 	     [--refresh] [-q] [--unmerged] [--ignore-missing]
 	     [(--cacheinfo <mode> <object> <file>)...]
 	     [--chmod=(+|-)x]
-	     [--assume-unchanged | --no-assume-unchanged]
-	     [--skip-worktree | --no-skip-worktree]
+	     [--[no-]assume-unchanged]
+	     [--[no-]skip-worktree]
 	     [--ignore-submodules]
 	     [--really-refresh] [--unresolve] [--again | -g]
 	     [--info-only] [--index-info]
@@ -77,8 +77,7 @@ OPTIONS
 --chmod=(+|-)x::
         Set the execute permissions on the updated files.
 
---assume-unchanged::
---no-assume-unchanged::
+--[no-]assume-unchanged::
 	When these flags are specified, the object names recorded
 	for the paths are not updated.  Instead, these options
 	set and unset the "assume unchanged" bit for the
@@ -102,8 +101,7 @@ you will need to handle the situation manually.
 	Like '--refresh', but checks stat information unconditionally,
 	without regard to the "assume unchanged" setting.
 
---skip-worktree::
---no-skip-worktree::
+--[no-]skip-worktree::
 	When one of these flags is specified, the object name recorded
 	for the paths are not updated. Instead, these options
 	set and unset the "skip-worktree" bit for the paths. See
@@ -145,7 +143,15 @@ you will need to handle the situation manually.
 
 --index-version <n>::
 	Write the resulting index out in the named on-disk format version.
-	The current default version is 2.
+	Supported versions are 2, 3 and 4. The current default version is 2
+	or 3, depending on whether extra features are used, such as
+	`git add -N`.
++
+Version 4 performs a simple pathname compression that reduces index
+size by 30%-50% on large repositories, which results in faster load
+time. Version 4 is relatively young (first released in in 1.8.0 in
+October 2012). Other Git implementations such as JGit and libgit2
+may not support it yet.
 
 -z::
 	Only meaningful with `--stdin` or `--index-info`; paths are
@@ -239,7 +245,7 @@ $ git update-index --index-info
 ------------
 
 The first line of the input feeds 0 as the mode to remove the
-path; the SHA1 does not matter as long as it is well formatted.
+path; the SHA-1 does not matter as long as it is well formatted.
 Then the second and third line feeds stage 1 and stage 2 entries
 for that path.  After the above, we would end up with this:
 
