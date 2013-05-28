@@ -5,6 +5,7 @@
 #include "diffcore.h"
 #include "quote.h"
 #include "xdiff-interface.h"
+#include "xdiff/xmacros.h"
 #include "log-tree.h"
 #include "refs.h"
 #include "userdiff.h"
@@ -73,16 +74,24 @@ static struct combine_diff_path *intersect_paths(struct combine_diff_path *curr,
 
 /* Lines lost from parent */
 struct lline {
-	struct lline *next;
+	struct lline *next, *prev;
 	int len;
 	unsigned long parent_map;
 	char line[FLEX_ARRAY];
 };
 
+/* Lines lost from current parent (before coalescing) */
+struct plost {
+	struct lline *lost_head, *lost_tail;
+	int len;
+};
+
 /* Lines surviving in the merge result */
 struct sline {
-	struct lline *lost_head, **lost_tail;
-	struct lline *next_lost;
+	/* Accumulated and coalesced lost lines */
+	struct lline *lost;
+	int lenlost;
+	struct plost plost;
 	char *bol;
 	int len;
 	/* bit 0 up to (N-1) are on if the parent has this line (i.e.
@@ -93,6 +102,172 @@ struct sline {
 	unsigned long flag;
 	unsigned long *p_lno;
 };
+
+static int match_string_spaces(const char *line1, int len1,
+			       const char *line2, int len2,
+			       long flags)
+{
+	if (flags & XDF_WHITESPACE_FLAGS) {
+		for (; len1 > 0 && XDL_ISSPACE(line1[len1 - 1]); len1--);
+		for (; len2 > 0 && XDL_ISSPACE(line2[len2 - 1]); len2--);
+	}
+
+	if (!(flags & (XDF_IGNORE_WHITESPACE | XDF_IGNORE_WHITESPACE_CHANGE)))
+		return (len1 == len2 && !memcmp(line1, line2, len1));
+
+	while (len1 > 0 && len2 > 0) {
+		len1--;
+		len2--;
+		if (XDL_ISSPACE(line1[len1]) || XDL_ISSPACE(line2[len2])) {
+			if ((flags & XDF_IGNORE_WHITESPACE_CHANGE) &&
+			    (!XDL_ISSPACE(line1[len1]) || !XDL_ISSPACE(line2[len2])))
+				return 0;
+
+			for (; len1 > 0 && XDL_ISSPACE(line1[len1]); len1--);
+			for (; len2 > 0 && XDL_ISSPACE(line2[len2]); len2--);
+		}
+		if (line1[len1] != line2[len2])
+			return 0;
+	}
+
+	if (flags & XDF_IGNORE_WHITESPACE) {
+		/* Consume remaining spaces */
+		for (; len1 > 0 && XDL_ISSPACE(line1[len1 - 1]); len1--);
+		for (; len2 > 0 && XDL_ISSPACE(line2[len2 - 1]); len2--);
+	}
+
+	/* We matched full line1 and line2 */
+	if (!len1 && !len2)
+		return 1;
+
+	return 0;
+}
+
+enum coalesce_direction { MATCH, BASE, NEW };
+
+/* Coalesce new lines into base by finding LCS */
+static struct lline *coalesce_lines(struct lline *base, int *lenbase,
+				    struct lline *new, int lennew,
+				    unsigned long parent, long flags)
+{
+	int **lcs;
+	enum coalesce_direction **directions;
+	struct lline *baseend, *newend = NULL;
+	int i, j, origbaselen = *lenbase;
+
+	if (new == NULL)
+		return base;
+
+	if (base == NULL) {
+		*lenbase = lennew;
+		return new;
+	}
+
+	/*
+	 * Coalesce new lines into base by finding the LCS
+	 * - Create the table to run dynamic programing
+	 * - Compute the LCS
+	 * - Then reverse read the direction structure:
+	 *   - If we have MATCH, assign parent to base flag, and consume
+	 *   both baseend and newend
+	 *   - Else if we have BASE, consume baseend
+	 *   - Else if we have NEW, insert newend lline into base and
+	 *   consume newend
+	 */
+	lcs = xcalloc(origbaselen + 1, sizeof(int*));
+	directions = xcalloc(origbaselen + 1, sizeof(enum coalesce_direction*));
+	for (i = 0; i < origbaselen + 1; i++) {
+		lcs[i] = xcalloc(lennew + 1, sizeof(int));
+		directions[i] = xcalloc(lennew + 1, sizeof(enum coalesce_direction));
+		directions[i][0] = BASE;
+	}
+	for (j = 1; j < lennew + 1; j++)
+		directions[0][j] = NEW;
+
+	for (i = 1, baseend = base; i < origbaselen + 1; i++) {
+		for (j = 1, newend = new; j < lennew + 1; j++) {
+			if (match_string_spaces(baseend->line, baseend->len,
+						newend->line, newend->len, flags)) {
+				lcs[i][j] = lcs[i - 1][j - 1] + 1;
+				directions[i][j] = MATCH;
+			} else if (lcs[i][j - 1] >= lcs[i - 1][j]) {
+				lcs[i][j] = lcs[i][j - 1];
+				directions[i][j] = NEW;
+			} else {
+				lcs[i][j] = lcs[i - 1][j];
+				directions[i][j] = BASE;
+			}
+			if (newend->next)
+				newend = newend->next;
+		}
+		if (baseend->next)
+			baseend = baseend->next;
+	}
+
+	for (i = 0; i < origbaselen + 1; i++)
+		free(lcs[i]);
+	free(lcs);
+
+	/* At this point, baseend and newend point to the end of each lists */
+	i--;
+	j--;
+	while (i != 0 || j != 0) {
+		if (directions[i][j] == MATCH) {
+			baseend->parent_map |= 1<<parent;
+			baseend = baseend->prev;
+			newend = newend->prev;
+			i--;
+			j--;
+		} else if (directions[i][j] == NEW) {
+			struct lline *lline;
+
+			lline = newend;
+			/* Remove lline from new list and update newend */
+			if (lline->prev)
+				lline->prev->next = lline->next;
+			else
+				new = lline->next;
+			if (lline->next)
+				lline->next->prev = lline->prev;
+
+			newend = lline->prev;
+			j--;
+
+			/* Add lline to base list */
+			if (baseend) {
+				lline->next = baseend->next;
+				lline->prev = baseend;
+				if (lline->prev)
+					lline->prev->next = lline;
+			}
+			else {
+				lline->next = base;
+				base = lline;
+			}
+			(*lenbase)++;
+
+			if (lline->next)
+				lline->next->prev = lline;
+
+		} else {
+			baseend = baseend->prev;
+			i--;
+		}
+	}
+
+	newend = new;
+	while (newend) {
+		struct lline *lline = newend;
+		newend = newend->next;
+		free(lline);
+	}
+
+	for (i = 0; i < origbaselen + 1; i++)
+		free(directions[i]);
+	free(directions);
+
+	return base;
+}
 
 static char *grab_blob(const unsigned char *sha1, unsigned int mode,
 		       unsigned long *size, struct userdiff_driver *textconv,
@@ -129,29 +304,19 @@ static void append_lost(struct sline *sline, int n, const char *line, int len)
 	if (line[len-1] == '\n')
 		len--;
 
-	/* Check to see if we can squash things */
-	if (sline->lost_head) {
-		lline = sline->next_lost;
-		while (lline) {
-			if (lline->len == len &&
-			    !memcmp(lline->line, line, len)) {
-				lline->parent_map |= this_mask;
-				sline->next_lost = lline->next;
-				return;
-			}
-			lline = lline->next;
-		}
-	}
-
 	lline = xmalloc(sizeof(*lline) + len + 1);
 	lline->len = len;
 	lline->next = NULL;
+	lline->prev = sline->plost.lost_tail;
+	if (lline->prev)
+		lline->prev->next = lline;
+	else
+		sline->plost.lost_head = lline;
+	sline->plost.lost_tail = lline;
+	sline->plost.len++;
 	lline->parent_map = this_mask;
 	memcpy(lline->line, line, len);
 	lline->line[len] = 0;
-	*sline->lost_tail = lline;
-	sline->lost_tail = &lline->next;
-	sline->next_lost = NULL;
 }
 
 struct combine_diff_state {
@@ -194,7 +359,6 @@ static void consume_line(void *state_, char *line, unsigned long len)
 				xcalloc(state->num_parent,
 					sizeof(unsigned long));
 		state->sline[state->nb-1].p_lno[state->n] = state->ob;
-		state->lost_bucket->next_lost = state->lost_bucket->lost_head;
 		return;
 	}
 	if (!state->lost_bucket)
@@ -215,7 +379,7 @@ static void combine_diff(const unsigned char *parent, unsigned int mode,
 			 struct sline *sline, unsigned int cnt, int n,
 			 int num_parent, int result_deleted,
 			 struct userdiff_driver *textconv,
-			 const char *path)
+			 const char *path, long flags)
 {
 	unsigned int p_lno, lno;
 	unsigned long nmask = (1UL << n);
@@ -231,7 +395,7 @@ static void combine_diff(const unsigned char *parent, unsigned int mode,
 	parent_file.ptr = grab_blob(parent, mode, &sz, textconv, path);
 	parent_file.size = sz;
 	memset(&xpp, 0, sizeof(xpp));
-	xpp.flags = 0;
+	xpp.flags = flags;
 	memset(&xecfg, 0, sizeof(xecfg));
 	memset(&state, 0, sizeof(state));
 	state.nmask = nmask;
@@ -255,8 +419,18 @@ static void combine_diff(const unsigned char *parent, unsigned int mode,
 		struct lline *ll;
 		sline[lno].p_lno[n] = p_lno;
 
+		/* Coalesce new lines */
+		if (sline[lno].plost.lost_head) {
+			struct sline *sl = &sline[lno];
+			sl->lost = coalesce_lines(sl->lost, &sl->lenlost,
+						  sl->plost.lost_head,
+						  sl->plost.len, n, flags);
+			sl->plost.lost_head = sl->plost.lost_tail = NULL;
+			sl->plost.len = 0;
+		}
+
 		/* How many lines would this sline advance the p_lno? */
-		ll = sline[lno].lost_head;
+		ll = sline[lno].lost;
 		while (ll) {
 			if (ll->parent_map & nmask)
 				p_lno++; /* '-' means parent had it */
@@ -276,7 +450,7 @@ static int interesting(struct sline *sline, unsigned long all_mask)
 	/* If some parents lost lines here, or if we have added to
 	 * some parent, it is interesting.
 	 */
-	return ((sline->flag & all_mask) || sline->lost_head);
+	return ((sline->flag & all_mask) || sline->lost);
 }
 
 static unsigned long adjust_hunk_tail(struct sline *sline,
@@ -459,7 +633,7 @@ static int make_hunks(struct sline *sline, unsigned long cnt,
 		has_interesting = 0;
 		for (j = i; j < hunk_end && !has_interesting; j++) {
 			unsigned long this_diff = sline[j].flag & all_mask;
-			struct lline *ll = sline[j].lost_head;
+			struct lline *ll = sline[j].lost;
 			if (this_diff) {
 				/* This has some changes.  Is it the
 				 * same as others?
@@ -613,7 +787,7 @@ static void dump_sline(struct sline *sline, const char *line_prefix,
 			int j;
 			unsigned long p_mask;
 			struct sline *sl = &sline[lno++];
-			ll = (sl->flag & no_pre_delete) ? NULL : sl->lost_head;
+			ll = (sl->flag & no_pre_delete) ? NULL : sl->lost;
 			while (ll) {
 				printf("%s%s", line_prefix, c_old);
 				for (j = 0; j < num_parent; j++) {
@@ -664,7 +838,7 @@ static void reuse_combine_diff(struct sline *sline, unsigned long cnt,
 	jmask = (1UL<<j);
 
 	for (lno = 0; lno <= cnt; lno++) {
-		struct lline *ll = sline->lost_head;
+		struct lline *ll = sline->lost;
 		sline->p_lno[i] = sline->p_lno[j];
 		while (ll) {
 			if (ll->parent_map & jmask)
@@ -923,10 +1097,6 @@ static void show_patch_diff(struct combine_diff_path *elem, int num_parent,
 
 	sline = xcalloc(cnt+2, sizeof(*sline));
 	sline[0].bol = result;
-	for (lno = 0; lno <= cnt + 1; lno++) {
-		sline[lno].lost_tail = &sline[lno].lost_head;
-		sline[lno].flag = 0;
-	}
 	for (lno = 0, cp = result; cp < result + result_size; cp++) {
 		if (*cp == '\n') {
 			sline[lno].len = cp - sline[lno].bol;
@@ -962,7 +1132,7 @@ static void show_patch_diff(struct combine_diff_path *elem, int num_parent,
 				     elem->parent[i].mode,
 				     &result_file, sline,
 				     cnt, i, num_parent, result_deleted,
-				     textconv, elem->path);
+				     textconv, elem->path, opt->xdl_opts);
 	}
 
 	show_hunks = make_hunks(sline, cnt, num_parent, dense);
@@ -976,8 +1146,8 @@ static void show_patch_diff(struct combine_diff_path *elem, int num_parent,
 	free(result);
 
 	for (lno = 0; lno < cnt; lno++) {
-		if (sline[lno].lost_head) {
-			struct lline *ll = sline[lno].lost_head;
+		if (sline[lno].lost) {
+			struct lline *ll = sline[lno].lost;
 			while (ll) {
 				struct lline *tmp = ll;
 				ll = ll->next;

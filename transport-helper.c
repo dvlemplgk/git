@@ -25,6 +25,7 @@ struct helper_data {
 		option : 1,
 		push : 1,
 		connect : 1,
+		signed_tags : 1,
 		no_disconnect_req : 1;
 	char *export_marks;
 	char *import_marks;
@@ -191,6 +192,8 @@ static struct child_process *get_helper(struct transport *transport)
 			refspecs[refspec_nr++] = xstrdup(capname + strlen("refspec "));
 		} else if (!strcmp(capname, "connect")) {
 			data->connect = 1;
+		} else if (!strcmp(capname, "signed-tags")) {
+			data->signed_tags = 1;
 		} else if (!prefixcmp(capname, "export-marks ")) {
 			struct strbuf arg = STRBUF_INIT;
 			strbuf_addstr(&arg, "--export-marks=");
@@ -211,9 +214,8 @@ static struct child_process *get_helper(struct transport *transport)
 		int i;
 		data->refspec_nr = refspec_nr;
 		data->refspecs = parse_fetch_refspec(refspec_nr, refspecs);
-		for (i = 0; i < refspec_nr; i++) {
+		for (i = 0; i < refspec_nr; i++)
 			free((char *)refspecs[i]);
-		}
 		free(refspecs);
 	}
 	strbuf_release(&buf);
@@ -410,9 +412,11 @@ static int get_exporter(struct transport *transport,
 	/* we need to duplicate helper->in because we want to use it after
 	 * fastexport is done with it. */
 	fastexport->out = dup(helper->in);
-	fastexport->argv = xcalloc(5 + revlist_args->nr, sizeof(*fastexport->argv));
+	fastexport->argv = xcalloc(6 + revlist_args->nr, sizeof(*fastexport->argv));
 	fastexport->argv[argc++] = "fast-export";
 	fastexport->argv[argc++] = "--use-done-feature";
+	fastexport->argv[argc++] = data->signed_tags ?
+		"--signed-tags=verbatim" : "--signed-tags=warn-strip";
 	if (data->export_marks)
 		fastexport->argv[argc++] = data->export_marks;
 	if (data->import_marks)
@@ -801,6 +805,7 @@ static int push_refs_with_export(struct transport *transport,
 		if (private && !get_sha1(private, sha1)) {
 			strbuf_addf(&buf, "^%s", private);
 			string_list_append(&revlist_args, strbuf_detach(&buf, NULL));
+			hashcpy(ref->old_sha1, sha1);
 		}
 		free(private);
 
@@ -991,7 +996,7 @@ struct unidirectional_transfer {
 	int src_is_sock;
 	/* Is destination socket? */
 	int dest_is_sock;
-	/* Transfer state (TRANSFERING/FLUSHING/FINISHED) */
+	/* Transfer state (TRANSFERRING/FLUSHING/FINISHED) */
 	int state;
 	/* Buffer. */
 	char buf[BUFFERSIZE];

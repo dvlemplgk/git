@@ -124,8 +124,10 @@ static int opt_parse_m(const struct option *opt, const char *arg, int unset)
 	if (unset)
 		strbuf_setlen(buf, 0);
 	else {
+		if (buf->len)
+			strbuf_addch(buf, '\n');
 		strbuf_addstr(buf, arg);
-		strbuf_addstr(buf, "\n\n");
+		strbuf_complete_line(buf);
 	}
 	return 0;
 }
@@ -700,7 +702,7 @@ static int prepare_to_commit(const char *index_file, const char *prefix,
 			previous = eol;
 		}
 
-		append_signoff(&sb, ignore_footer);
+		append_signoff(&sb, ignore_footer, 0);
 	}
 
 	if (fwrite(sb.buf, 1, sb.len, s->fp) < sb.len)
@@ -953,7 +955,7 @@ static const char *read_commit_message(const char *name)
 	if (!commit)
 		die(_("could not lookup commit %s"), name);
 	out_enc = get_commit_output_encoding();
-	return logmsg_reencode(commit, out_enc);
+	return logmsg_reencode(commit, NULL, out_enc);
 }
 
 static int parse_and_validate_options(int argc, const char *argv[],

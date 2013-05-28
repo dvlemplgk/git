@@ -13,7 +13,9 @@ const char git_usage_string[] =
 	"           <command> [<args>]";
 
 const char git_more_info_string[] =
-	N_("See 'git help <command>' for more information on a specific command.");
+	N_("'git help -a' and 'git help -g' lists available subcommands and some\n"
+	   "concept guides. See 'git help <command>' or 'git help <concept>'\n"
+	   "to read about a specific subcommand or concept.");
 
 static struct startup_info git_startup_info;
 static int use_pager = -1;
@@ -125,6 +127,7 @@ static int handle_options(const char ***argv, int *argc, int *envchanged)
 			static char git_dir[PATH_MAX+1];
 			is_bare_repository_cfg = 1;
 			setenv(GIT_DIR_ENVIRONMENT, getcwd(git_dir, sizeof(git_dir)), 0);
+			setenv(GIT_IMPLICIT_WORK_TREE_ENVIRONMENT, "0", 1);
 			if (envchanged)
 				*envchanged = 1;
 		} else if (!strcmp(cmd, "-c")) {

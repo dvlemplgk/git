@@ -193,7 +193,11 @@ do
 	--no-color)
 		color=; shift ;;
 	--va|--val|--valg|--valgr|--valgri|--valgrin|--valgrind)
-		valgrind=t; verbose=t; shift ;;
+		valgrind=memcheck
+		shift ;;
+	--valgrind=*)
+		valgrind=$(expr "z$1" : 'z[^=]*=\(.*\)')
+		shift ;;
 	--tee)
 		shift ;; # was handled already
 	--root=*)
@@ -203,6 +207,8 @@ do
 		echo "error: unknown test option '$1'" >&2; exit 1 ;;
 	esac
 done
+
+test -n "$valgrind" && verbose=t
 
 if test -n "$color"
 then
@@ -530,6 +536,8 @@ then
 	PATH=$GIT_VALGRIND/bin:$PATH
 	GIT_EXEC_PATH=$GIT_VALGRIND/bin
 	export GIT_VALGRIND
+	GIT_VALGRIND_MODE="$valgrind"
+	export GIT_VALGRIND_MODE
 elif test -n "$GIT_TEST_INSTALLED"
 then
 	GIT_EXEC_PATH=$($GIT_TEST_INSTALLED/git --exec-path)  ||
@@ -592,14 +600,14 @@ then
 fi
 
 # Test repository
-test="trash directory.$(basename "$0" .sh)"
-test -n "$root" && test="$root/$test"
-case "$test" in
-/*) TRASH_DIRECTORY="$test" ;;
- *) TRASH_DIRECTORY="$TEST_OUTPUT_DIRECTORY/$test" ;;
+TRASH_DIRECTORY="trash directory.$(basename "$0" .sh)"
+test -n "$root" && TRASH_DIRECTORY="$root/$TRASH_DIRECTORY"
+case "$TRASH_DIRECTORY" in
+/*) ;; # absolute path is good
+ *) TRASH_DIRECTORY="$TEST_OUTPUT_DIRECTORY/$TRASH_DIRECTORY" ;;
 esac
 test ! -z "$debug" || remove_trash=$TRASH_DIRECTORY
-rm -fr "$test" || {
+rm -fr "$TRASH_DIRECTORY" || {
 	GIT_EXIT_OK=t
 	echo >&5 "FATAL: Cannot prepare test area"
 	exit 1
@@ -610,13 +618,13 @@ export HOME
 
 if test -z "$TEST_NO_CREATE_REPO"
 then
-	test_create_repo "$test"
+	test_create_repo "$TRASH_DIRECTORY"
 else
-	mkdir -p "$test"
+	mkdir -p "$TRASH_DIRECTORY"
 fi
 # Use -P to resolve symlinks in our working directory so that the cwd
 # in subprocesses like git equals our $PWD (for pathname comparisons).
-cd -P "$test" || exit 1
+cd -P "$TRASH_DIRECTORY" || exit 1
 
 this_test=${0##*/}
 this_test=${this_test%%-*}
@@ -727,6 +735,11 @@ test_i18ngrep () {
 	fi
 }
 
+test_lazy_prereq PIPE '
+	# test whether the filesystem supports FIFOs
+	rm -f testfifo && mkfifo testfifo
+'
+
 test_lazy_prereq SYMLINKS '
 	# test whether the filesystem supports symbolic links
 	ln -s x y && test -h y
@@ -760,3 +773,9 @@ test_lazy_prereq AUTOIDENT '
 # When the tests are run as root, permission tests will report that
 # things are writable when they shouldn't be.
 test -w / || test_set_prereq SANITY
+
+GIT_UNZIP=${GIT_UNZIP:-unzip}
+test_lazy_prereq UNZIP '
+	"$GIT_UNZIP" -v
+	test $? -ne 127
+'

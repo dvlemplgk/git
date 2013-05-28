@@ -754,17 +754,15 @@ static struct command *read_head_info(void)
 	struct command *commands = NULL;
 	struct command **p = &commands;
 	for (;;) {
-		static char line[1000];
+		char *line;
 		unsigned char old_sha1[20], new_sha1[20];
 		struct command *cmd;
 		char *refname;
 		int len, reflen;
 
-		len = packet_read_line(0, line, sizeof(line));
-		if (!len)
+		line = packet_read_line(0, &len);
+		if (!line)
 			break;
-		if (line[len-1] == '\n')
-			line[--len] = 0;
 		if (len < 83 ||
 		    line[40] != ' ' ||
 		    line[81] != ' ' ||
@@ -828,8 +826,11 @@ static const char *unpack(int err_fd)
 			    : 0);
 
 	hdr_err = parse_pack_header(&hdr);
-	if (hdr_err)
+	if (hdr_err) {
+		if (err_fd > 0)
+			close(err_fd);
 		return hdr_err;
+	}
 	snprintf(hdr_arg, sizeof(hdr_arg),
 			"--pack_header=%"PRIu32",%"PRIu32,
 			ntohl(hdr.hdr_version), ntohl(hdr.hdr_entries));
@@ -932,7 +933,7 @@ static void report(struct command *commands, const char *unpack_status)
 	if (use_sideband)
 		send_sideband(1, 1, buf.buf, buf.len, use_sideband);
 	else
-		safe_write(1, buf.buf, buf.len);
+		write_or_die(1, buf.buf, buf.len);
 	strbuf_release(&buf);
 }
 

@@ -381,46 +381,13 @@ static struct attr_stack *read_attr_from_file(const char *path, int macro_ok)
 	return res;
 }
 
-static void *read_index_data(const char *path)
-{
-	int pos, len;
-	unsigned long sz;
-	enum object_type type;
-	void *data;
-	struct index_state *istate = use_index ? use_index : &the_index;
-
-	len = strlen(path);
-	pos = index_name_pos(istate, path, len);
-	if (pos < 0) {
-		/*
-		 * We might be in the middle of a merge, in which
-		 * case we would read stage #2 (ours).
-		 */
-		int i;
-		for (i = -pos - 1;
-		     (pos < 0 && i < istate->cache_nr &&
-		      !strcmp(istate->cache[i]->name, path));
-		     i++)
-			if (ce_stage(istate->cache[i]) == 2)
-				pos = i;
-	}
-	if (pos < 0)
-		return NULL;
-	data = read_sha1_file(istate->cache[pos]->sha1, &type, &sz);
-	if (!data || type != OBJ_BLOB) {
-		free(data);
-		return NULL;
-	}
-	return data;
-}
-
 static struct attr_stack *read_attr_from_index(const char *path, int macro_ok)
 {
 	struct attr_stack *res;
 	char *buf, *sp;
 	int lineno = 0;
 
-	buf = read_index_data(path);
+	buf = read_blob_data_from_index(use_index ? use_index : &the_index, path, NULL);
 	if (!buf)
 		return NULL;
 
@@ -657,24 +624,24 @@ static void prepare_attr_stack(const char *path, int dirlen)
 }
 
 static int path_matches(const char *pathname, int pathlen,
-			const char *basename,
+			int basename_offset,
 			const struct pattern *pat,
 			const char *base, int baselen)
 {
 	const char *pattern = pat->pattern;
 	int prefix = pat->nowildcardlen;
+	int isdir = (pathlen && pathname[pathlen - 1] == '/');
 
-	if ((pat->flags & EXC_FLAG_MUSTBEDIR) &&
-	    ((!pathlen) || (pathname[pathlen-1] != '/')))
+	if ((pat->flags & EXC_FLAG_MUSTBEDIR) && !isdir)
 		return 0;
 
 	if (pat->flags & EXC_FLAG_NODIR) {
-		return match_basename(basename,
-				      pathlen - (basename - pathname),
+		return match_basename(pathname + basename_offset,
+				      pathlen - basename_offset - isdir,
 				      pattern, prefix,
 				      pat->patternlen, pat->flags);
 	}
-	return match_pathname(pathname, pathlen,
+	return match_pathname(pathname, pathlen - isdir,
 			      base, baselen,
 			      pattern, prefix, pat->patternlen, pat->flags);
 }
@@ -703,7 +670,7 @@ static int fill_one(const char *what, struct match_attr *a, int rem)
 	return rem;
 }
 
-static int fill(const char *path, int pathlen, const char *basename,
+static int fill(const char *path, int pathlen, int basename_offset,
 		struct attr_stack *stk, int rem)
 {
 	int i;
@@ -713,7 +680,7 @@ static int fill(const char *path, int pathlen, const char *basename,
 		struct match_attr *a = stk->attrs[i];
 		if (a->is_macro)
 			continue;
-		if (path_matches(path, pathlen, basename,
+		if (path_matches(path, pathlen, basename_offset,
 				 &a->u.pat, base, stk->originlen))
 			rem = fill_one("fill", a, rem);
 	}
@@ -752,7 +719,8 @@ static void collect_all_attrs(const char *path)
 {
 	struct attr_stack *stk;
 	int i, pathlen, rem, dirlen;
-	const char *basename, *cp, *last_slash = NULL;
+	const char *cp, *last_slash = NULL;
+	int basename_offset;
 
 	for (cp = path; *cp; cp++) {
 		if (*cp == '/' && cp[1])
@@ -760,10 +728,10 @@ static void collect_all_attrs(const char *path)
 	}
 	pathlen = cp - path;
 	if (last_slash) {
-		basename = last_slash + 1;
+		basename_offset = last_slash + 1 - path;
 		dirlen = last_slash - path;
 	} else {
-		basename = path;
+		basename_offset = 0;
 		dirlen = 0;
 	}
 
@@ -773,7 +741,7 @@ static void collect_all_attrs(const char *path)
 
 	rem = attr_nr;
 	for (stk = attr_stack; 0 < rem && stk; stk = stk->prev)
-		rem = fill(path, pathlen, basename, stk, rem);
+		rem = fill(path, pathlen, basename_offset, stk, rem);
 }
 
 int git_check_attr(const char *path, int num, struct git_attr_check *check)
