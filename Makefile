@@ -69,6 +69,9 @@ all::
 # Define NO_MSGFMT_EXTENDED_OPTIONS if your implementation of msgfmt
 # doesn't support GNU extensions like --check and --statistics
 #
+# Define NEEDS_CLIPPED_WRITE if your write(2) cannot write more than
+# INT_MAX bytes at once (e.g. MacOS X).
+#
 # Define HAVE_PATHS_H if you have paths.h and want to use the default PATH
 # it specifies.
 #
@@ -136,6 +139,10 @@ all::
 # link against any libraries installed there.  If defined you may
 # specify your own (or DarwinPort's) include directories and
 # library directories by defining CFLAGS and LDFLAGS appropriately.
+#
+# Define NO_APPLE_COMMON_CRYPTO if you are building on Darwin/Mac OS X
+# and do not want to use Apple's CommonCrypto library.  This allows you
+# to provide your own OpenSSL library, for example from MacPorts.
 #
 # Define BLK_SHA1 environment variable to make use of the bundled
 # optimized C SHA1 routine.
@@ -558,6 +565,7 @@ TEST_PROGRAMS_NEED_X += test-mergesort
 TEST_PROGRAMS_NEED_X += test-mktemp
 TEST_PROGRAMS_NEED_X += test-parse-options
 TEST_PROGRAMS_NEED_X += test-path-utils
+TEST_PROGRAMS_NEED_X += test-read-cache
 TEST_PROGRAMS_NEED_X += test-regex
 TEST_PROGRAMS_NEED_X += test-revision-walking
 TEST_PROGRAMS_NEED_X += test-run-command
@@ -1054,6 +1062,11 @@ ifeq ($(uname_S),Darwin)
 			BASIC_LDFLAGS += -L/opt/local/lib
 		endif
 	endif
+	ifndef NO_APPLE_COMMON_CRYPTO
+		APPLE_COMMON_CRYPTO = YesPlease
+		COMPAT_CFLAGS += -DAPPLE_COMMON_CRYPTO
+	endif
+	NO_REGEX = YesPlease
 	PTHREAD_LIBS =
 endif
 
@@ -1388,10 +1401,16 @@ ifdef PPC_SHA1
 	LIB_OBJS += ppc/sha1.o ppc/sha1ppc.o
 	LIB_H += ppc/sha1.h
 else
+ifdef APPLE_COMMON_CRYPTO
+	COMPAT_CFLAGS += -DCOMMON_DIGEST_FOR_OPENSSL
+	SHA1_HEADER = <CommonCrypto/CommonDigest.h>
+else
 	SHA1_HEADER = <openssl/sha.h>
 	EXTLIBS += $(LIB_4_CRYPTO)
 endif
 endif
+endif
+
 ifdef NO_PERL_MAKEMAKER
 	export NO_PERL_MAKEMAKER
 endif
@@ -1464,6 +1483,11 @@ endif
 
 ifndef NO_MSGFMT_EXTENDED_OPTIONS
 	MSGFMT += --check --statistics
+endif
+
+ifdef NEEDS_CLIPPED_WRITE
+	BASIC_CFLAGS += -DNEEDS_CLIPPED_WRITE
+	COMPAT_OBJS += compat/clipped-write.o
 endif
 
 ifneq (,$(XDL_FAST_HASH))
@@ -2262,9 +2286,6 @@ check: common-cmds.h
 		exit 1; \
 	fi
 
-remove-dashes:
-	./fixup-builtins $(BUILT_INS) $(PROGRAMS) $(SCRIPTS)
-
 ### Installation rules
 
 ifneq ($(filter /%,$(firstword $(template_dir))),)
@@ -2443,7 +2464,7 @@ profile-clean:
 	$(RM) $(addsuffix *.gcda,$(addprefix $(PROFILE_DIR)/, $(object_dirs)))
 	$(RM) $(addsuffix *.gcno,$(addprefix $(PROFILE_DIR)/, $(object_dirs)))
 
-clean: profile-clean
+clean: profile-clean coverage-clean
 	$(RM) *.o block-sha1/*.o ppc/*.o compat/*.o compat/*/*.o xdiff/*.o vcs-svn/*.o \
 		builtin/*.o $(LIB_FILE) $(XDIFF_LIB) $(VCSSVN_LIB)
 	$(RM) $(ALL_PROGRAMS) $(SCRIPT_LIB) $(BUILT_INS) git$X
@@ -2524,29 +2545,34 @@ check-builtins::
 
 ### Test suite coverage testing
 #
-.PHONY: coverage coverage-clean coverage-build coverage-report
+.PHONY: coverage coverage-clean coverage-compile coverage-test coverage-report
+.PHONY: coverage-clean-results
 
 coverage:
-	$(MAKE) coverage-build
-	$(MAKE) coverage-report
+	$(MAKE) coverage-test
+	$(MAKE) coverage-untested-functions
 
 object_dirs := $(sort $(dir $(OBJECTS)))
-coverage-clean:
+coverage-clean-results:
 	$(RM) $(addsuffix *.gcov,$(object_dirs))
 	$(RM) $(addsuffix *.gcda,$(object_dirs))
-	$(RM) $(addsuffix *.gcno,$(object_dirs))
 	$(RM) coverage-untested-functions
 	$(RM) -r cover_db/
 	$(RM) -r cover_db_html/
+
+coverage-clean: coverage-clean-results
+	$(RM) $(addsuffix *.gcno,$(object_dirs))
 
 COVERAGE_CFLAGS = $(CFLAGS) -O0 -ftest-coverage -fprofile-arcs
 COVERAGE_LDFLAGS = $(CFLAGS)  -O0 -lgcov
 GCOVFLAGS = --preserve-paths --branch-probabilities --all-blocks
 
-coverage-build: coverage-clean
+coverage-compile:
 	$(MAKE) CFLAGS="$(COVERAGE_CFLAGS)" LDFLAGS="$(COVERAGE_LDFLAGS)" all
+
+coverage-test: coverage-clean-results coverage-compile
 	$(MAKE) CFLAGS="$(COVERAGE_CFLAGS)" LDFLAGS="$(COVERAGE_LDFLAGS)" \
-		-j1 test
+		DEFAULT_TEST_TARGET=test -j1 test
 
 coverage-report:
 	$(QUIET_GCOV)for dir in $(object_dirs); do \

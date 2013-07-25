@@ -324,6 +324,9 @@ Don't:
    use 'test_must_fail git cmd'.  This will signal a failure if git
    dies in an unexpected way (e.g. segfault).
 
+   On the other hand, don't use test_must_fail for running regular
+   platform commands; just use '! cmd'.
+
  - use perl without spelling it as "$PERL_PATH". This is to help our
    friends on Windows where the platform Perl often adds CR before
    the end of line, and they bundle Git with a version of Perl that
@@ -591,6 +594,20 @@ library for your script to use.
 		test_pause &&
 		test_cmp expected actual
 	'
+
+ - test_ln_s_add <path1> <path2>
+
+   This function helps systems whose filesystem does not support symbolic
+   links. Use it to add a symbolic link entry to the index when it is not
+   important that the file system entry is a symbolic link, i.e., instead
+   of the sequence
+
+	ln -s foo bar &&
+	git add bar
+
+   Sometimes it is possible to split a test in a part that does not need
+   the symbolic link in the file system and a part that does; then only
+   the latter part need be protected by a SYMLINKS prerequisite (see below).
 
 Prerequisites
 -------------
