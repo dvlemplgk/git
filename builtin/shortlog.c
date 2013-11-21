@@ -127,9 +127,11 @@ void shortlog_add_commit(struct shortlog *log, struct commit *commit)
 			author = buffer + 7;
 		buffer = eol;
 	}
-	if (!author)
-		die(_("Missing author: %s"),
+	if (!author) {
+		warning(_("Missing author: %s"),
 		    sha1_to_hex(commit->object.sha1));
+		return;
+	}
 	if (log->user_format) {
 		struct pretty_print_context ctx = {0};
 		ctx.fmt = CMIT_FMT_USERFORMAT;
@@ -137,6 +139,7 @@ void shortlog_add_commit(struct shortlog *log, struct commit *commit)
 		ctx.subject = "";
 		ctx.after_subject = "";
 		ctx.date_mode = DATE_NORMAL;
+		ctx.output_encoding = get_log_output_encoding();
 		pretty_print_commit(&ctx, commit, &ufbuf);
 		buffer = ufbuf.buf;
 	} else if (*buffer) {
