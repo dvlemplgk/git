@@ -590,6 +590,9 @@ sub mw_capabilities {
 	print {*STDOUT} "import\n";
 	print {*STDOUT} "list\n";
 	print {*STDOUT} "push\n";
+	if ($dumb_push) {
+		print {*STDOUT} "no-private-update\n";
+	}
 	print {*STDOUT} "\n";
 	return;
 }
@@ -1221,7 +1224,6 @@ sub mw_push_revision {
 		}
 		if (!$dumb_push) {
 			run_git(qq(notes --ref=${remotename}/mediawiki add -f -m "mediawiki_revision: ${mw_revision}" ${sha1_commit}));
-			run_git(qq(update-ref -m "Git-MediaWiki push" refs/mediawiki/${remotename}/master ${sha1_commit} ${sha1_child}));
 		}
 	}
 
@@ -1313,7 +1315,7 @@ sub get_mw_namespace_id {
 	# Store "notANameSpace" as special value for inexisting namespaces
 	my $store_id = ($id || 'notANameSpace');
 
-	# Store explicitely requested namespaces on disk
+	# Store explicitly requested namespaces on disk
 	if (!exists $cached_mw_namespace_id{$name}) {
 		run_git(qq(config --add remote.${remotename}.namespaceCache "${name}:${store_id}"));
 		$cached_mw_namespace_id{$name} = 1;
