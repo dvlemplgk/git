@@ -64,14 +64,17 @@ static void stuff_change(struct diff_options *opt,
 
 static int builtin_diff_b_f(struct rev_info *revs,
 			    int argc, const char **argv,
-			    struct blobinfo *blob,
-			    const char *path)
+			    struct blobinfo *blob)
 {
 	/* Blob vs file in the working tree*/
 	struct stat st;
+	const char *path;
 
 	if (argc > 1)
 		usage(builtin_diff_usage);
+
+	GUARD_PATHSPEC(&revs->prune_data, PATHSPEC_FROMTOP | PATHSPEC_LITERAL);
+	path = revs->prune_data.items[0].match;
 
 	if (lstat(path, &st))
 		die_errno(_("failed to stat '%s'"), path);
@@ -140,7 +143,7 @@ static int builtin_diff_index(struct rev_info *revs,
 		usage(builtin_diff_usage);
 	if (!cached) {
 		setup_work_tree();
-		if (read_cache_preload(revs->diffopt.pathspec.raw) < 0) {
+		if (read_cache_preload(&revs->diffopt.pathspec) < 0) {
 			perror("read_cache_preload");
 			return -1;
 		}
@@ -169,7 +172,7 @@ static int builtin_diff_tree(struct rev_info *revs,
 	if (ent1->item->flags & UNINTERESTING)
 		swap = 1;
 	sha1[swap] = ent0->item->sha1;
-	sha1[1-swap] = ent1->item->sha1;
+	sha1[1 - swap] = ent1->item->sha1;
 	diff_tree_sha1(sha1[0], sha1[1], "", &revs->diffopt);
 	log_tree_diff_flush(revs);
 	return 0;
@@ -242,7 +245,7 @@ static int builtin_diff_files(struct rev_info *revs, int argc, const char **argv
 		revs->combine_merges = revs->dense_combined_merges = 1;
 
 	setup_work_tree();
-	if (read_cache_preload(revs->diffopt.pathspec.raw) < 0) {
+	if (read_cache_preload(&revs->diffopt.pathspec) < 0) {
 		perror("read_cache_preload");
 		return -1;
 	}
@@ -255,7 +258,6 @@ int cmd_diff(int argc, const char **argv, const char *prefix)
 	struct rev_info rev;
 	struct object_array ent = OBJECT_ARRAY_INIT;
 	int blobs = 0, paths = 0;
-	const char *path = NULL;
 	struct blobinfo blob[2];
 	int nongit;
 	int result = 0;
@@ -366,11 +368,8 @@ int cmd_diff(int argc, const char **argv, const char *prefix)
 			die(_("unhandled object '%s' given."), name);
 		}
 	}
-	if (rev.prune_data.nr) {
-		if (!path)
-			path = rev.prune_data.items[0].match;
+	if (rev.prune_data.nr)
 		paths += rev.prune_data.nr;
-	}
 
 	/*
 	 * Now, do the arguments look reasonable?
@@ -383,7 +382,7 @@ int cmd_diff(int argc, const char **argv, const char *prefix)
 		case 1:
 			if (paths != 1)
 				usage(builtin_diff_usage);
-			result = builtin_diff_b_f(&rev, argc, argv, blob, path);
+			result = builtin_diff_b_f(&rev, argc, argv, blob);
 			break;
 		case 2:
 			if (paths)

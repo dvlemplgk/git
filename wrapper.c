@@ -133,7 +133,7 @@ void *xcalloc(size_t nmemb, size_t size)
 /*
  * Limit size of IO chunks, because huge chunks only cause pain.  OS X
  * 64-bit is buggy, returning EINVAL if len >= INT_MAX; and even in
- * the absense of bugs, large chunks can result in bad latencies when
+ * the absence of bugs, large chunks can result in bad latencies when
  * you decide to kill the process.
  */
 #define MAX_IO_SIZE (8*1024*1024)
@@ -360,10 +360,12 @@ int git_mkstemp_mode(char *pattern, int mode)
 	return git_mkstemps_mode(pattern, 0, mode);
 }
 
+#ifdef NO_MKSTEMPS
 int gitmkstemps(char *pattern, int suffix_len)
 {
 	return git_mkstemps_mode(pattern, suffix_len, 0600);
 }
+#endif
 
 int xmkstemp_mode(char *template, int mode)
 {
