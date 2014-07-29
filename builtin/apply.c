@@ -300,11 +300,13 @@ static int fuzzy_matchlines(const char *s1, size_t n1,
 	while ((*last2 == '\r') || (*last2 == '\n'))
 		last2--;
 
-	/* skip leading whitespace */
-	while (isspace(*s1) && (s1 <= last1))
-		s1++;
-	while (isspace(*s2) && (s2 <= last2))
-		s2++;
+	/* skip leading whitespaces, if both begin with whitespace */
+	if (s1 <= last1 && s2 <= last2 && isspace(*s1) && isspace(*s2)) {
+		while (isspace(*s1) && (s1 <= last1))
+			s1++;
+		while (isspace(*s2) && (s2 <= last2))
+			s2++;
+	}
 	/* early return if both lines are empty */
 	if ((s1 > last1) && (s2 > last2))
 		return 1;
@@ -2867,9 +2869,7 @@ static int apply_binary_fragment(struct image *img, struct patch *patch)
 	case BINARY_LITERAL_DEFLATED:
 		clear_image(img);
 		img->len = fragment->size;
-		img->buf = xmalloc(img->len+1);
-		memcpy(img->buf, fragment->patch, img->len);
-		img->buf[img->len] = '\0';
+		img->buf = xmemdupz(fragment->patch, img->len);
 		return 0;
 	}
 	return -1;

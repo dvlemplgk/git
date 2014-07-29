@@ -40,7 +40,7 @@ static struct tree *shift_tree_object(struct tree *one, struct tree *two,
 
 static struct commit *make_virtual_commit(struct tree *tree, const char *comment)
 {
-	struct commit *commit = xcalloc(1, sizeof(struct commit));
+	struct commit *commit = alloc_commit_node();
 	struct merge_remote_desc *desc = xmalloc(sizeof(*desc));
 
 	desc->name = comment;
@@ -190,9 +190,11 @@ static void output_commit_title(struct merge_options *o, struct commit *commit)
 			printf(_("(bad commit)\n"));
 		else {
 			const char *title;
-			int len = find_commit_subject(commit->buffer, &title);
+			const char *msg = get_commit_buffer(commit, NULL);
+			int len = find_commit_subject(msg, &title);
 			if (len)
 				printf("%.*s\n", len, title);
+			unuse_commit_buffer(commit, msg);
 		}
 	}
 }
@@ -589,6 +591,12 @@ static int remove_file(struct merge_options *o, int clean,
 			return -1;
 	}
 	if (update_working_directory) {
+		if (ignore_case) {
+			struct cache_entry *ce;
+			ce = cache_file_exists(path, strlen(path), ignore_case);
+			if (ce && ce_stage(ce) == 0)
+				return 0;
+		}
 		if (remove_path(path))
 			return -1;
 	}
