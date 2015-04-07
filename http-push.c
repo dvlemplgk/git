@@ -365,7 +365,6 @@ static void start_put(struct transfer_request *request)
 	hdrlen = sprintf(hdr, "%s %lu", typename(type), len) + 1;
 
 	/* Set it up */
-	memset(&stream, 0, sizeof(stream));
 	git_deflate_init(&stream, zlib_compression_level);
 	size = git_deflate_bound(&stream, len + hdrlen);
 	strbuf_init(&request->buffer.buf, size);
@@ -1576,6 +1575,9 @@ static void fetch_symref(const char *path, char **symref, unsigned char *sha1)
 
 	if (buffer.len == 0)
 		return;
+
+	/* Cut off trailing newline. */
+	strbuf_rtrim(&buffer);
 
 	/* If it's a symref, set the refname; otherwise try for a sha1 */
 	if (skip_prefix(buffer.buf, "ref: ", &name)) {

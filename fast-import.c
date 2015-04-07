@@ -947,9 +947,12 @@ static void unkeep_all_packs(void)
 
 static void end_packfile(void)
 {
-	if (!pack_data)
+	static int running;
+
+	if (running || !pack_data)
 		return;
 
+	running = 1;
 	clear_delta_base_cache();
 	if (object_count) {
 		struct packed_git *new_p;
@@ -999,6 +1002,7 @@ static void end_packfile(void)
 	}
 	free(pack_data);
 	pack_data = NULL;
+	running = 0;
 
 	/* We can't carry a delta across packfiles. */
 	strbuf_release(&last_blob.data);
@@ -1058,7 +1062,6 @@ static int store_object(
 	} else
 		delta = NULL;
 
-	memset(&s, 0, sizeof(s));
 	git_deflate_init(&s, pack_compression_level);
 	if (delta) {
 		s.next_in = delta;
@@ -1086,7 +1089,6 @@ static int store_object(
 			free(delta);
 			delta = NULL;
 
-			memset(&s, 0, sizeof(s));
 			git_deflate_init(&s, pack_compression_level);
 			s.next_in = (void *)dat->buf;
 			s.avail_in = dat->len;
@@ -1186,7 +1188,6 @@ static void stream_blob(uintmax_t len, unsigned char *sha1out, uintmax_t mark)
 
 	crc32_begin(pack_file);
 
-	memset(&s, 0, sizeof(s));
 	git_deflate_init(&s, pack_compression_level);
 
 	hdrlen = encode_in_pack_object_header(OBJ_BLOB, len, out_buf);

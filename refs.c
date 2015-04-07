@@ -1618,8 +1618,7 @@ const char *resolve_ref_unsafe(const char *refname, int resolve_flags, unsigned 
 
 char *resolve_refdup(const char *ref, int resolve_flags, unsigned char *sha1, int *flags)
 {
-	const char *ret = resolve_ref_unsafe(ref, resolve_flags, sha1, flags);
-	return ret ? xstrdup(ret) : NULL;
+	return xstrdup_or_null(resolve_ref_unsafe(ref, resolve_flags, sha1, flags));
 }
 
 /* The argument to filter_refs */
@@ -1907,6 +1906,11 @@ static int do_for_each_ref(struct ref_cache *refs, const char *base,
 	data.flags = flags;
 	data.fn = fn;
 	data.cb_data = cb_data;
+
+	if (ref_paranoia < 0)
+		ref_paranoia = git_env_bool("GIT_REF_PARANOIA", 0);
+	if (ref_paranoia)
+		data.flags |= DO_FOR_EACH_INCLUDE_BROKEN;
 
 	return do_for_each_entry(refs, base, do_one_ref, &data);
 }
@@ -2322,6 +2326,7 @@ static struct ref_lock *lock_ref_sha1_basic(const char *refname,
 
 	lock->lock_fd = hold_lock_file_for_update(lock->lk, ref_file, lflags);
 	if (lock->lock_fd < 0) {
+		last_errno = errno;
 		if (errno == ENOENT && --attempts_remaining > 0)
 			/*
 			 * Maybe somebody just deleted one of the
@@ -2329,8 +2334,13 @@ static struct ref_lock *lock_ref_sha1_basic(const char *refname,
 			 * again:
 			 */
 			goto retry;
-		else
-			unable_to_lock_die(ref_file, errno);
+		else {
+			struct strbuf err = STRBUF_INIT;
+			unable_to_lock_message(ref_file, errno, &err);
+			error("%s", err.buf);
+			strbuf_release(&err);
+			goto error_return;
+		}
 	}
 	return old_sha1 ? verify_lock(lock, old_sha1, mustexist) : lock;
 
@@ -2586,79 +2596,24 @@ int pack_refs(unsigned int flags)
 	return 0;
 }
 
-/*
- * If entry is no longer needed in packed-refs, add it to the string
- * list pointed to by cb_data.  Reasons for deleting entries:
- *
- * - Entry is broken.
- * - Entry is overridden by a loose ref.
- * - Entry does not point at a valid object.
- *
- * In the first and third cases, also emit an error message because these
- * are indications of repository corruption.
- */
-static int curate_packed_ref_fn(struct ref_entry *entry, void *cb_data)
-{
-	struct string_list *refs_to_delete = cb_data;
-
-	if (entry->flag & REF_ISBROKEN) {
-		/* This shouldn't happen to packed refs. */
-		error("%s is broken!", entry->name);
-		string_list_append(refs_to_delete, entry->name);
-		return 0;
-	}
-	if (!has_sha1_file(entry->u.value.sha1)) {
-		unsigned char sha1[20];
-		int flags;
-
-		if (read_ref_full(entry->name, 0, sha1, &flags))
-			/* We should at least have found the packed ref. */
-			die("Internal error");
-		if ((flags & REF_ISSYMREF) || !(flags & REF_ISPACKED)) {
-			/*
-			 * This packed reference is overridden by a
-			 * loose reference, so it is OK that its value
-			 * is no longer valid; for example, it might
-			 * refer to an object that has been garbage
-			 * collected.  For this purpose we don't even
-			 * care whether the loose reference itself is
-			 * invalid, broken, symbolic, etc.  Silently
-			 * remove the packed reference.
-			 */
-			string_list_append(refs_to_delete, entry->name);
-			return 0;
-		}
-		/*
-		 * There is no overriding loose reference, so the fact
-		 * that this reference doesn't refer to a valid object
-		 * indicates some kind of repository corruption.
-		 * Report the problem, then omit the reference from
-		 * the output.
-		 */
-		error("%s does not point to a valid object!", entry->name);
-		string_list_append(refs_to_delete, entry->name);
-		return 0;
-	}
-
-	return 0;
-}
-
-int repack_without_refs(const char **refnames, int n, struct strbuf *err)
+int repack_without_refs(struct string_list *refnames, struct strbuf *err)
 {
 	struct ref_dir *packed;
-	struct string_list refs_to_delete = STRING_LIST_INIT_DUP;
-	struct string_list_item *ref_to_delete;
-	int i, ret, removed = 0;
+	struct string_list_item *refname;
+	int ret, needs_repacking = 0, removed = 0;
 
 	assert(err);
 
 	/* Look for a packed ref */
-	for (i = 0; i < n; i++)
-		if (get_packed_ref(refnames[i]))
+	for_each_string_list_item(refname, refnames) {
+		if (get_packed_ref(refname->string)) {
+			needs_repacking = 1;
 			break;
+		}
+	}
 
 	/* Avoid locking if we have nothing to do */
-	if (i == n)
+	if (!needs_repacking)
 		return 0; /* no refname exists in packed refs */
 
 	if (lock_packed_refs(0)) {
@@ -2668,8 +2623,8 @@ int repack_without_refs(const char **refnames, int n, struct strbuf *err)
 	packed = get_packed_refs(&ref_cache);
 
 	/* Remove refnames from the cache */
-	for (i = 0; i < n; i++)
-		if (remove_entry(packed, refnames[i]) != -1)
+	for_each_string_list_item(refname, refnames)
+		if (remove_entry(packed, refname->string) != -1)
 			removed = 1;
 	if (!removed) {
 		/*
@@ -2678,13 +2633,6 @@ int repack_without_refs(const char **refnames, int n, struct strbuf *err)
 		 */
 		rollback_packed_refs();
 		return 0;
-	}
-
-	/* Remove any other accumulated cruft */
-	do_for_each_entry_in_dir(packed, 0, curate_packed_ref_fn, &refs_to_delete);
-	for_each_string_list_item(ref_to_delete, &refs_to_delete) {
-		if (remove_entry(packed, ref_to_delete->string) == -1)
-			die("internal error");
 	}
 
 	/* Write what remains */
@@ -3767,10 +3715,11 @@ static int ref_update_reject_duplicates(struct ref_update **updates, int n,
 int ref_transaction_commit(struct ref_transaction *transaction,
 			   struct strbuf *err)
 {
-	int ret = 0, delnum = 0, i;
-	const char **delnames;
+	int ret = 0, i;
 	int n = transaction->nr;
 	struct ref_update **updates = transaction->updates;
+	struct string_list refs_to_delete = STRING_LIST_INIT_NODUP;
+	struct string_list_item *ref_to_delete;
 
 	assert(err);
 
@@ -3781,9 +3730,6 @@ int ref_transaction_commit(struct ref_transaction *transaction,
 		transaction->state = REF_TRANSACTION_CLOSED;
 		return 0;
 	}
-
-	/* Allocate work space */
-	delnames = xmalloc(sizeof(*delnames) * n);
 
 	/* Copy, sort, and reject duplicate refs */
 	qsort(updates, n, sizeof(*updates), ref_update_compare);
@@ -3844,16 +3790,17 @@ int ref_transaction_commit(struct ref_transaction *transaction,
 			}
 
 			if (!(update->flags & REF_ISPRUNING))
-				delnames[delnum++] = update->lock->ref_name;
+				string_list_append(&refs_to_delete,
+						   update->lock->ref_name);
 		}
 	}
 
-	if (repack_without_refs(delnames, delnum, err)) {
+	if (repack_without_refs(&refs_to_delete, err)) {
 		ret = TRANSACTION_GENERIC_ERROR;
 		goto cleanup;
 	}
-	for (i = 0; i < delnum; i++)
-		unlink_or_warn(git_path("logs/%s", delnames[i]));
+	for_each_string_list_item(ref_to_delete, &refs_to_delete)
+		unlink_or_warn(git_path("logs/%s", ref_to_delete->string));
 	clear_loose_ref_cache(&ref_cache);
 
 cleanup:
@@ -3862,7 +3809,7 @@ cleanup:
 	for (i = 0; i < n; i++)
 		if (updates[i]->lock)
 			unlock_ref(updates[i]->lock);
-	free(delnames);
+	string_list_clear(&refs_to_delete, 0);
 	return ret;
 }
 
