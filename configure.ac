@@ -754,6 +754,19 @@ AC_CHECK_TYPES([struct itimerval],
 [#include <sys/time.h>])
 GIT_CONF_SUBST([NO_STRUCT_ITIMERVAL])
 #
+# Define USE_ST_TIMESPEC=YesPlease when stat.st_mtimespec.tv_nsec exists.
+# Define NO_NSEC=YesPlease when neither stat.st_mtim.tv_nsec nor
+# stat.st_mtimespec.tv_nsec exists.
+AC_CHECK_MEMBER([struct stat.st_mtimespec.tv_nsec])
+AC_CHECK_MEMBER([struct stat.st_mtim.tv_nsec])
+if test x$ac_cv_member_struct_stat_st_mtimespec_tv_nsec = xyes; then
+	USE_ST_TIMESPEC=YesPlease
+	GIT_CONF_SUBST([USE_ST_TIMESPEC])
+elif test x$ac_cv_member_struct_stat_st_mtim_tv_nsec != xyes; then
+	NO_NSEC=YesPlease
+	GIT_CONF_SUBST([NO_NSEC])
+fi
+#
 # Define NO_D_INO_IN_DIRENT if you don't have d_ino in your struct dirent.
 AC_CHECK_MEMBER(struct dirent.d_ino,
 [NO_D_INO_IN_DIRENT=],
@@ -873,6 +886,29 @@ else
 	SNPRINTF_RETURNS_BOGUS=
 fi
 GIT_CONF_SUBST([SNPRINTF_RETURNS_BOGUS])
+#
+# Define NEEDS_MODE_TRANSLATION if your OS strays from the typical file type
+# bits in mode values.
+AC_CACHE_CHECK([whether the platform uses typical file type bits],
+ [ac_cv_sane_mode_bits], [
+AC_EGREP_CPP(yippeeyeswehaveit,
+	AC_LANG_PROGRAM([AC_INCLUDES_DEFAULT],
+[#if S_IFMT == 0170000 && \
+	S_IFREG == 0100000 && S_IFDIR == 0040000 && S_IFLNK == 0120000 && \
+	S_IFBLK == 0060000 && S_IFCHR == 0020000 && \
+	S_IFIFO == 0010000 && S_IFSOCK == 0140000
+yippeeyeswehaveit
+#endif
+]),
+	[ac_cv_sane_mode_bits=yes],
+	[ac_cv_sane_mode_bits=no])
+])
+if test $ac_cv_sane_mode_bits = yes; then
+	NEEDS_MODE_TRANSLATION=
+else
+	NEEDS_MODE_TRANSLATION=UnfortunatelyYes
+fi
+GIT_CONF_SUBST([NEEDS_MODE_TRANSLATION])
 
 
 ## Checks for library functions.
@@ -910,6 +946,32 @@ AC_CHECK_LIB([iconv], [locale_charset],
        [AC_CHECK_LIB([charset], [locale_charset],
                      [CHARSET_LIB=-lcharset])])
 GIT_CONF_SUBST([CHARSET_LIB])
+#
+# Define NO_HMAC_CTX_CLEANUP=YesPlease if HMAC_CTX_cleanup is missing.
+AC_CHECK_LIB([crypto], [HMAC_CTX_cleanup],
+	[], [GIT_CONF_SUBST([NO_HMAC_CTX_CLEANUP], [YesPlease])])
+#
+# Define HAVE_CLOCK_GETTIME=YesPlease if clock_gettime is available.
+GIT_CHECK_FUNC(clock_gettime,
+	[HAVE_CLOCK_GETTIME=YesPlease],
+	[HAVE_CLOCK_GETTIME=])
+GIT_CONF_SUBST([HAVE_CLOCK_GETTIME])
+
+AC_DEFUN([CLOCK_MONOTONIC_SRC], [
+AC_LANG_PROGRAM([[
+#include <time.h>
+clockid_t id = CLOCK_MONOTONIC;
+]])])
+
+#
+# Define HAVE_CLOCK_MONOTONIC=YesPlease if CLOCK_MONOTONIC is available.
+AC_MSG_CHECKING([for CLOCK_MONOTONIC])
+AC_COMPILE_IFELSE([CLOCK_MONOTONIC_SRC],
+	[AC_MSG_RESULT([yes])
+	HAVE_CLOCK_MONOTONIC=YesPlease],
+	[AC_MSG_RESULT([no])
+	HAVE_CLOCK_MONOTONIC=])
+GIT_CONF_SUBST([HAVE_CLOCK_MONOTONIC])
 #
 # Define NO_SETITIMER if you don't have setitimer.
 GIT_CHECK_FUNC(setitimer,

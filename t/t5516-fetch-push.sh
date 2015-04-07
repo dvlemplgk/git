@@ -238,7 +238,7 @@ test_expect_success 'push with pushInsteadOf' '
 test_expect_success 'push with pushInsteadOf and explicit pushurl (pushInsteadOf should not rewrite)' '
 	mk_empty testrepo &&
 	test_config "url.trash2/.pushInsteadOf" testrepo/ &&
-	test_config "url.trash3/.pusnInsteadOf" trash/wrong &&
+	test_config "url.trash3/.pushInsteadOf" trash/wrong &&
 	test_config remote.r.url trash/wrong &&
 	test_config remote.r.pushurl "testrepo/" &&
 	git push r refs/heads/master:refs/remotes/origin/master &&
@@ -1107,9 +1107,16 @@ test_expect_success 'fetch exact SHA1' '
 			git config uploadpack.allowtipsha1inwant true
 		) &&
 
-		git fetch -v ../testrepo $the_commit:refs/heads/copy &&
-		result=$(git rev-parse --verify refs/heads/copy) &&
-		test "$the_commit" = "$result"
+		git fetch -v ../testrepo $the_commit:refs/heads/copy master:refs/heads/extra &&
+		cat >expect <<-EOF &&
+		$the_commit
+		$the_first_commit
+		EOF
+		{
+			git rev-parse --verify refs/heads/copy &&
+			git rev-parse --verify refs/heads/extra
+		} >actual &&
+		test_cmp expect actual
 	)
 '
 
@@ -1328,6 +1335,110 @@ test_expect_success 'fetch into bare respects core.logallrefupdates' '
 		git log -g --format="%gd %gs" two >actual &&
 		test_cmp expect actual
 	)
+'
+
+test_expect_success 'receive.denyCurrentBranch = updateInstead' '
+	git push testrepo master &&
+	(
+		cd testrepo &&
+		git reset --hard &&
+		git config receive.denyCurrentBranch updateInstead
+	) &&
+	test_commit third path2 &&
+
+	# Try pushing into a repository with pristine working tree
+	git push testrepo master &&
+	(
+		cd testrepo &&
+		git update-index -q --refresh &&
+		git diff-files --quiet -- &&
+		git diff-index --quiet --cached HEAD -- &&
+		test third = "$(cat path2)" &&
+		test $(git -C .. rev-parse HEAD) = $(git rev-parse HEAD)
+	) &&
+
+	# Try pushing into a repository with working tree needing a refresh
+	(
+		cd testrepo &&
+		git reset --hard HEAD^ &&
+		test $(git -C .. rev-parse HEAD^) = $(git rev-parse HEAD) &&
+		test-chmtime +100 path1
+	) &&
+	git push testrepo master &&
+	(
+		cd testrepo &&
+		git update-index -q --refresh &&
+		git diff-files --quiet -- &&
+		git diff-index --quiet --cached HEAD -- &&
+		test_cmp ../path1 path1 &&
+		test third = "$(cat path2)" &&
+		test $(git -C .. rev-parse HEAD) = $(git rev-parse HEAD)
+	) &&
+
+	# Update what is to be pushed
+	test_commit fourth path2 &&
+
+	# Try pushing into a repository with a dirty working tree
+	# (1) the working tree updated
+	(
+		cd testrepo &&
+		echo changed >path1
+	) &&
+	test_must_fail git push testrepo master &&
+	(
+		cd testrepo &&
+		test $(git -C .. rev-parse HEAD^) = $(git rev-parse HEAD) &&
+		git diff --quiet --cached &&
+		test changed = "$(cat path1)"
+	) &&
+
+	# (2) the index updated
+	(
+		cd testrepo &&
+		echo changed >path1 &&
+		git add path1
+	) &&
+	test_must_fail git push testrepo master &&
+	(
+		cd testrepo &&
+		test $(git -C .. rev-parse HEAD^) = $(git rev-parse HEAD) &&
+		git diff --quiet &&
+		test changed = "$(cat path1)"
+	) &&
+
+	# Introduce a new file in the update
+	test_commit fifth path3 &&
+
+	# (3) the working tree has an untracked file that would interfere
+	(
+		cd testrepo &&
+		git reset --hard &&
+		echo changed >path3
+	) &&
+	test_must_fail git push testrepo master &&
+	(
+		cd testrepo &&
+		test $(git -C .. rev-parse HEAD^^) = $(git rev-parse HEAD) &&
+		git diff --quiet &&
+		git diff --quiet --cached &&
+		test changed = "$(cat path3)"
+	) &&
+
+	# (4) the target changes to what gets pushed but it still is a change
+	(
+		cd testrepo &&
+		git reset --hard &&
+		echo fifth >path3 &&
+		git add path3
+	) &&
+	test_must_fail git push testrepo master &&
+	(
+		cd testrepo &&
+		test $(git -C .. rev-parse HEAD^^) = $(git rev-parse HEAD) &&
+		git diff --quiet &&
+		test fifth = "$(cat path3)"
+	)
+
 '
 
 test_done

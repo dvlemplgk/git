@@ -140,6 +140,9 @@ else
 	}
 fi
 
+: ${ASAN_OPTIONS=detect_leaks=0}
+export ASAN_OPTIONS
+
 # Protect ourselves from common misconfiguration to export
 # CDPATH into the environment
 unset CDPATH
@@ -181,16 +184,8 @@ export _x05 _x40 _z40 LF u200c
 # This test checks if command xyzzy does the right thing...
 # '
 # . ./test-lib.sh
-[ "x$ORIGINAL_TERM" != "xdumb" ] && (
-		TERM=$ORIGINAL_TERM &&
-		export TERM &&
-		[ -t 1 ] &&
-		tput bold >/dev/null 2>&1 &&
-		tput setaf 1 >/dev/null 2>&1 &&
-		tput sgr0 >/dev/null 2>&1
-	) &&
-	color=t
 
+unset color
 while test "$#" -ne 0
 do
 	case "$1" in
@@ -253,40 +248,6 @@ then
 elif test -n "$valgrind"
 then
 	verbose=t
-fi
-
-if test -n "$color"
-then
-	say_color () {
-		(
-		TERM=$ORIGINAL_TERM
-		export TERM
-		case "$1" in
-		error)
-			tput bold; tput setaf 1;; # bold red
-		skip)
-			tput setaf 4;; # blue
-		warn)
-			tput setaf 3;; # brown/yellow
-		pass)
-			tput setaf 2;; # green
-		info)
-			tput setaf 6;; # cyan
-		*)
-			test -n "$quiet" && return;;
-		esac
-		shift
-		printf "%s" "$*"
-		tput sgr0
-		echo
-		)
-	}
-else
-	say_color() {
-		test -z "$1" && test -n "$quiet" && return
-		shift
-		printf "%s\n" "$*"
-	}
 fi
 
 error () {
@@ -681,7 +642,7 @@ test_done () {
 		then
 			error "Can't use skip_all after running some tests"
 		fi
-		[ -z "$skip_all" ] || skip_all=" # SKIP $skip_all"
+		test -z "$skip_all" || skip_all=" # SKIP $skip_all"
 
 		if test $test_external_has_tap -eq 0
 		then
@@ -854,6 +815,52 @@ HOME="$TRASH_DIRECTORY"
 GNUPGHOME="$HOME/gnupg-home-not-used"
 export HOME GNUPGHOME
 
+# run the tput tests *after* changing HOME (in case ncurses needs
+# ~/.terminfo for $TERM)
+test -n "${color+set}" || test "x$ORIGINAL_TERM" != "xdumb" && (
+		TERM=$ORIGINAL_TERM &&
+		export TERM &&
+		test -t 1 &&
+		tput bold >/dev/null 2>&1 &&
+		tput setaf 1 >/dev/null 2>&1 &&
+		tput sgr0 >/dev/null 2>&1
+	) &&
+	color=t
+
+if test -n "$color"
+then
+	say_color () {
+		(
+		TERM=$ORIGINAL_TERM
+		export TERM
+		case "$1" in
+		error)
+			tput bold; tput setaf 1;; # bold red
+		skip)
+			tput setaf 4;; # blue
+		warn)
+			tput setaf 3;; # brown/yellow
+		pass)
+			tput setaf 2;; # green
+		info)
+			tput setaf 6;; # cyan
+		*)
+			test -n "$quiet" && return;;
+		esac
+		shift
+		printf "%s" "$*"
+		tput sgr0
+		echo
+		)
+	}
+else
+	say_color() {
+		test -z "$1" && test -n "$quiet" && return
+		shift
+		printf "%s\n" "$*"
+	}
+fi
+
 if test -z "$TEST_NO_CREATE_REPO"
 then
 	test_create_repo "$TRASH_DIRECTORY"
@@ -1024,9 +1031,33 @@ test_lazy_prereq USR_BIN_TIME '
 	test -x /usr/bin/time
 '
 
-# When the tests are run as root, permission tests will report that
-# things are writable when they shouldn't be.
-test -w / || test_set_prereq SANITY
+test_lazy_prereq NOT_ROOT '
+	uid=$(id -u) &&
+	test "$uid" != 0
+'
+
+# On a filesystem that lacks SANITY, a file can be deleted even if
+# the containing directory doesn't have write permissions, or a file
+# can be accessed even if the containing directory doesn't have read
+# or execute permissions, causing our tests that validate that Git
+# works sensibly in such situations.
+test_lazy_prereq SANITY '
+	mkdir SANETESTD.1 SANETESTD.2 &&
+
+	chmod +w SANETESTD.1 SANETESTD.2 &&
+	>SANETESTD.1/x 2>SANETESTD.2/x &&
+	chmod -w SANETESTD.1 &&
+	chmod -rx SANETESTD.2 ||
+	error "bug in test sript: cannot prepare SANETESTD"
+
+	! rm SANETESTD.1/x && ! test -f SANETESTD.2/x
+	status=$?
+
+	chmod +rwx SANETESTD.1 SANETESTD.2 &&
+	rm -rf SANETESTD.1 SANETESTD.2 ||
+	error "bug in test sript: cannot clean SANETESTD"
+	return $status
+'
 
 GIT_UNZIP=${GIT_UNZIP:-unzip}
 test_lazy_prereq UNZIP '

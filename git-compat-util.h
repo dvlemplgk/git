@@ -75,7 +75,8 @@
 # endif
 #elif !defined(__APPLE__) && !defined(__FreeBSD__) && !defined(__USLC__) && \
       !defined(_M_UNIX) && !defined(__sgi) && !defined(__DragonFly__) && \
-      !defined(__TANDEM) && !defined(__QNX__) && !defined(__MirBSD__)
+      !defined(__TANDEM) && !defined(__QNX__) && !defined(__MirBSD__) && \
+      !defined(__CYGWIN__)
 #define _XOPEN_SOURCE 600 /* glibc2 and AIX 5.3L need 500, OpenBSD needs 600 for S_ISLNK() */
 #define _XOPEN_SOURCE_EXTENDED 1 /* AIX 5.3L needs this */
 #endif
@@ -163,15 +164,9 @@
 typedef long intptr_t;
 typedef unsigned long uintptr_t;
 #endif
-#if defined(__CYGWIN__)
-#undef _XOPEN_SOURCE
-#include <grp.h>
-#define _XOPEN_SOURCE 600
-#else
 #undef _ALL_SOURCE /* AIX 5.3L defines a struct list with _ALL_SOURCE. */
 #include <grp.h>
 #define _ALL_SOURCE 1
-#endif
 #endif
 
 /* used on Mac OS X */
@@ -211,8 +206,18 @@ extern char *gitbasename(char *);
 #endif
 
 #ifndef NO_OPENSSL
+#ifdef __APPLE__
+#define __AVAILABILITY_MACROS_USES_AVAILABILITY 0
+#include <AvailabilityMacros.h>
+#undef DEPRECATED_ATTRIBUTE
+#define DEPRECATED_ATTRIBUTE
+#undef __AVAILABILITY_MACROS_USES_AVAILABILITY
+#endif
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#ifdef NO_HMAC_CTX_CLEANUP
+#define HMAC_CTX_cleanup HMAC_cleanup
+#endif
 #endif
 
 /* On most systems <netdb.h> would have given us this, but
@@ -474,6 +479,40 @@ extern int git_munmap(void *start, size_t length);
 #define on_disk_bytes(st) ((st).st_blocks * 512)
 #endif
 
+#ifdef NEEDS_MODE_TRANSLATION
+#undef S_IFMT
+#undef S_IFREG
+#undef S_IFDIR
+#undef S_IFLNK
+#undef S_IFBLK
+#undef S_IFCHR
+#undef S_IFIFO
+#undef S_IFSOCK
+#define S_IFMT   0170000
+#define S_IFREG  0100000
+#define S_IFDIR  0040000
+#define S_IFLNK  0120000
+#define S_IFBLK  0060000
+#define S_IFCHR  0020000
+#define S_IFIFO  0010000
+#define S_IFSOCK 0140000
+#ifdef stat
+#undef stat
+#endif
+#define stat(path, buf) git_stat(path, buf)
+extern int git_stat(const char *, struct stat *);
+#ifdef fstat
+#undef fstat
+#endif
+#define fstat(fd, buf) git_fstat(fd, buf)
+extern int git_fstat(int, struct stat *);
+#ifdef lstat
+#undef lstat
+#endif
+#define lstat(path, buf) git_lstat(path, buf)
+extern int git_lstat(const char *, struct stat *);
+#endif
+
 #define DEFAULT_PACKED_GIT_LIMIT \
 	((1024L * 1024L) * (sizeof(void*) >= 8 ? 8192 : 256))
 
@@ -636,6 +675,11 @@ extern char *xgetcwd(void);
 
 #define REALLOC_ARRAY(x, alloc) (x) = xrealloc((x), (alloc) * sizeof(*(x)))
 
+static inline char *xstrdup_or_null(const char *str)
+{
+	return str ? xstrdup(str) : NULL;
+}
+
 static inline size_t xsize_t(off_t len)
 {
 	if (len > (size_t) len)
@@ -644,7 +688,7 @@ static inline size_t xsize_t(off_t len)
 }
 
 /* in ctype.c, for kwset users */
-extern const char tolower_trans_tbl[256];
+extern const unsigned char tolower_trans_tbl[256];
 
 /* Sane ctype - no locale, and works with signed chars */
 #undef isascii

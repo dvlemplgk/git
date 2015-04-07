@@ -122,9 +122,7 @@ static int prepare_trace_line(const char *file, int line,
 
 static void print_trace_line(struct trace_key *key, struct strbuf *buf)
 {
-	/* append newline if missing */
-	if (buf->len && buf->buf[buf->len - 1] != '\n')
-		strbuf_addch(buf, '\n');
+	strbuf_complete_line(buf);
 
 	write_or_whine_pipe(get_trace_fd(key), buf->buf, buf->len, err_msg);
 	strbuf_release(buf);
@@ -324,7 +322,7 @@ int trace_want(struct trace_key *key)
 	return !!get_trace_fd(key);
 }
 
-#ifdef HAVE_CLOCK_GETTIME
+#if defined(HAVE_CLOCK_GETTIME) && defined(HAVE_CLOCK_MONOTONIC)
 
 static inline uint64_t highres_nanos(void)
 {

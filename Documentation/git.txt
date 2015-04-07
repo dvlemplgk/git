@@ -43,6 +43,16 @@ unreleased) version of Git, that is available from the 'master'
 branch of the `git.git` repository.
 Documentation for older releases are available here:
 
+* link:v2.3.5/git.html[documentation for release 2.3.5]
+
+* release notes for
+  link:RelNotes/2.3.5.txt[2.3.5],
+  link:RelNotes/2.3.4.txt[2.3.4],
+  link:RelNotes/2.3.3.txt[2.3.3],
+  link:RelNotes/2.3.2.txt[2.3.2],
+  link:RelNotes/2.3.1.txt[2.3.1],
+  link:RelNotes/2.3.0.txt[2.3].
+
 * link:v2.2.2/git.html[documentation for release 2.2.2]
 
 * release notes for
@@ -760,7 +770,8 @@ Git so take care if using Cogito etc.
 'GIT_INDEX_VERSION'::
 	This environment variable allows the specification of an index
 	version for new repositories.  It won't affect existing index
-	files.  By default index file version [23] is used.
+	files.  By default index file version 2 or 3 is used. See
+	linkgit:git-update-index[1] for more information.
 
 'GIT_OBJECT_DIRECTORY'::
 	If the object storage directory is specified via this
@@ -887,19 +898,21 @@ other
 	and the `core.editor` option in linkgit:git-config[1].
 
 'GIT_SSH'::
-	If this environment variable is set then 'git fetch'
-	and 'git push' will use this command instead
-	of 'ssh' when they need to connect to a remote system.
-	The '$GIT_SSH' command will be given exactly two or
-	four arguments: the 'username@host' (or just 'host')
-	from the URL and the shell command to execute on that
-	remote system, optionally preceded by '-p' (literally) and
-	the 'port' from the URL when it specifies something other
-	than the default SSH port.
+'GIT_SSH_COMMAND'::
+	If either of these environment variables is set then 'git fetch'
+	and 'git push' will use the specified command instead of 'ssh'
+	when they need to connect to a remote system.
+	The command will be given exactly two or four arguments: the
+	'username@host' (or just 'host') from the URL and the shell
+	command to execute on that remote system, optionally preceded by
+	'-p' (literally) and the 'port' from the URL when it specifies
+	something other than the default SSH port.
 +
-To pass options to the program that you want to list in GIT_SSH
-you will need to wrap the program and options into a shell script,
-then set GIT_SSH to refer to the shell script.
+`$GIT_SSH_COMMAND` takes precedence over `$GIT_SSH`, and is interpreted
+by the shell, which allows additional arguments to be included.
+`$GIT_SSH` on the other hand must be just the path to a program
+(which can be a wrapper shell script, if additional arguments are
+needed).
 +
 Usually it is easier to configure any desired options through your
 personal `.ssh/config` file.  Please consult your ssh documentation
@@ -911,6 +924,10 @@ for further details.
 	will call this program with a suitable prompt as command-line argument
 	and read the password from its STDOUT. See also the 'core.askpass'
 	option in linkgit:git-config[1].
+
+'GIT_TERMINAL_PROMPT'::
+	If this environment variable is set to `0`, git will not prompt
+	on the terminal (e.g., when asking for HTTP authentication).
 
 'GIT_CONFIG_NOSYSTEM'::
 	Whether to skip reading settings from the system-wide
@@ -1011,6 +1028,17 @@ GIT_ICASE_PATHSPECS::
 	helper function in `git-sh-setup` to set its name to this
 	variable when it is invoked as the top level command by the
 	end user, to be recorded in the body of the reflog.
+
+`GIT_REF_PARANOIA`::
+	If set to `1`, include broken or badly named refs when iterating
+	over lists of refs. In a normal, non-corrupted repository, this
+	does nothing. However, enabling it may help git to detect and
+	abort some operations in the presence of broken refs. Git sets
+	this variable automatically when performing destructive
+	operations like linkgit:git-prune[1]. You should not need to set
+	it yourself unless you want to be paranoid about making sure
+	an operation has touched every ref (e.g., because you are
+	cloning a repository to make a backup).
 
 
 Discussion[[Discussion]]

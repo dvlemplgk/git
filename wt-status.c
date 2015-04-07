@@ -726,7 +726,6 @@ static void wt_status_print_changed(struct wt_status *s)
 static void wt_status_print_submodule_summary(struct wt_status *s, int uncommitted)
 {
 	struct child_process sm_summary = CHILD_PROCESS_INIT;
-	struct argv_array argv = ARGV_ARRAY_INIT;
 	struct strbuf cmd_stdout = STRBUF_INIT;
 	struct strbuf summary = STRBUF_INIT;
 	char *summary_content;
@@ -735,23 +734,21 @@ static void wt_status_print_submodule_summary(struct wt_status *s, int uncommitt
 	argv_array_pushf(&sm_summary.env_array, "GIT_INDEX_FILE=%s",
 			 s->index_file);
 
-	argv_array_push(&argv, "submodule");
-	argv_array_push(&argv, "summary");
-	argv_array_push(&argv, uncommitted ? "--files" : "--cached");
-	argv_array_push(&argv, "--for-status");
-	argv_array_push(&argv, "--summary-limit");
-	argv_array_pushf(&argv, "%d", s->submodule_summary);
+	argv_array_push(&sm_summary.args, "submodule");
+	argv_array_push(&sm_summary.args, "summary");
+	argv_array_push(&sm_summary.args, uncommitted ? "--files" : "--cached");
+	argv_array_push(&sm_summary.args, "--for-status");
+	argv_array_push(&sm_summary.args, "--summary-limit");
+	argv_array_pushf(&sm_summary.args, "%d", s->submodule_summary);
 	if (!uncommitted)
-		argv_array_push(&argv, s->amend ? "HEAD^" : "HEAD");
+		argv_array_push(&sm_summary.args, s->amend ? "HEAD^" : "HEAD");
 
-	sm_summary.argv = argv.argv;
 	sm_summary.git_cmd = 1;
 	sm_summary.no_stdin = 1;
 	fflush(s->fp);
 	sm_summary.out = -1;
 
 	run_command(&sm_summary);
-	argv_array_clear(&argv);
 
 	len = strbuf_read(&cmd_stdout, sm_summary.out, 1024);
 
@@ -1143,7 +1140,7 @@ static char *read_and_strip_branch(const char *path)
 	if (strbuf_read_file(&sb, git_path("%s", path), 0) <= 0)
 		goto got_nothing;
 
-	while (&sb.len && sb.buf[sb.len - 1] == '\n')
+	while (sb.len && sb.buf[sb.len - 1] == '\n')
 		strbuf_setlen(&sb, sb.len - 1);
 	if (!sb.len)
 		goto got_nothing;

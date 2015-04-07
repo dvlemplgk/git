@@ -65,13 +65,6 @@ unsigned long git_deflate_bound(git_zstream *, unsigned long);
  *
  * The value 0160000 is not normally a valid mode, and
  * also just happens to be S_IFDIR + S_IFLNK
- *
- * NOTE! We *really* shouldn't depend on the S_IFxxx macros
- * always having the same values everywhere. We should use
- * our internal git values for these things, and then we can
- * translate that to the OS-specific value. It just so
- * happens that everybody shares the same bit representation
- * in the UNIX world (and apparently wider too..)
  */
 #define S_IFGITLINK	0160000
 #define S_ISGITLINK(m)	(((m) & S_IFMT) == S_IFGITLINK)
@@ -619,6 +612,14 @@ extern int core_apply_sparse_checkout;
 extern int precomposed_unicode;
 extern int protect_hfs;
 extern int protect_ntfs;
+
+/*
+ * Include broken refs in all ref iterations, which will
+ * generally choke dangerous operations rather than letting
+ * them silently proceed without taking the broken ref into
+ * account.
+ */
+extern int ref_paranoia;
 
 /*
  * The character that begins a commented line in user-editable file
@@ -1261,6 +1262,10 @@ extern int unpack_object_header(struct packed_git *, struct pack_window **, off_
  *
  * Any callback that is NULL will be ignored. Callbacks returning non-zero
  * will end the iteration.
+ *
+ * In the "buf" variant, "path" is a strbuf which will also be used as a
+ * scratch buffer, but restored to its original contents before
+ * the function returns.
  */
 typedef int each_loose_object_fn(const unsigned char *sha1,
 				 const char *path,
@@ -1276,6 +1281,11 @@ int for_each_loose_file_in_objdir(const char *path,
 				  each_loose_cruft_fn cruft_cb,
 				  each_loose_subdir_fn subdir_cb,
 				  void *data);
+int for_each_loose_file_in_objdir_buf(struct strbuf *path,
+				      each_loose_object_fn obj_cb,
+				      each_loose_cruft_fn cruft_cb,
+				      each_loose_subdir_fn subdir_cb,
+				      void *data);
 
 /*
  * Iterate over loose and packed objects in both the local
@@ -1505,7 +1515,7 @@ extern const char *pager_program;
 extern int pager_in_use(void);
 extern int pager_use_color;
 extern int term_columns(void);
-extern int decimal_width(int);
+extern int decimal_width(uintmax_t);
 extern int check_pager_config(const char *cmd);
 
 extern const char *editor_program;
@@ -1567,7 +1577,6 @@ extern int ws_blank_line(const char *line, int len, unsigned ws_rule);
 #define ws_tab_width(rule)     ((rule) & WS_TAB_WIDTH_MASK)
 
 /* ls-files */
-int report_path_error(const char *ps_matched, const struct pathspec *pathspec, const char *prefix);
 void overlay_tree_on_cache(const char *tree_name, const char *prefix);
 
 char *alias_lookup(const char *alias);
