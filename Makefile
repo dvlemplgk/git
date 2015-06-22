@@ -348,6 +348,17 @@ all::
 #
 # Define NO_HMAC_CTX_CLEANUP if your OpenSSL is version 0.9.6b or earlier to
 # cleanup the HMAC context with the older HMAC_cleanup function.
+#
+# Define USE_PARENS_AROUND_GETTEXT_N to "yes" if your compiler happily
+# compiles the following initialization:
+#
+#   static const char s[] = ("FOO");
+#
+# and define it to "no" if you need to remove the parentheses () around the
+# constant.  The default is "auto", which means to use parentheses if your
+# compiler is detected to support it.
+#
+# Define HAVE_BSD_SYSCTL if your platform has a BSD-compatible sysctl function.
 
 GIT-VERSION-FILE: FORCE
 	@$(SHELL_PATH) ./GIT-VERSION-GEN
@@ -955,6 +966,14 @@ ifneq (,$(SOCKLEN_T))
 	BASIC_CFLAGS += -Dsocklen_t=$(SOCKLEN_T)
 endif
 
+ifeq (yes,$(USE_PARENS_AROUND_GETTEXT_N))
+	BASIC_CFLAGS += -DUSE_PARENS_AROUND_GETTEXT_N=1
+else
+ifeq (no,$(USE_PARENS_AROUND_GETTEXT_N))
+	BASIC_CFLAGS += -DUSE_PARENS_AROUND_GETTEXT_N=0
+endif
+endif
+
 ifeq ($(uname_S),Darwin)
 	ifndef NO_FINK
 		ifeq ($(shell test -d /sw/lib && echo y),y)
@@ -1412,6 +1431,10 @@ endif
 
 ifdef HAVE_CLOCK_MONOTONIC
 	BASIC_CFLAGS += -DHAVE_CLOCK_MONOTONIC
+endif
+
+ifdef HAVE_BSD_SYSCTL
+	BASIC_CFLAGS += -DHAVE_BSD_SYSCTL
 endif
 
 ifeq ($(TCLTK_PATH),)
@@ -2079,6 +2102,7 @@ GIT-BUILD-OPTIONS: FORCE
 	@echo PYTHON_PATH=\''$(subst ','\'',$(PYTHON_PATH_SQ))'\' >>$@
 	@echo TAR=\''$(subst ','\'',$(subst ','\'',$(TAR)))'\' >>$@
 	@echo NO_CURL=\''$(subst ','\'',$(subst ','\'',$(NO_CURL)))'\' >>$@
+	@echo NO_EXPAT=\''$(subst ','\'',$(subst ','\'',$(NO_EXPAT)))'\' >>$@
 	@echo USE_LIBPCRE=\''$(subst ','\'',$(subst ','\'',$(USE_LIBPCRE)))'\' >>$@
 	@echo NO_PERL=\''$(subst ','\'',$(subst ','\'',$(NO_PERL)))'\' >>$@
 	@echo NO_PYTHON=\''$(subst ','\'',$(subst ','\'',$(NO_PYTHON)))'\' >>$@
