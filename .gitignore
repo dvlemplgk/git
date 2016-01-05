@@ -171,6 +171,7 @@
 /git-verify-tag
 /git-web--browse
 /git-whatchanged
+/git-worktree
 /git-write-tree
 /git-core-*/?*
 /gitweb/GITWEB-BUILD-OPTIONS
@@ -184,6 +185,7 @@
 /test-delta
 /test-dump-cache-tree
 /test-dump-split-index
+/test-dump-untracked-cache
 /test-scrap-cache-tree
 /test-genrandom
 /test-hashmap
