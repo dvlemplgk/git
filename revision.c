@@ -18,8 +18,12 @@
 #include "commit-slab.h"
 #include "dir.h"
 #include "cache-tree.h"
+#include "bisect.h"
 
 volatile show_early_output_fn_t show_early_output;
+
+static const char *term_bad;
+static const char *term_good;
 
 char *path_name(const struct name_path *path, const char *name)
 {
@@ -131,10 +135,12 @@ static void mark_tree_contents_uninteresting(struct tree *tree)
 
 void mark_tree_uninteresting(struct tree *tree)
 {
-	struct object *obj = &tree->object;
+	struct object *obj;
 
 	if (!tree)
 		return;
+
+	obj = &tree->object;
 	if (obj->flags & UNINTERESTING)
 		return;
 	obj->flags |= UNINTERESTING;
@@ -149,10 +155,7 @@ void mark_parents_uninteresting(struct commit *commit)
 		commit_list_insert(l->item, &parents);
 
 	while (parents) {
-		struct commit *commit = parents->item;
-		l = parents;
-		parents = parents->next;
-		free(l);
+		struct commit *commit = pop_commit(&parents);
 
 		while (commit) {
 			/*
@@ -291,9 +294,8 @@ static struct commit *handle_commit(struct rev_info *revs,
 		/*
 		 * We'll handle the tagged object by looping or dropping
 		 * through to the non-tag handlers below. Do not
-		 * propagate data from the tag's pending entry.
+		 * propagate path data from the tag's pending entry.
 		 */
-		name = "";
 		path = NULL;
 		mode = 0;
 	}
@@ -1098,13 +1100,9 @@ static int limit_list(struct rev_info *revs)
 	}
 
 	while (list) {
-		struct commit_list *entry = list;
-		struct commit *commit = list->item;
+		struct commit *commit = pop_commit(&list);
 		struct object *obj = &commit->object;
 		show_early_output_fn_t show;
-
-		list = list->next;
-		free(entry);
 
 		if (commit == interesting_cache)
 			interesting_cache = NULL;
@@ -1996,10 +1994,10 @@ static int handle_revision_opt(struct rev_info *revs, int argc, const char **arg
 	} else if (!strcmp(arg, "--full-history")) {
 		revs->simplify_history = 0;
 	} else if (!strcmp(arg, "--relative-date")) {
-		revs->date_mode = DATE_RELATIVE;
+		revs->date_mode.type = DATE_RELATIVE;
 		revs->date_mode_explicit = 1;
 	} else if ((argcount = parse_long_opt("date", argv, &optarg))) {
-		revs->date_mode = parse_date_format(optarg);
+		parse_date_format(optarg, &revs->date_mode);
 		revs->date_mode_explicit = 1;
 		return argcount;
 	} else if (!strcmp(arg, "--log-size")) {
@@ -2076,14 +2074,23 @@ void parse_revision_opt(struct rev_info *revs, struct parse_opt_ctx_t *ctx,
 	ctx->argc -= n;
 }
 
+static int for_each_bisect_ref(const char *submodule, each_ref_fn fn, void *cb_data, const char *term) {
+	struct strbuf bisect_refs = STRBUF_INIT;
+	int status;
+	strbuf_addf(&bisect_refs, "refs/bisect/%s", term);
+	status = for_each_ref_in_submodule(submodule, bisect_refs.buf, fn, cb_data);
+	strbuf_release(&bisect_refs);
+	return status;
+}
+
 static int for_each_bad_bisect_ref(const char *submodule, each_ref_fn fn, void *cb_data)
 {
-	return for_each_ref_in_submodule(submodule, "refs/bisect/bad", fn, cb_data);
+	return for_each_bisect_ref(submodule, fn, cb_data, term_bad);
 }
 
 static int for_each_good_bisect_ref(const char *submodule, each_ref_fn fn, void *cb_data)
 {
-	return for_each_ref_in_submodule(submodule, "refs/bisect/good", fn, cb_data);
+	return for_each_bisect_ref(submodule, fn, cb_data, term_good);
 }
 
 static int handle_revision_pseudo_opt(const char *submodule,
@@ -2112,6 +2119,7 @@ static int handle_revision_pseudo_opt(const char *submodule,
 		handle_refs(submodule, revs, *flags, for_each_branch_ref_submodule);
 		clear_ref_exclusion(&revs->ref_excludes);
 	} else if (!strcmp(arg, "--bisect")) {
+		read_bisect_terms(&term_bad, &term_good);
 		handle_refs(submodule, revs, *flags, for_each_bad_bisect_ref);
 		handle_refs(submodule, revs, *flags ^ (UNINTERESTING | BOTTOM), for_each_good_bisect_ref);
 		revs->bisect = 1;
@@ -2719,10 +2727,7 @@ static void simplify_merges(struct rev_info *revs)
 		yet_to_do = NULL;
 		tail = &yet_to_do;
 		while (list) {
-			commit = list->item;
-			next = list->next;
-			free(list);
-			list = next;
+			commit = pop_commit(&list);
 			tail = simplify_one(revs, commit, tail);
 		}
 	}
@@ -2734,10 +2739,7 @@ static void simplify_merges(struct rev_info *revs)
 	while (list) {
 		struct merge_simplify_state *st;
 
-		commit = list->item;
-		next = list->next;
-		free(list);
-		list = next;
+		commit = pop_commit(&list);
 		st = locate_simplify_state(revs, commit);
 		if (st->simplified == commit)
 			tail = &commit_list_insert(commit, tail)->next;
@@ -3111,11 +3113,7 @@ static struct commit *get_revision_1(struct rev_info *revs)
 		return NULL;
 
 	do {
-		struct commit_list *entry = revs->commits;
-		struct commit *commit = entry->item;
-
-		revs->commits = entry->next;
-		free(entry);
+		struct commit *commit = pop_commit(&revs->commits);
 
 		if (revs->reflog_info) {
 			save_parents(revs, commit);
