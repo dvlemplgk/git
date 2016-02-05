@@ -229,7 +229,7 @@ typedef unsigned long uintptr_t;
 #else
 #define precompose_str(in,i_nfd2nfc)
 #define precompose_argv(c,v)
-#define probe_utf8_pathname_composition(a,b)
+#define probe_utf8_pathname_composition()
 #endif
 
 #ifdef MKDIR_WO_TRAILING_SLASH
@@ -748,6 +748,9 @@ static inline size_t xsize_t(off_t len)
 	return (size_t)len;
 }
 
+__attribute__((format (printf, 3, 4)))
+extern int xsnprintf(char *dst, size_t max, const char *fmt, ...);
+
 /* in ctype.c, for kwset users */
 extern const unsigned char tolower_trans_tbl[256];
 
@@ -818,6 +821,9 @@ static inline int strtoul_ui(char const *s, int base, unsigned int *result)
 	char *p;
 
 	errno = 0;
+	/* negative values would be accepted by strtoul */
+	if (strchr(s, '-'))
+		return -1;
 	ul = strtoul(s, &p, base);
 	if (errno || *p || p == s || (unsigned int) ul != ul)
 		return -1;

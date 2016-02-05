@@ -750,6 +750,8 @@ extern char *mksnpath(char *buf, size_t n, const char *fmt, ...)
 	__attribute__((format (printf, 3, 4)));
 extern void strbuf_git_path(struct strbuf *sb, const char *fmt, ...)
 	__attribute__((format (printf, 2, 3)));
+extern char *git_path_buf(struct strbuf *buf, const char *fmt, ...)
+	__attribute__((format (printf, 2, 3)));
 extern void strbuf_git_path_submodule(struct strbuf *sb, const char *path,
 				      const char *fmt, ...)
 	__attribute__((format (printf, 3, 4)));
@@ -810,8 +812,26 @@ extern char *sha1_pack_name(const unsigned char *sha1);
  */
 extern char *sha1_pack_index_name(const unsigned char *sha1);
 
-extern const char *find_unique_abbrev(const unsigned char *sha1, int);
+/*
+ * Return an abbreviated sha1 unique within this repository's object database.
+ * The result will be at least `len` characters long, and will be NUL
+ * terminated.
+ *
+ * The non-`_r` version returns a static buffer which will be overwritten by
+ * subsequent calls.
+ *
+ * The `_r` variant writes to a buffer supplied by the caller, which must be at
+ * least `GIT_SHA1_HEXSZ + 1` bytes. The return value is the number of bytes
+ * written (excluding the NUL terminator).
+ *
+ * Note that while this version avoids the static buffer, it is not fully
+ * reentrant, as it calls into other non-reentrant git code.
+ */
+extern const char *find_unique_abbrev(const unsigned char *sha1, int len);
+extern int find_unique_abbrev_r(char *hex, const unsigned char *sha1, int len);
+
 extern const unsigned char null_sha1[GIT_SHA1_RAWSZ];
+extern const struct object_id null_oid;
 
 static inline int hashcmp(const unsigned char *sha1, const unsigned char *sha2)
 {
@@ -1029,6 +1049,9 @@ static inline int has_sha1_file(const unsigned char *sha1)
 	return has_sha1_file_with_flags(sha1, 0);
 }
 
+/* Same as the above, except for struct object_id. */
+extern int has_object_file(const struct object_id *oid);
+
 /*
  * Return true iff an alternate object database has a loose object
  * with the specified name.  This function does not respect replace
@@ -1092,6 +1115,18 @@ extern int for_each_abbrev(const char *prefix, each_abbrev_fn, void *);
 extern int get_sha1_hex(const char *hex, unsigned char *sha1);
 extern int get_oid_hex(const char *hex, struct object_id *sha1);
 
+/*
+ * Convert a binary sha1 to its hex equivalent. The `_r` variant is reentrant,
+ * and writes the NUL-terminated output to the buffer `out`, which must be at
+ * least `GIT_SHA1_HEXSZ + 1` bytes, and returns a pointer to out for
+ * convenience.
+ *
+ * The non-`_r` variant returns a static buffer, but uses a ring of 4
+ * buffers, making it safe to make multiple calls for a single statement, like:
+ *
+ *   printf("%s -> %s", sha1_to_hex(one), sha1_to_hex(two));
+ */
+extern char *sha1_to_hex_r(char *out, const unsigned char *sha1);
 extern char *sha1_to_hex(const unsigned char *sha1);	/* static buffer result! */
 extern char *oid_to_hex(const struct object_id *oid);	/* same static buffer as sha1_to_hex */
 
@@ -1118,7 +1153,6 @@ struct date_mode {
 		DATE_NORMAL = 0,
 		DATE_RELATIVE,
 		DATE_SHORT,
-		DATE_LOCAL,
 		DATE_ISO8601,
 		DATE_ISO8601_STRICT,
 		DATE_RFC2822,
@@ -1126,6 +1160,7 @@ struct date_mode {
 		DATE_RAW
 	} type;
 	const char *strftime_fmt;
+	int local;
 };
 
 /*
@@ -1309,7 +1344,7 @@ extern void close_all_packs(void);
 extern void unuse_pack(struct pack_window **);
 extern void free_pack_by_name(const char *);
 extern void clear_delta_base_cache(void);
-extern struct packed_git *add_packed_git(const char *, int, int);
+extern struct packed_git *add_packed_git(const char *path, size_t path_len, int local);
 
 /*
  * Return the SHA-1 of the nth object within the specified packfile.
@@ -1736,5 +1771,13 @@ void stat_validity_update(struct stat_validity *sv, int fd);
 
 int versioncmp(const char *s1, const char *s2);
 void sleep_millisec(int millisec);
+
+/*
+ * Create a directory and (if share is nonzero) adjust its permissions
+ * according to the shared_repository setting. Only use this for
+ * directories under $GIT_DIR.  Don't use it for working tree
+ * directories.
+ */
+void safe_create_dir(const char *dir, int share);
 
 #endif /* CACHE_H */
