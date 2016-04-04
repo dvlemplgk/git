@@ -1657,7 +1657,7 @@ static int fall_back_threeway(const struct am_state *state, const char *index_pa
 
 		init_revisions(&rev_info, NULL);
 		rev_info.diffopt.output_format = DIFF_FORMAT_NAME_STATUS;
-		diff_opt_parse(&rev_info.diffopt, &diff_filter_str, 1);
+		diff_opt_parse(&rev_info.diffopt, &diff_filter_str, 1, rev_info.prefix);
 		add_pending_sha1(&rev_info, "HEAD", our_tree, 0);
 		diff_setup_done(&rev_info.diffopt);
 		run_diff_index(&rev_info, 1);
@@ -1821,7 +1821,7 @@ static int do_interactive(struct am_state *state)
 
 			if (!pager)
 				pager = "cat";
-			argv_array_push(&cp.args, pager);
+			prepare_pager_args(&cp, pager);
 			argv_array_push(&cp.args, am_path(state, "patch"));
 			run_command(&cp);
 		}
@@ -1939,6 +1939,7 @@ next:
 	 */
 	if (!state->rebasing) {
 		am_destroy(state);
+		close_all_packs();
 		run_command_v_opt(argv_gc_auto, RUN_GIT_CMD);
 	}
 }

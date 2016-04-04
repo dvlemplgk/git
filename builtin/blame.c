@@ -459,13 +459,11 @@ static void queue_blames(struct scoreboard *sb, struct origin *porigin,
 static struct origin *make_origin(struct commit *commit, const char *path)
 {
 	struct origin *o;
-	size_t pathlen = strlen(path) + 1;
-	o = xcalloc(1, sizeof(*o) + pathlen);
+	FLEX_ALLOC_STR(o, path, path);
 	o->commit = commit;
 	o->refcnt = 1;
 	o->next = commit->util;
 	commit->util = o;
-	memcpy(o->path, path, pathlen); /* includes NUL */
 	return o;
 }
 
@@ -2042,7 +2040,8 @@ static int prepare_lines(struct scoreboard *sb)
 	for (p = buf; p < end; p = get_next_line(p, end))
 		num++;
 
-	sb->lineno = lineno = xmalloc(sizeof(*sb->lineno) * (num + 1));
+	ALLOC_ARRAY(sb->lineno, num + 1);
+	lineno = sb->lineno;
 
 	for (p = buf; p < end; p = get_next_line(p, end))
 		*lineno++ = p - buf;
@@ -2392,11 +2391,6 @@ static struct commit *fake_working_tree_commit(struct diff_options *opt,
 	ce->ce_mode = create_ce_mode(mode);
 	add_cache_entry(ce, ADD_CACHE_OK_TO_ADD|ADD_CACHE_OK_TO_REPLACE);
 
-	/*
-	 * We are not going to write this out, so this does not matter
-	 * right now, but someday we might optimize diff-index --cached
-	 * with cache-tree information.
-	 */
 	cache_tree_invalidate_path(&the_index, path);
 
 	return commit;
