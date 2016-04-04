@@ -152,6 +152,9 @@ void *xcalloc(size_t nmemb, size_t size)
 {
 	void *ret;
 
+	if (unsigned_mult_overflows(nmemb, size))
+		die("data too large to fit into virtual memory space");
+
 	memory_limit_check(size * nmemb, 0);
 	ret = calloc(nmemb, size);
 	if (!ret && (!nmemb || !size))
@@ -373,6 +376,19 @@ FILE *xfdopen(int fd, const char *mode)
 	if (stream == NULL)
 		die_errno("Out of memory? fdopen failed");
 	return stream;
+}
+
+FILE *fopen_for_writing(const char *path)
+{
+	FILE *ret = fopen(path, "w");
+
+	if (!ret && errno == EPERM) {
+		if (!unlink(path))
+			ret = fopen(path, "w");
+		else
+			errno = EPERM;
+	}
+	return ret;
 }
 
 int xmkstemp(char *template)
@@ -607,6 +623,22 @@ char *xgetcwd(void)
 	if (strbuf_getcwd(&sb))
 		die_errno(_("unable to get current working directory"));
 	return strbuf_detach(&sb, NULL);
+}
+
+int xsnprintf(char *dst, size_t max, const char *fmt, ...)
+{
+	va_list ap;
+	int len;
+
+	va_start(ap, fmt);
+	len = vsnprintf(dst, max, fmt, ap);
+	va_end(ap);
+
+	if (len < 0)
+		die("BUG: your snprintf is broken");
+	if (len >= max)
+		die("BUG: attempt to snprintf into too-small buffer");
+	return len;
 }
 
 static int write_file_v(const char *path, int fatal,
