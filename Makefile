@@ -437,6 +437,7 @@ DIFF = diff
 TAR = tar
 FIND = find
 INSTALL = install
+RPMBUILD = rpmbuild
 TCL_PATH = tclsh
 TCLTK_PATH = wish
 XGETTEXT = xgettext
@@ -2382,25 +2383,31 @@ quick-install-html:
 
 ### Maintainer's dist rules
 
+git.spec: git.spec.in GIT-VERSION-FILE
+	sed -e 's/@@VERSION@@/$(GIT_VERSION)/g' < $< > $@+
+	mv $@+ $@
+
 GIT_TARNAME = git-$(GIT_VERSION)
 dist: git-archive$(X) configure
 	./git-archive --format=tar \
 		--prefix=$(GIT_TARNAME)/ HEAD^{tree} > $(GIT_TARNAME).tar
 	@mkdir -p $(GIT_TARNAME)
-	@cp configure $(GIT_TARNAME)
+	@cp git.spec configure $(GIT_TARNAME)
 	@echo $(GIT_VERSION) > $(GIT_TARNAME)/version
 	@$(MAKE) -C git-gui TARDIR=../$(GIT_TARNAME)/git-gui dist-version
 	$(TAR) rf $(GIT_TARNAME).tar \
+		$(GIT_TARNAME)/git.spec \
 		$(GIT_TARNAME)/configure \
 		$(GIT_TARNAME)/version \
 		$(GIT_TARNAME)/git-gui/version
 	@$(RM) -r $(GIT_TARNAME)
 	gzip -f -9 $(GIT_TARNAME).tar
 
-rpm::
-	@echo >&2 "Use distro packaged sources to run rpmbuild"
-	@false
-.PHONY: rpm
+rpm: dist
+	$(RPMBUILD) \
+		--define "_source_filedigest_algorithm md5" \
+		--define "_binary_filedigest_algorithm md5" \
+		-ta $(GIT_TARNAME).tar.gz
 
 htmldocs = git-htmldocs-$(GIT_VERSION)
 manpages = git-manpages-$(GIT_VERSION)
