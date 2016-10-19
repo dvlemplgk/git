@@ -474,6 +474,23 @@ static inline int skip_prefix(const char *str, const char *prefix,
 }
 
 /*
+ * Like skip_prefix, but promises never to read past "len" bytes of the input
+ * buffer, and returns the remaining number of bytes in "out" via "outlen".
+ */
+static inline int skip_prefix_mem(const char *buf, size_t len,
+				  const char *prefix,
+				  const char **out, size_t *outlen)
+{
+	size_t prefix_len = strlen(prefix);
+	if (prefix_len <= len && !memcmp(buf, prefix, prefix_len)) {
+		*out = buf + prefix_len;
+		*outlen = len - prefix_len;
+		return 1;
+	}
+	return 0;
+}
+
+/*
  * If buf ends with suffix, return 1 and subtract the length of the suffix
  * from *len. Otherwise, return 0 and leave *len untouched.
  */
@@ -650,6 +667,10 @@ void *gitmemmem(const void *haystack, size_t haystacklen,
 #define getpagesize() sysconf(_SC_PAGESIZE)
 #endif
 
+#ifndef O_CLOEXEC
+#define O_CLOEXEC 0
+#endif
+
 #ifdef FREAD_READS_DIRECTORIES
 #ifdef fopen
 #undef fopen
@@ -798,7 +819,7 @@ extern FILE *fopen_for_writing(const char *path);
  * you can do:
  *
  *   struct foo *f;
- *   FLEX_ALLOC_STR(f, name, src);
+ *   FLEXPTR_ALLOC_STR(f, name, src);
  *
  * and "name" will point to a block of memory after the struct, which will be
  * freed along with the struct (but the pointer can be repointed anywhere).
@@ -1045,3 +1066,5 @@ struct tm *git_gmtime_r(const time_t *, struct tm *);
 #endif
 
 #endif
+
+extern int cmd_main(int, const char **);
