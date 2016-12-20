@@ -1041,7 +1041,7 @@ The possible behaviours are: ignore, warn, error.")"
 		# placed before the commit of the next action
 		checkout_onto
 
-		warn "$(gettext "You can fix this with 'git rebase --edit-todo'.")"
+		warn "$(gettext "You can fix this with 'git rebase --edit-todo' and then run 'git rebase --continue'.")"
 		die "$(gettext "Or you can abort the rebase with 'git rebase --abort'.")"
 	fi
 }
@@ -1082,7 +1082,7 @@ If they are meant to go into a new commit, run:
 
   git commit \$gpg_sign_opt_quoted
 
-In both case, once you're done, continue with:
+In both cases, once you're done, continue with:
 
   git rebase --continue
 ")"
@@ -1140,9 +1140,6 @@ To continue rebase after editing, run:
 	exit
 	;;
 esac
-
-git var GIT_COMMITTER_IDENT >/dev/null ||
-	die "$(gettext "You need to set your committer info first")"
 
 comment_for_reflog start
 

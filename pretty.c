@@ -544,15 +544,13 @@ static void add_merge_info(const struct pretty_print_context *pp,
 	strbuf_addstr(sb, "Merge:");
 
 	while (parent) {
-		struct commit *p = parent->item;
-		const char *hex = NULL;
+		struct object_id *oidp = &parent->item->object.oid;
+		strbuf_addch(sb, ' ');
 		if (pp->abbrev)
-			hex = find_unique_abbrev(p->object.oid.hash, pp->abbrev);
-		if (!hex)
-			hex = oid_to_hex(&p->object.oid);
+			strbuf_add_unique_abbrev(sb, oidp->hash, pp->abbrev);
+		else
+			strbuf_addstr(sb, oid_to_hex(oidp));
 		parent = parent->next;
-
-		strbuf_addf(sb, " %s", hex);
 	}
 	strbuf_addch(sb, '\n');
 }
@@ -1065,13 +1063,15 @@ static size_t format_commit_one(struct strbuf *sb, /* in UTF-8 */
 	const struct commit *commit = c->commit;
 	const char *msg = c->message;
 	struct commit_list *p;
-	int h1, h2;
+	int ch;
 
 	/* these are independent of the commit */
 	switch (placeholder[0]) {
 	case 'C':
 		if (starts_with(placeholder + 1, "(auto)")) {
 			c->auto_color = want_color(c->pretty_ctx->color);
+			if (c->auto_color && sb->len)
+				strbuf_addstr(sb, GIT_COLOR_RESET);
 			return 7; /* consumed 7 bytes, "C(auto)" */
 		} else {
 			int ret = parse_color(sb, placeholder, c);
@@ -1089,14 +1089,11 @@ static size_t format_commit_one(struct strbuf *sb, /* in UTF-8 */
 		return 1;
 	case 'x':
 		/* %x00 == NUL, %x0a == LF, etc. */
-		if (0 <= (h1 = hexval_table[0xff & placeholder[1]]) &&
-		    h1 <= 16 &&
-		    0 <= (h2 = hexval_table[0xff & placeholder[2]]) &&
-		    h2 <= 16) {
-			strbuf_addch(sb, (h1<<4)|h2);
-			return 3;
-		} else
+		ch = hex2chr(placeholder + 1);
+		if (ch < 0)
 			return 0;
+		strbuf_addch(sb, ch);
+		return 3;
 	case 'w':
 		if (placeholder[1] == '(') {
 			unsigned long width = 0, indent1 = 0, indent2 = 0;
