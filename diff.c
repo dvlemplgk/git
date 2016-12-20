@@ -354,7 +354,6 @@ struct emit_callback {
 	const char **label_path;
 	struct diff_words_data *diff_words;
 	struct diff_options *opt;
-	int *found_changesp;
 	struct strbuf *header;
 };
 
@@ -722,7 +721,6 @@ static void emit_rewrite_diff(const char *name_a,
 
 	memset(&ecbdata, 0, sizeof(ecbdata));
 	ecbdata.color_diff = want_color(o->use_color);
-	ecbdata.found_changesp = &o->found_changes;
 	ecbdata.ws_rule = whitespace_rule(name_b);
 	ecbdata.opt = o;
 	if (ecbdata.ws_rule & WS_BLANK_AT_EOF) {
@@ -951,7 +949,8 @@ static int find_word_boundaries(mmfile_t *buffer, regex_t *word_regex,
 {
 	if (word_regex && *begin < buffer->size) {
 		regmatch_t match[1];
-		if (!regexec(word_regex, buffer->ptr + *begin, 1, match, 0)) {
+		if (!regexec_buf(word_regex, buffer->ptr + *begin,
+				 buffer->size - *begin, 1, match, 0)) {
 			char *p = memchr(buffer->ptr + *begin + match[0].rm_so,
 					'\n', match[0].rm_eo - match[0].rm_so);
 			*end = p ? p - buffer->ptr : match[0].rm_eo + *begin;
@@ -1216,12 +1215,13 @@ static void fn_out_consume(void *priv, char *line, unsigned long len)
 	struct diff_options *o = ecbdata->opt;
 	const char *line_prefix = diff_line_prefix(o);
 
+	o->found_changes = 1;
+
 	if (ecbdata->header) {
-		fprintf(ecbdata->opt->file, "%s", ecbdata->header->buf);
+		fprintf(o->file, "%s", ecbdata->header->buf);
 		strbuf_reset(ecbdata->header);
 		ecbdata->header = NULL;
 	}
-	*(ecbdata->found_changesp) = 1;
 
 	if (ecbdata->label_path[0]) {
 		const char *name_a_tab, *name_b_tab;
@@ -1229,9 +1229,9 @@ static void fn_out_consume(void *priv, char *line, unsigned long len)
 		name_a_tab = strchr(ecbdata->label_path[0], ' ') ? "\t" : "";
 		name_b_tab = strchr(ecbdata->label_path[1], ' ') ? "\t" : "";
 
-		fprintf(ecbdata->opt->file, "%s%s--- %s%s%s\n",
+		fprintf(o->file, "%s%s--- %s%s%s\n",
 			line_prefix, meta, ecbdata->label_path[0], reset, name_a_tab);
-		fprintf(ecbdata->opt->file, "%s%s+++ %s%s%s\n",
+		fprintf(o->file, "%s%s+++ %s%s%s\n",
 			line_prefix, meta, ecbdata->label_path[1], reset, name_b_tab);
 		ecbdata->label_path[0] = ecbdata->label_path[1] = NULL;
 	}
@@ -1249,15 +1249,7 @@ static void fn_out_consume(void *priv, char *line, unsigned long len)
 		find_lno(line, ecbdata);
 		emit_hunk_header(ecbdata, line, len);
 		if (line[len-1] != '\n')
-			putc('\n', ecbdata->opt->file);
-		return;
-	}
-
-	if (len < 1) {
-		emit_line(ecbdata->opt, reset, reset, line, len);
-		if (ecbdata->diff_words
-		    && ecbdata->diff_words->type == DIFF_WORDS_PORCELAIN)
-			fputs("~\n", ecbdata->opt->file);
+			putc('\n', o->file);
 		return;
 	}
 
@@ -1282,8 +1274,8 @@ static void fn_out_consume(void *priv, char *line, unsigned long len)
 		}
 		diff_words_flush(ecbdata);
 		if (ecbdata->diff_words->type == DIFF_WORDS_PORCELAIN) {
-			emit_line(ecbdata->opt, context, reset, line, len);
-			fputs("~\n", ecbdata->opt->file);
+			emit_line(o, context, reset, line, len);
+			fputs("~\n", o->file);
 		} else {
 			/*
 			 * Skip the prefix character, if any.  With
@@ -1294,7 +1286,7 @@ static void fn_out_consume(void *priv, char *line, unsigned long len)
 			      line++;
 			      len--;
 			}
-			emit_line(ecbdata->opt, context, reset, line, len);
+			emit_line(o, context, reset, line, len);
 		}
 		return;
 	}
@@ -1316,8 +1308,7 @@ static void fn_out_consume(void *priv, char *line, unsigned long len)
 	default:
 		/* incomplete line at the end */
 		ecbdata->lno_in_preimage++;
-		emit_line(ecbdata->opt,
-			  diff_get_color(ecbdata->color_diff, DIFF_CONTEXT),
+		emit_line(o, diff_get_color(ecbdata->color_diff, DIFF_CONTEXT),
 			  reset, line, len);
 		break;
 	}
@@ -2438,7 +2429,6 @@ static void builtin_diff(const char *name_a,
 		memset(&ecbdata, 0, sizeof(ecbdata));
 		ecbdata.label_path = lbl;
 		ecbdata.color_diff = want_color(o->use_color);
-		ecbdata.found_changesp = &o->found_changes;
 		ecbdata.ws_rule = whitespace_rule(name_b);
 		if (ecbdata.ws_rule & WS_BLANK_AT_EOF)
 			check_blank_at_eof(&mf1, &mf2, &ecbdata);
@@ -3086,7 +3076,7 @@ static void fill_metainfo(struct strbuf *msg,
 		}
 		strbuf_addf(msg, "%s%sindex %s..", line_prefix, set,
 			    find_unique_abbrev(one->oid.hash, abbrev));
-		strbuf_addstr(msg, find_unique_abbrev(two->oid.hash, abbrev));
+		strbuf_add_unique_abbrev(msg, two->oid.hash, abbrev);
 		if (one->mode == two->mode)
 			strbuf_addf(msg, " %06o", one->mode);
 		strbuf_addf(msg, "%s\n", reset);
@@ -4099,7 +4089,8 @@ void diff_free_filepair(struct diff_filepair *p)
 	free(p);
 }
 
-/* This is different from find_unique_abbrev() in that
+/*
+ * This is different from find_unique_abbrev() in that
  * it stuffs the result with dots for alignment.
  */
 const char *diff_unique_abbrev(const unsigned char *sha1, int len)
@@ -4111,6 +4102,26 @@ const char *diff_unique_abbrev(const unsigned char *sha1, int len)
 
 	abbrev = find_unique_abbrev(sha1, len);
 	abblen = strlen(abbrev);
+
+	/*
+	 * In well-behaved cases, where the abbbreviated result is the
+	 * same as the requested length, append three dots after the
+	 * abbreviation (hence the whole logic is limited to the case
+	 * where abblen < 37); when the actual abbreviated result is a
+	 * bit longer than the requested length, we reduce the number
+	 * of dots so that they match the well-behaved ones.  However,
+	 * if the actual abbreviation is longer than the requested
+	 * length by more than three, we give up on aligning, and add
+	 * three dots anyway, to indicate that the output is not the
+	 * full object name.  Yes, this may be suboptimal, but this
+	 * appears only in "diff --raw --abbrev" output and it is not
+	 * worth the effort to change it now.  Note that this would
+	 * likely to work fine when the automatic sizing of default
+	 * abbreviation length is used--we would be fed -1 in "len" in
+	 * that case, and will end up always appending three-dots, but
+	 * the automatic sizing is supposed to give abblen that ensures
+	 * uniqueness across all objects (statistically speaking).
+	 */
 	if (abblen < 37) {
 		static char hex[41];
 		if (len < abblen && abblen <= len + 2)
