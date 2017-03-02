@@ -2187,29 +2187,20 @@ static int parse_chunk(struct apply_state *state, char *buffer, unsigned long si
 	return offset + hdrsize + patchsize;
 }
 
-#define swap(a,b) myswap((a),(b),sizeof(a))
-
-#define myswap(a, b, size) do {		\
-	unsigned char mytmp[size];	\
-	memcpy(mytmp, &a, size);		\
-	memcpy(&a, &b, size);		\
-	memcpy(&b, mytmp, size);		\
-} while (0)
-
 static void reverse_patches(struct patch *p)
 {
 	for (; p; p = p->next) {
 		struct fragment *frag = p->fragments;
 
-		swap(p->new_name, p->old_name);
-		swap(p->new_mode, p->old_mode);
-		swap(p->is_new, p->is_delete);
-		swap(p->lines_added, p->lines_deleted);
-		swap(p->old_sha1_prefix, p->new_sha1_prefix);
+		SWAP(p->new_name, p->old_name);
+		SWAP(p->new_mode, p->old_mode);
+		SWAP(p->is_new, p->is_delete);
+		SWAP(p->lines_added, p->lines_deleted);
+		SWAP(p->old_sha1_prefix, p->new_sha1_prefix);
 
 		for (; frag; frag = frag->next) {
-			swap(frag->newpos, frag->oldpos);
-			swap(frag->newlines, frag->oldlines);
+			SWAP(frag->newpos, frag->oldpos);
+			SWAP(frag->newlines, frag->oldlines);
 		}
 	}
 }
@@ -4688,7 +4679,7 @@ static int apply_patch(struct apply_state *state,
 								 state->index_file,
 								 LOCK_DIE_ON_ERROR);
 		else
-			state->newfd = hold_locked_index(state->lock_file, 1);
+			state->newfd = hold_locked_index(state->lock_file, LOCK_DIE_ON_ERROR);
 	}
 
 	if (state->check_index && read_apply_cache(state) < 0) {

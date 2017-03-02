@@ -795,8 +795,8 @@ static char *refuse_unconfigured_deny_msg =
 	   "with what you pushed, and will require 'git reset --hard' to match\n"
 	   "the work tree to HEAD.\n"
 	   "\n"
-	   "You can set 'receive.denyCurrentBranch' configuration variable to\n"
-	   "'ignore' or 'warn' in the remote repository to allow pushing into\n"
+	   "You can set the 'receive.denyCurrentBranch' configuration variable\n"
+	   "to 'ignore' or 'warn' in the remote repository to allow pushing into\n"
 	   "its current branch; however, this is not recommended unless you\n"
 	   "arranged to update its work tree to match what you pushed in some\n"
 	   "other way.\n"
@@ -1942,8 +1942,7 @@ int cmd_receive_pack(int argc, const char **argv, const char *prefix)
 		run_receive_hook(commands, "post-receive", 1,
 				 &push_options);
 		run_update_post_hook(commands);
-		if (push_options.nr)
-			string_list_clear(&push_options, 0);
+		string_list_clear(&push_options, 0);
 		if (auto_gc) {
 			const char *argv_gc_auto[] = {
 				"gc", "--auto", "--quiet", NULL,
