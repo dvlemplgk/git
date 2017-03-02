@@ -13,6 +13,7 @@
 #include "utf8.h"
 #include "git-compat-util.h"
 #include "version.h"
+#include "trailer.h"
 
 typedef enum { FIELD_STR, FIELD_ULONG, FIELD_TIME } cmp_type;
 
@@ -40,7 +41,7 @@ static struct used_atom {
 		enum { RR_NORMAL, RR_SHORTEN, RR_TRACK, RR_TRACKSHORT }
 			remote_ref;
 		struct {
-			enum { C_BARE, C_BODY, C_BODY_DEP, C_LINES, C_SIG, C_SUB } option;
+			enum { C_BARE, C_BODY, C_BODY_DEP, C_LINES, C_SIG, C_SUB, C_TRAILERS } option;
 			unsigned int nlines;
 		} contents;
 		enum { O_FULL, O_SHORT } objectname;
@@ -85,6 +86,13 @@ static void subject_atom_parser(struct used_atom *atom, const char *arg)
 	atom->u.contents.option = C_SUB;
 }
 
+static void trailers_atom_parser(struct used_atom *atom, const char *arg)
+{
+	if (arg)
+		die(_("%%(trailers) does not take arguments"));
+	atom->u.contents.option = C_TRAILERS;
+}
+
 static void contents_atom_parser(struct used_atom *atom, const char *arg)
 {
 	if (!arg)
@@ -95,6 +103,8 @@ static void contents_atom_parser(struct used_atom *atom, const char *arg)
 		atom->u.contents.option = C_SIG;
 	else if (!strcmp(arg, "subject"))
 		atom->u.contents.option = C_SUB;
+	else if (!strcmp(arg, "trailers"))
+		atom->u.contents.option = C_TRAILERS;
 	else if (skip_prefix(arg, "lines=", &arg)) {
 		atom->u.contents.option = C_LINES;
 		if (strtoul_ui(arg, 10, &atom->u.contents.nlines))
@@ -194,6 +204,7 @@ static struct {
 	{ "creatordate", FIELD_TIME },
 	{ "subject", FIELD_STR, subject_atom_parser },
 	{ "body", FIELD_STR, body_atom_parser },
+	{ "trailers", FIELD_STR, trailers_atom_parser },
 	{ "contents", FIELD_STR, contents_atom_parser },
 	{ "upstream", FIELD_STR, remote_ref_atom_parser },
 	{ "push", FIELD_STR, remote_ref_atom_parser },
@@ -785,6 +796,7 @@ static void grab_sub_body_contents(struct atom_value *val, int deref, struct obj
 			name++;
 		if (strcmp(name, "subject") &&
 		    strcmp(name, "body") &&
+		    strcmp(name, "trailers") &&
 		    !starts_with(name, "contents"))
 			continue;
 		if (!subpos)
@@ -808,6 +820,14 @@ static void grab_sub_body_contents(struct atom_value *val, int deref, struct obj
 			/*  Size is the length of the message after removing the signature */
 			append_lines(&s, subpos, contents_end - subpos, atom->u.contents.nlines);
 			v->s = strbuf_detach(&s, NULL);
+		} else if (atom->u.contents.option == C_TRAILERS) {
+			struct trailer_info info;
+
+			/* Search for trailer info */
+			trailer_info_get(&info, subpos);
+			v->s = xmemdupz(info.trailer_start,
+					info.trailer_end - info.trailer_start);
+			trailer_info_release(&info);
 		} else if (atom->u.contents.option == C_BARE)
 			v->s = xstrdup(subpos);
 	}
@@ -1231,8 +1251,14 @@ static int commit_contains(struct ref_filter *filter, struct commit *commit)
  * matches a pattern "refs/heads/mas") or a wildcard (e.g. the same ref
  * matches "refs/heads/mas*", too).
  */
-static int match_pattern(const char **patterns, const char *refname)
+static int match_pattern(const struct ref_filter *filter, const char *refname)
 {
+	const char **patterns = filter->name_patterns;
+	unsigned flags = 0;
+
+	if (filter->ignore_case)
+		flags |= WM_CASEFOLD;
+
 	/*
 	 * When no '--format' option is given we need to skip the prefix
 	 * for matching refs of tags and branches.
@@ -1243,7 +1269,7 @@ static int match_pattern(const char **patterns, const char *refname)
 	       skip_prefix(refname, "refs/", &refname));
 
 	for (; *patterns; patterns++) {
-		if (!wildmatch(*patterns, refname, 0, NULL))
+		if (!wildmatch(*patterns, refname, flags, NULL))
 			return 1;
 	}
 	return 0;
@@ -1255,9 +1281,15 @@ static int match_pattern(const char **patterns, const char *refname)
  * matches a pattern "refs/heads/" but not "refs/heads/m") or a
  * wildcard (e.g. the same ref matches "refs/heads/m*", too).
  */
-static int match_name_as_path(const char **pattern, const char *refname)
+static int match_name_as_path(const struct ref_filter *filter, const char *refname)
 {
+	const char **pattern = filter->name_patterns;
 	int namelen = strlen(refname);
+	unsigned flags = WM_PATHNAME;
+
+	if (filter->ignore_case)
+		flags |= WM_CASEFOLD;
+
 	for (; *pattern; pattern++) {
 		const char *p = *pattern;
 		int plen = strlen(p);
@@ -1280,8 +1312,8 @@ static int filter_pattern_match(struct ref_filter *filter, const char *refname)
 	if (!*filter->name_patterns)
 		return 1; /* No pattern always matches */
 	if (filter->match_as_path)
-		return match_name_as_path(filter->name_patterns, refname);
-	return match_pattern(filter->name_patterns, refname);
+		return match_name_as_path(filter, refname);
+	return match_pattern(filter, refname);
 }
 
 /*
@@ -1329,7 +1361,7 @@ static struct ref_array_item *new_ref_array_item(const char *refname,
 	return ref;
 }
 
-static int filter_ref_kind(struct ref_filter *filter, const char *refname)
+static int ref_kind_from_refname(const char *refname)
 {
 	unsigned int i;
 
@@ -1342,11 +1374,7 @@ static int filter_ref_kind(struct ref_filter *filter, const char *refname)
 		{ "refs/tags/", FILTER_REFS_TAGS}
 	};
 
-	if (filter->kind == FILTER_REFS_BRANCHES ||
-	    filter->kind == FILTER_REFS_REMOTES ||
-	    filter->kind == FILTER_REFS_TAGS)
-		return filter->kind;
-	else if (!strcmp(refname, "HEAD"))
+	if (!strcmp(refname, "HEAD"))
 		return FILTER_REFS_DETACHED_HEAD;
 
 	for (i = 0; i < ARRAY_SIZE(ref_kind); i++) {
@@ -1355,6 +1383,15 @@ static int filter_ref_kind(struct ref_filter *filter, const char *refname)
 	}
 
 	return FILTER_REFS_OTHERS;
+}
+
+static int filter_ref_kind(struct ref_filter *filter, const char *refname)
+{
+	if (filter->kind == FILTER_REFS_BRANCHES ||
+	    filter->kind == FILTER_REFS_REMOTES ||
+	    filter->kind == FILTER_REFS_TAGS)
+		return filter->kind;
+	return ref_kind_from_refname(refname);
 }
 
 /*
@@ -1536,18 +1573,20 @@ static int cmp_ref_sorting(struct ref_sorting *s, struct ref_array_item *a, stru
 	struct atom_value *va, *vb;
 	int cmp;
 	cmp_type cmp_type = used_atom[s->atom].type;
+	int (*cmp_fn)(const char *, const char *);
 
 	get_ref_atom_value(a, s->atom, &va);
 	get_ref_atom_value(b, s->atom, &vb);
+	cmp_fn = s->ignore_case ? strcasecmp : strcmp;
 	if (s->version)
 		cmp = versioncmp(va->s, vb->s);
 	else if (cmp_type == FIELD_STR)
-		cmp = strcmp(va->s, vb->s);
+		cmp = cmp_fn(va->s, vb->s);
 	else {
 		if (va->ul < vb->ul)
 			cmp = -1;
 		else if (va->ul == vb->ul)
-			cmp = strcmp(a->refname, b->refname);
+			cmp = cmp_fn(a->refname, b->refname);
 		else
 			cmp = 1;
 	}
@@ -1555,8 +1594,7 @@ static int cmp_ref_sorting(struct ref_sorting *s, struct ref_array_item *a, stru
 	return (s->reverse) ? -cmp : cmp;
 }
 
-static struct ref_sorting *ref_sorting;
-static int compare_refs(const void *a_, const void *b_)
+static int compare_refs(const void *a_, const void *b_, void *ref_sorting)
 {
 	struct ref_array_item *a = *((struct ref_array_item **)a_);
 	struct ref_array_item *b = *((struct ref_array_item **)b_);
@@ -1572,8 +1610,7 @@ static int compare_refs(const void *a_, const void *b_)
 
 void ref_array_sort(struct ref_sorting *sorting, struct ref_array *array)
 {
-	ref_sorting = sorting;
-	QSORT(array->items, array->nr, compare_refs);
+	QSORT_S(array->items, array->nr, compare_refs, sorting);
 }
 
 static void append_literal(const char *cp, const char *ep, struct ref_formatting_state *state)
@@ -1635,6 +1672,16 @@ void show_ref_array_item(struct ref_array_item *info, const char *format, int qu
 	fwrite(final_buf->buf, 1, final_buf->len, stdout);
 	pop_stack_element(&state.stack);
 	putchar('\n');
+}
+
+void pretty_print_ref(const char *name, const unsigned char *sha1,
+		const char *format)
+{
+	struct ref_array_item *ref_item;
+	ref_item = new_ref_array_item(name, sha1, 0);
+	ref_item->kind = ref_kind_from_refname(name);
+	show_ref_array_item(ref_item, format, 0);
+	free_array_item(ref_item);
 }
 
 /*  If no sorting option is given, use refname to sort as default */

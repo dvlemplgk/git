@@ -156,14 +156,7 @@ void fill_stat_cache_info(struct cache_entry *ce, struct stat *st)
 static int ce_compare_data(const struct cache_entry *ce, struct stat *st)
 {
 	int match = -1;
-	static int cloexec = O_CLOEXEC;
-	int fd = open(ce->name, O_RDONLY | cloexec);
-
-	if ((cloexec & O_CLOEXEC) && fd < 0 && errno == EINVAL) {
-		/* Try again w/o O_CLOEXEC: the kernel might not support it */
-		cloexec &= ~O_CLOEXEC;
-		fd = open(ce->name, O_RDONLY | cloexec);
-	}
+	int fd = git_open_cloexec(ce->name, O_RDONLY);
 
 	if (fd >= 0) {
 		unsigned char sha1[20];
@@ -1424,12 +1417,9 @@ static int read_index_extension(struct index_state *istate,
 	return 0;
 }
 
-int hold_locked_index(struct lock_file *lk, int die_on_error)
+int hold_locked_index(struct lock_file *lk, int lock_flags)
 {
-	return hold_lock_file_for_update(lk, get_index_file(),
-					 die_on_error
-					 ? LOCK_DIE_ON_ERROR
-					 : 0);
+	return hold_lock_file_for_update(lk, get_index_file(), lock_flags);
 }
 
 int read_index(struct index_state *istate)
@@ -2294,7 +2284,8 @@ int index_name_is_other(const struct index_state *istate, const char *name,
 	return 1;
 }
 
-void *read_blob_data_from_index(struct index_state *istate, const char *path, unsigned long *size)
+void *read_blob_data_from_index(const struct index_state *istate,
+				const char *path, unsigned long *size)
 {
 	int pos, len;
 	unsigned long sz;

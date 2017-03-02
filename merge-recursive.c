@@ -1390,14 +1390,11 @@ static int process_renames(struct merge_options *o,
 			branch1 = o->branch1;
 			branch2 = o->branch2;
 		} else {
-			struct rename *tmp;
 			renames1 = b_renames;
 			renames2Dst = &a_by_dst;
 			branch1 = o->branch2;
 			branch2 = o->branch1;
-			tmp = ren2;
-			ren2 = ren1;
-			ren1 = tmp;
+			SWAP(ren2, ren1);
 		}
 
 		if (ren1->processed)
@@ -2133,7 +2130,7 @@ int merge_recursive_generic(struct merge_options *o,
 		}
 	}
 
-	hold_locked_index(lock, 1);
+	hold_locked_index(lock, LOCK_DIE_ON_ERROR);
 	clean = merge_recursive(o, head_commit, next_commit, ca,
 			result);
 	if (clean < 0)
