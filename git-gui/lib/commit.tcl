@@ -35,7 +35,7 @@ You are currently in the middle of a merge that has not been fully completed.  Y
 				} elseif {[string match {encoding *} $line]} {
 					set enc [string tolower [string range $line 9 end]]
 				} elseif {[regexp "author (.*)\\s<(.*)>\\s(\\d.*$)" $line all name email time]} {
-					set commit_author [list name $name email $email date $time]
+					set commit_author [list name [encoding convertfrom $enc $name] email $email date $time]
 				}
 			}
 			set msg [read $fd]
