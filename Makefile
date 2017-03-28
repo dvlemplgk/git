@@ -2489,7 +2489,7 @@ rpm: dist
 	$(RPMBUILD) \
 		--define "_source_filedigest_algorithm md5" \
 		--define "_binary_filedigest_algorithm md5" \
-		-ta $(GIT_TARNAME).tar.gz
+		-ta --clean $(GIT_TARNAME).tar.gz
 
 htmldocs = git-htmldocs-$(GIT_VERSION)
 manpages = git-manpages-$(GIT_VERSION)
