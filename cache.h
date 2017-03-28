@@ -1045,9 +1045,6 @@ static inline int is_empty_tree_oid(const struct object_id *oid)
 	return !hashcmp(oid->hash, EMPTY_TREE_SHA1_BIN);
 }
 
-
-int git_mkstemp(char *path, size_t n, const char *template);
-
 /* set default permissions by passing mode arguments to open(2) */
 int git_mkstemps_mode(char *pattern, int suffix_len, int mode);
 int git_mkstemp_mode(char *pattern, int mode);
@@ -1109,7 +1106,7 @@ char *strbuf_realpath(struct strbuf *resolved, const char *path,
 		      int die_on_error);
 const char *real_path(const char *path);
 const char *real_path_if_valid(const char *path);
-char *real_pathdup(const char *path);
+char *real_pathdup(const char *path, int die_on_error);
 const char *absolute_path(const char *path);
 char *absolute_pathdup(const char *path);
 const char *remove_leading_path(const char *in, const char *prefix);
