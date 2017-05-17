@@ -798,8 +798,6 @@ extern FILE *xfopen(const char *path, const char *mode);
 extern FILE *xfdopen(int fd, const char *mode);
 extern int xmkstemp(char *template);
 extern int xmkstemp_mode(char *template, int mode);
-extern int odb_mkstemp(char *template, size_t limit, const char *pattern);
-extern int odb_pack_keep(char *name, size_t namesz, const unsigned char *sha1);
 extern char *xgetcwd(void);
 extern FILE *fopen_for_writing(const char *path);
 
@@ -885,6 +883,12 @@ static inline size_t xsize_t(off_t len)
 
 __attribute__((format (printf, 3, 4)))
 extern int xsnprintf(char *dst, size_t max, const char *fmt, ...);
+
+#ifndef HOST_NAME_MAX
+#define HOST_NAME_MAX 256
+#endif
+
+extern int xgethostname(char *buf, size_t len);
 
 /* in ctype.c, for kwset users */
 extern const unsigned char tolower_trans_tbl[256];
