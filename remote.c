@@ -630,7 +630,7 @@ struct refspec *parse_fetch_refspec(int nr_refspec, const char **refspec)
 	return parse_refspec_internal(nr_refspec, refspec, 1, 0);
 }
 
-static struct refspec *parse_push_refspec(int nr_refspec, const char **refspec)
+struct refspec *parse_push_refspec(int nr_refspec, const char **refspec)
 {
 	return parse_refspec_internal(nr_refspec, refspec, 0, 0);
 }
@@ -2279,7 +2279,7 @@ static struct push_cas *add_cas_entry(struct push_cas_option *cas,
 	return entry;
 }
 
-int parse_push_cas_option(struct push_cas_option *cas, const char *arg, int unset)
+static int parse_push_cas_option(struct push_cas_option *cas, const char *arg, int unset)
 {
 	const char *colon;
 	struct push_cas *entry;
