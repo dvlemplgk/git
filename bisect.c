@@ -546,7 +546,7 @@ static unsigned get_prn(unsigned count) {
 
 /*
  * Custom integer square root from
- * http://en.wikipedia.org/wiki/Integer_square_root
+ * https://en.wikipedia.org/wiki/Integer_square_root
  */
 static int sqrti(int val)
 {
@@ -995,8 +995,10 @@ int bisect_next_all(const char *prefix, int no_checkout)
 
 	steps_msg = xstrfmt(Q_("(roughly %d step)", "(roughly %d steps)",
 		  steps), steps);
-	/* TRANSLATORS: the last %s will be replaced with
-	   "(roughly %d steps)" translation */
+	/*
+	 * TRANSLATORS: the last %s will be replaced with "(roughly %d
+	 * steps)" translation.
+	 */
 	printf(Q_("Bisecting: %d revision left to test after this %s\n",
 		  "Bisecting: %d revisions left to test after this %s\n",
 		  nr), nr, steps_msg);

@@ -399,7 +399,7 @@ cat > expect <<\EOF
 | |
 | |     Merge branch 'side'
 | |
-| * commit side
+| * commit tags/side-2
 | | Author: A U Thor <author@example.com>
 | |
 | |     side-2
@@ -575,6 +575,18 @@ test_expect_success 'log.decorate configuration' '
 	git log --pretty=raw >actual &&
 	test_cmp expect.raw actual
 
+'
+
+test_expect_success 'log.decorate config parsing' '
+	git log --oneline --decorate=full >expect.full &&
+	git log --oneline --decorate=short >expect.short &&
+
+	test_config log.decorate full &&
+	test_config log.mailmap true &&
+	git log --oneline >actual &&
+	test_cmp expect.full actual &&
+	git log --oneline --decorate=short >actual &&
+	test_cmp expect.short actual
 '
 
 test_expect_success TTY 'log output on a TTY' '
@@ -1377,6 +1389,15 @@ test_expect_success 'log --source paints tag names' '
 	1ac6c77	source-tag one
 	EOF
 	git log --oneline --source source-tag source-a >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'log --source paints symmetric ranges' '
+	cat >expect <<-\EOF &&
+	09e12a9	source-b three
+	8e393e1	source-a two
+	EOF
+	git log --oneline --source source-a...source-b >actual &&
 	test_cmp expect actual
 '
 

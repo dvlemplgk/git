@@ -169,6 +169,13 @@ test_expect_success 'reflog for the branch shows state before rebase' '
 	test $(git rev-parse branch1@{1}) = $(git rev-parse original-branch1)
 '
 
+test_expect_success 'reflog for the branch shows correct finish message' '
+	printf "rebase -i (finish): refs/heads/branch1 onto %s\n" \
+		"$(git rev-parse branch2)" >expected &&
+	git log -g --pretty=%gs -1 refs/heads/branch1 >actual &&
+	test_cmp expected actual
+'
+
 test_expect_success 'exchange two commits' '
 	set_fake_editor &&
 	FAKE_LINES="2 1" git rebase -i HEAD~2 &&
@@ -366,7 +373,7 @@ test_expect_success 'verbose flag is heeded, even after --continue' '
 	grep "^ file1 | 2 +-$" output
 '
 
-test_expect_success 'multi-squash only fires up editor once' '
+test_expect_success C_LOCALE_OUTPUT 'multi-squash only fires up editor once' '
 	base=$(git rev-parse HEAD~4) &&
 	set_fake_editor &&
 	FAKE_COMMIT_AMEND="ONCE" FAKE_LINES="1 squash 2 squash 3 squash 4" \
@@ -376,7 +383,7 @@ test_expect_success 'multi-squash only fires up editor once' '
 	test 1 = $(git show | grep ONCE | wc -l)
 '
 
-test_expect_success 'multi-fixup does not fire up editor' '
+test_expect_success C_LOCALE_OUTPUT 'multi-fixup does not fire up editor' '
 	git checkout -b multi-fixup E &&
 	base=$(git rev-parse HEAD~4) &&
 	set_fake_editor &&
@@ -426,7 +433,7 @@ D
 ONCE
 EOF
 
-test_expect_success 'squash and fixup generate correct log messages' '
+test_expect_success C_LOCALE_OUTPUT 'squash and fixup generate correct log messages' '
 	git checkout -b squash-fixup E &&
 	base=$(git rev-parse HEAD~4) &&
 	set_fake_editor &&
@@ -439,7 +446,7 @@ test_expect_success 'squash and fixup generate correct log messages' '
 	git branch -D squash-fixup
 '
 
-test_expect_success 'squash ignores comments' '
+test_expect_success C_LOCALE_OUTPUT 'squash ignores comments' '
 	git checkout -b skip-comments E &&
 	base=$(git rev-parse HEAD~4) &&
 	set_fake_editor &&
@@ -452,7 +459,7 @@ test_expect_success 'squash ignores comments' '
 	git branch -D skip-comments
 '
 
-test_expect_success 'squash ignores blank lines' '
+test_expect_success C_LOCALE_OUTPUT 'squash ignores blank lines' '
 	git checkout -b skip-blank-lines E &&
 	base=$(git rev-parse HEAD~4) &&
 	set_fake_editor &&
@@ -860,7 +867,7 @@ test_expect_success 'rebase -ix with several instances of --exec' '
 	test_cmp expected actual
 '
 
-test_expect_success 'rebase -ix with --autosquash' '
+test_expect_success C_LOCALE_OUTPUT 'rebase -ix with --autosquash' '
 	git reset --hard execute &&
 	git checkout -b autosquash &&
 	echo second >second.txt &&
@@ -943,7 +950,7 @@ test_expect_success 'rebase -i --root fixup root commit' '
 	test 0 = $(git cat-file commit HEAD | grep -c ^parent\ )
 '
 
-test_expect_success 'rebase --edit-todo does not works on non-interactive rebase' '
+test_expect_success C_LOCALE_OUTPUT 'rebase --edit-todo does not work on non-interactive rebase' '
 	git reset --hard &&
 	git checkout conflict-branch &&
 	set_fake_editor &&
