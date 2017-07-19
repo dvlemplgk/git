@@ -5,10 +5,34 @@
 * https://opensource.org/licenses/MIT
 ***/
 
-#include "cache.h"
-#include "sha1dc/sha1.h"
-#include "sha1dc/ubc_check.h"
+#ifndef SHA1DC_NO_STANDARD_INCLUDES
+#include <string.h>
+#include <memory.h>
+#include <stdio.h>
+#include <stdlib.h>
+#ifdef __unix__
+#include <sys/types.h> /* make sure macros like _BIG_ENDIAN visible */
+#endif
+#endif
 
+#ifdef SHA1DC_CUSTOM_INCLUDE_SHA1_C
+#include SHA1DC_CUSTOM_INCLUDE_SHA1_C
+#endif
+
+#ifndef SHA1DC_INIT_SAFE_HASH_DEFAULT
+#define SHA1DC_INIT_SAFE_HASH_DEFAULT 1
+#endif
+
+#include "sha1.h"
+#include "ubc_check.h"
+
+#if (defined(__amd64__) || defined(__amd64) || defined(__x86_64__) || defined(__x86_64) || \
+     defined(i386) || defined(__i386) || defined(__i386__) || defined(__i486__)  || \
+     defined(__i586__) || defined(__i686__) || defined(_M_IX86) || defined(__X86__) || \
+     defined(_X86_) || defined(__THW_INTEL__) || defined(__I86__) || defined(__INTEL__) || \
+     defined(__386) || defined(_M_X64) || defined(_M_AMD64))
+#define SHA1DC_ON_INTEL_LIKE_PROCESSOR
+#endif
 
 /*
    Because Little-Endian architectures are most common,
@@ -18,15 +42,82 @@
    If you are compiling on a big endian platform and your compiler does not define one of these,
    you will have to add whatever macros your tool chain defines to indicate Big-Endianness.
  */
-#if (defined(__BYTE_ORDER) && (__BYTE_ORDER == __BIG_ENDIAN)) || \
-    (defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __BIG_ENDIAN__)) || \
-    defined(__BIG_ENDIAN__) || defined(__ARMEB__) || defined(__THUMBEB__) ||  defined(__AARCH64EB__) || \
-    defined(_MIPSEB) || defined(__MIPSEB) || defined(__MIPSEB__)
 
-#define SHA1DC_BIGENDIAN	1
-#else
+#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__)
+/*
+ * Should detect Big Endian under GCC since at least 4.6.0 (gcc svn
+ * rev #165881). See
+ * https://gcc.gnu.org/onlinedocs/cpp/Common-Predefined-Macros.html
+ *
+ * This also works under clang since 3.2, it copied the GCC-ism. See
+ * clang.git's 3b198a97d2 ("Preprocessor: add __BYTE_ORDER__
+ * predefined macro", 2012-07-27)
+ */
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#define SHA1DC_BIGENDIAN
+#endif
+
+/* Not under GCC-alike */
+#elif defined(__BYTE_ORDER) && defined(__BIG_ENDIAN)
+/*
+ * Should detect Big Endian under glibc.git since 14245eb70e ("entered
+ * into RCS", 1992-11-25). Defined in <endian.h> which will have been
+ * brought in by standard headers. See glibc.git and
+ * https://sourceforge.net/p/predef/wiki/Endianness/
+ */
+#if __BYTE_ORDER == __BIG_ENDIAN
+#define SHA1DC_BIGENDIAN
+#endif
+
+/* Not under GCC-alike or glibc */
+#elif defined(_BYTE_ORDER) && defined(_BIG_ENDIAN) && defined(_LITTLE_ENDIAN)
+/*
+ * *BSD and newlib (embeded linux, cygwin, etc).
+ * the defined(_BIG_ENDIAN) && defined(_LITTLE_ENDIAN) part prevents
+ * this condition from matching with Solaris/sparc.
+ * (Solaris defines only one endian macro)
+ */
+#if _BYTE_ORDER == _BIG_ENDIAN
+#define SHA1DC_BIGENDIAN
+#endif
+
+/* Not under GCC-alike or glibc or *BSD or newlib */
+#elif (defined(__ARMEB__) || defined(__THUMBEB__) || defined(__AARCH64EB__) || \
+       defined(__MIPSEB__) || defined(__MIPSEB) || defined(_MIPSEB) || \
+       defined(__sparc))
+/*
+ * Should define Big Endian for a whitelist of known processors. See
+ * https://sourceforge.net/p/predef/wiki/Endianness/ and
+ * http://www.oracle.com/technetwork/server-storage/solaris/portingtosolaris-138514.html
+ */
+#define SHA1DC_BIGENDIAN
+
+/* Not under GCC-alike or glibc or *BSD or newlib or <processor whitelist> */
+#elif defined(SHA1DC_ON_INTEL_LIKE_PROCESSOR)
+/*
+ * As a last resort before we do anything else we're not 100% sure
+ * about below, we blacklist specific processors here. We could add
+ * more, see e.g. https://wiki.debian.org/ArchitectureSpecificsMemo
+ */
+#else /* Not under GCC-alike or glibc or *BSD or newlib or <processor whitelist>  or <processor blacklist> */
+
+/* We do nothing more here for now */
+/*#error "Uncomment this to see if you fall through all the detection"*/
+
+#endif /* Big Endian detection */
+
+#if (defined(SHA1DC_FORCE_LITTLEENDIAN) && defined(SHA1DC_BIGENDIAN))
 #undef SHA1DC_BIGENDIAN
-#endif /*ENDIANNESS SELECTION*/
+#endif
+#if (defined(SHA1DC_FORCE_BIGENDIAN) && !defined(SHA1DC_BIGENDIAN))
+#define SHA1DC_BIGENDIAN
+#endif
+/*ENDIANNESS SELECTION*/
+
+#if defined(SHA1DC_FORCE_UNALIGNED_ACCESS) || defined(SHA1DC_ON_INTEL_LIKE_PROCESSOR)
+#define SHA1DC_ALLOW_UNALIGNED_ACCESS
+#endif /*UNALIGNMENT DETECTION*/
+
 
 #define rotate_right(x,n) (((x)>>(n))|((x)<<(32-(n))))
 #define rotate_left(x,n)  (((x)<<(n))|((x)>>(32-(n))))
@@ -36,11 +127,11 @@
 
 #define sha1_mix(W, t)  (rotate_left(W[t - 3] ^ W[t - 8] ^ W[t - 14] ^ W[t - 16], 1))
 
-#if defined(SHA1DC_BIGENDIAN)
+#ifdef SHA1DC_BIGENDIAN
 	#define sha1_load(m, t, temp)  { temp = m[t]; }
 #else
 	#define sha1_load(m, t, temp)  { temp = m[t]; sha1_bswap32(temp); }
-#endif /* !defined(SHA1DC_BIGENDIAN) */
+#endif
 
 #define sha1_store(W, t, x)	*(volatile uint32_t *)&W[t] = x
 
@@ -869,6 +960,11 @@ static void sha1recompress_fast_ ## t (uint32_t ihvin[5], uint32_t ihvout[5], co
 	ihvout[0] = ihvin[0] + a; ihvout[1] = ihvin[1] + b; ihvout[2] = ihvin[2] + c; ihvout[3] = ihvin[3] + d; ihvout[4] = ihvin[4] + e; \
 }
 
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4127)  /* Complier complains about the checks in the above macro being constant. */
+#endif
+
 #ifdef DOSTORESTATE0
 SHA1_RECOMPRESS(0)
 #endif
@@ -1187,6 +1283,10 @@ SHA1_RECOMPRESS(78)
 
 #ifdef DOSTORESTATE79
 SHA1_RECOMPRESS(79)
+#endif
+
+#ifdef _MSC_VER
+#pragma warning(pop)
 #endif
 
 static void sha1_recompression_step(uint32_t step, uint32_t ihvin[5], uint32_t ihvout[5], const uint32_t me2[80], const uint32_t state[5])
@@ -1662,7 +1762,7 @@ void SHA1DCInit(SHA1_CTX* ctx)
 	ctx->ihv[3] = 0x10325476;
 	ctx->ihv[4] = 0xC3D2E1F0;
 	ctx->found_collision = 0;
-	ctx->safe_hash = 0;
+	ctx->safe_hash = SHA1DC_INIT_SAFE_HASH_DEFAULT;
 	ctx->ubc_check = 1;
 	ctx->detect_coll = 1;
 	ctx->reduced_round_coll = 0;
@@ -1710,6 +1810,7 @@ void SHA1DCSetCallback(SHA1_CTX* ctx, collision_block_callback callback)
 void SHA1DCUpdate(SHA1_CTX* ctx, const char* buf, size_t len)
 {
 	unsigned left, fill;
+
 	if (len == 0)
 		return;
 
@@ -1728,7 +1829,13 @@ void SHA1DCUpdate(SHA1_CTX* ctx, const char* buf, size_t len)
 	while (len >= 64)
 	{
 		ctx->total += 64;
+
+#if defined(SHA1DC_ALLOW_UNALIGNED_ACCESS)
 		sha1_process(ctx, (uint32_t*)(buf));
+#else
+		memcpy(ctx->buffer, buf, 64);
+		sha1_process(ctx, (uint32_t*)(ctx->buffer));
+#endif /* defined(SHA1DC_ALLOW_UNALIGNED_ACCESS) */
 		buf += 64;
 		len -= 64;
 	}
@@ -1788,22 +1895,6 @@ int SHA1DCFinal(unsigned char output[20], SHA1_CTX *ctx)
 	return ctx->found_collision;
 }
 
-void git_SHA1DCFinal(unsigned char hash[20], SHA1_CTX *ctx)
-{
-	if (!SHA1DCFinal(hash, ctx))
-		return;
-	die("SHA-1 appears to be part of a collision attack: %s",
-	    sha1_to_hex(hash));
-}
-
-void git_SHA1DCUpdate(SHA1_CTX *ctx, const void *vdata, unsigned long len)
-{
-	const char *data = vdata;
-	/* We expect an unsigned long, but sha1dc only takes an int */
-	while (len > INT_MAX) {
-		SHA1DCUpdate(ctx, data, INT_MAX);
-		data += INT_MAX;
-		len -= INT_MAX;
-	}
-	SHA1DCUpdate(ctx, data, len);
-}
+#ifdef SHA1DC_CUSTOM_TRAILING_INCLUDE_SHA1_C
+#include SHA1DC_CUSTOM_TRAILING_INCLUDE_SHA1_C
+#endif

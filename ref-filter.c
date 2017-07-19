@@ -93,6 +93,7 @@ static struct used_atom {
 			unsigned int length;
 		} objectname;
 		struct refname_atom refname;
+		char *head;
 	} u;
 } *used_atom;
 static int used_atom_cnt, need_tagged, need_symref;
@@ -220,7 +221,7 @@ static void objectname_atom_parser(struct used_atom *atom, const char *arg)
 
 static void refname_atom_parser(struct used_atom *atom, const char *arg)
 {
-	return refname_atom_parser_internal(&atom->u.refname, arg, atom->name);
+	refname_atom_parser_internal(&atom->u.refname, arg, atom->name);
 }
 
 static align_type parse_align_position(const char *s)
@@ -287,6 +288,12 @@ static void if_atom_parser(struct used_atom *atom, const char *arg)
 	}
 }
 
+static void head_atom_parser(struct used_atom *atom, const char *arg)
+{
+	unsigned char unused[GIT_SHA1_RAWSZ];
+
+	atom->u.head = resolve_refdup("HEAD", RESOLVE_REF_READING, unused, NULL);
+}
 
 static struct {
 	const char *name;
@@ -325,7 +332,7 @@ static struct {
 	{ "push", FIELD_STR, remote_ref_atom_parser },
 	{ "symref", FIELD_STR, refname_atom_parser },
 	{ "flag" },
-	{ "HEAD" },
+	{ "HEAD", FIELD_STR, head_atom_parser },
 	{ "color", FIELD_STR, color_atom_parser },
 	{ "align", FIELD_STR, align_atom_parser },
 	{ "end" },
@@ -1251,13 +1258,17 @@ char *get_head_description(void)
 			    state.branch);
 	else if (state.detached_from) {
 		if (state.detached_at)
-			/* TRANSLATORS: make sure this matches
-			   "HEAD detached at " in wt-status.c */
+			/*
+			 * TRANSLATORS: make sure this matches "HEAD
+			 * detached at " in wt-status.c
+			 */
 			strbuf_addf(&desc, _("(HEAD detached at %s)"),
 				state.detached_from);
 		else
-			/* TRANSLATORS: make sure this matches
-			   "HEAD detached from " in wt-status.c */
+			/*
+			 * TRANSLATORS: make sure this matches "HEAD
+			 * detached from " in wt-status.c
+			 */
 			strbuf_addf(&desc, _("(HEAD detached from %s)"),
 				state.detached_from);
 	}
@@ -1369,12 +1380,7 @@ static void populate_value(struct ref_array_item *ref)
 		} else if (!deref && grab_objectname(name, ref->objectname, v, atom)) {
 			continue;
 		} else if (!strcmp(name, "HEAD")) {
-			const char *head;
-			unsigned char sha1[20];
-
-			head = resolve_ref_unsafe("HEAD", RESOLVE_REF_READING,
-						  sha1, NULL);
-			if (head && !strcmp(ref->refname, head))
+			if (atom->u.head && !strcmp(ref->refname, atom->u.head))
 				v->s = "*";
 			else
 				v->s = " ";
