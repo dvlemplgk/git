@@ -37,6 +37,7 @@ Requires:	git-email = %{version}-%{release}
 Requires:	gitk = %{version}-%{release}
 Requires:	gitweb = %{version}-%{release}
 Requires:	git-gui = %{version}-%{release}
+Requires:	git-lang = %{version}-%{release}
 Obsoletes:	git <= 1.5.4.2
 
 %description all
@@ -106,6 +107,13 @@ BuildRequires:  perl(ExtUtils::MakeMaker)
 %description -n perl-Git
 Perl interface to Git
 
+%package lang
+Summary:        Languages for git
+Group:          Development/Tools
+Requires:	git = %{version}-%{release}
+%description lang
+Provides translations to git.
+
 %define path_settings ETC_GITCONFIG=/etc/gitconfig prefix=%{_prefix} mandir=%{_mandir} htmldir=%{_docdir}/%{name}-%{version} gitexecdir=%{_libexecdir}/git-core
 %{!?python_sitelib: %global python_sitelib %(%{__python} -c "from distutils.sysconfig import get_python_lib; print get_python_lib()")}
 
@@ -135,7 +143,7 @@ find $RPM_BUILD_ROOT -type f -name perllocal.pod -exec rm -f {} ';'
 %else
 rm -rf $RPM_BUILD_ROOT%{_mandir}
 %endif
-rm -rf $RPM_BUILD_ROOT%{_datadir}/locale
+#rm -rf $RPM_BUILD_ROOT%{_datadir}/locale
 
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/bash_completion.d
 install -m 644 -T contrib/completion/git-completion.bash $RPM_BUILD_ROOT%{_sysconfdir}/bash_completion.d/git
@@ -212,6 +220,10 @@ rm -rf $RPM_BUILD_ROOT
 
 %files all
 # No files for you!
+
+%files lang
+%defattr(-,root,root)
+%{_datadir}/locale
 
 %changelog
 * Sun Sep 18 2011 Jakub Narebski <jnareb@gmail.com>
