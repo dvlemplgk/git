@@ -218,7 +218,7 @@ rm -rf $RPM_BUILD_ROOT
 %files -n perl-Git -f perl-files
 %defattr(-,root,root)
 
-%files all
+# %files all
 # No files for you!
 
 %files lang
