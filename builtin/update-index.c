@@ -451,7 +451,8 @@ static void update_one(const char *path)
 	int stat_errno = 0;
 	struct stat st;
 
-	if (mark_valid_only || mark_skip_worktree_only || force_remove)
+	if (mark_valid_only || mark_skip_worktree_only || force_remove ||
+	    mark_fsmonitor_only)
 		st.st_mode = 0;
 	else if (lstat(path, &st) < 0) {
 		st.st_mode = 0;
