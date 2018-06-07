@@ -345,7 +345,8 @@ struct index_state {
 	struct split_index *split_index;
 	struct cache_time timestamp;
 	unsigned name_hash_initialized : 1,
-		 initialized : 1;
+		 initialized : 1,
+		 drop_cache_tree : 1;
 	struct hashmap name_hash;
 	struct hashmap dir_hash;
 	unsigned char sha1[20];
@@ -371,7 +372,7 @@ extern void free_name_hash(struct index_state *istate);
 #define active_cache_tree (the_index.cache_tree)
 
 #define read_cache() read_index(&the_index)
-#define read_cache_from(path) read_index_from(&the_index, (path))
+#define read_cache_from(path) read_index_from(&the_index, (path), (get_git_dir()))
 #define read_cache_preload(pathspec) read_index_preload(&the_index, (pathspec))
 #define is_cache_unborn() is_index_unborn(&the_index)
 #define read_cache_unmerged() read_index_unmerged(&the_index)
@@ -616,7 +617,8 @@ extern int read_index(struct index_state *);
 extern int read_index_preload(struct index_state *, const struct pathspec *pathspec);
 extern int do_read_index(struct index_state *istate, const char *path,
 			 int must_exist); /* for testting only! */
-extern int read_index_from(struct index_state *, const char *path);
+extern int read_index_from(struct index_state *, const char *path,
+			   const char *gitdir);
 extern int is_index_unborn(struct index_state *);
 extern int read_index_unmerged(struct index_state *);
 
@@ -653,7 +655,7 @@ extern int unmerged_index(const struct index_state *);
  */
 extern int index_has_changes(struct strbuf *sb);
 
-extern int verify_path(const char *path);
+extern int verify_path(const char *path, unsigned mode);
 extern int strcmp_offset(const char *s1, const char *s2, size_t *first_change);
 extern int index_dir_exists(struct index_state *istate, const char *name, int namelen);
 extern void adjust_dirname_case(struct index_state *istate, char *name);
@@ -1185,7 +1187,15 @@ int normalize_path_copy(char *dst, const char *src);
 int longest_ancestor_length(const char *path, struct string_list *prefixes);
 char *strip_path_suffix(const char *path, const char *suffix);
 int daemon_avoid_alias(const char *path);
-extern int is_ntfs_dotgit(const char *name);
+
+/*
+ * These functions match their is_hfs_dotgit() counterparts; see utf8.h for
+ * details.
+ */
+int is_ntfs_dotgit(const char *name);
+int is_ntfs_dotgitmodules(const char *name);
+int is_ntfs_dotgitignore(const char *name);
+int is_ntfs_dotgitattributes(const char *name);
 
 /*
  * Returns true iff "str" could be confused as a command-line option when
