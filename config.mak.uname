@@ -192,7 +192,17 @@ ifeq ($(uname_O),Cygwin)
 endif
 ifeq ($(uname_S),FreeBSD)
 	NEEDS_LIBICONV = YesPlease
-	OLD_ICONV = YesPlease
+	# Versions up to 10.1 require OLD_ICONV; 10.2 and beyond don't.
+	# A typical version string looks like "10.2-RELEASE".
+	ifeq ($(shell expr "$(uname_R)" : '[1-9]\.'),2)
+		OLD_ICONV = YesPlease
+	endif
+	ifeq ($(firstword $(subst -, ,$(uname_R))),10.0)
+		OLD_ICONV = YesPlease
+	endif
+	ifeq ($(firstword $(subst -, ,$(uname_R))),10.1)
+		OLD_ICONV = YesPlease
+	endif
 	NO_MEMMEM = YesPlease
 	BASIC_CFLAGS += -I/usr/local/include
 	BASIC_LDFLAGS += -L/usr/local/lib
@@ -528,7 +538,7 @@ ifneq (,$(findstring MINGW,$(uname_S)))
 	COMPAT_OBJS += compat/mingw.o compat/winansi.o \
 		compat/win32/pthread.o compat/win32/syslog.o \
 		compat/win32/dirent.o
-	BASIC_CFLAGS += -DPROTECT_NTFS_DEFAULT=1
+	BASIC_CFLAGS += -DWIN32 -DPROTECT_NTFS_DEFAULT=1
 	EXTLIBS += -lws2_32
 	GITLIBS += git.res
 	PTHREAD_LIBS =

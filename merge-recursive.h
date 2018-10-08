@@ -1,8 +1,10 @@
 #ifndef MERGE_RECURSIVE_H
 #define MERGE_RECURSIVE_H
 
-#include "unpack-trees.h"
 #include "string-list.h"
+#include "unpack-trees.h"
+
+struct commit;
 
 struct merge_options {
 	const char *ancestor;
@@ -18,6 +20,7 @@ struct merge_options {
 	unsigned renormalize : 1;
 	long xdl_opts;
 	int verbosity;
+	int detect_directory_renames;
 	int diff_detect_rename;
 	int merge_detect_rename;
 	int diff_rename_limit;
