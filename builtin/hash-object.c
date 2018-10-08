@@ -6,10 +6,11 @@
  */
 #include "builtin.h"
 #include "config.h"
+#include "object-store.h"
 #include "blob.h"
 #include "quote.h"
 #include "parse-options.h"
-#include "exec_cmd.h"
+#include "exec-cmd.h"
 
 /*
  * This is to create corrupt objects for debugging and as such it

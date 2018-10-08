@@ -119,6 +119,15 @@ test_expect_success 'rebase -i with exec allows git commands in subdirs' '
 	)
 '
 
+test_expect_success 'rebase -i sets work tree properly' '
+	test_when_finished "rm -rf subdir" &&
+	test_when_finished "test_might_fail git rebase --abort" &&
+	mkdir subdir &&
+	git rebase -x "(cd subdir && git rev-parse --show-toplevel)" HEAD^ \
+		>actual &&
+	! grep "/subdir$" actual
+'
+
 test_expect_success 'rebase -i with the exec command checks tree cleanness' '
 	git checkout master &&
 	set_fake_editor &&
@@ -264,11 +273,18 @@ test_expect_success 'retain authorship' '
 '
 
 test_expect_success 'retain authorship w/ conflicts' '
+	oGIT_AUTHOR_NAME=$GIT_AUTHOR_NAME &&
+	test_when_finished "GIT_AUTHOR_NAME=\$oGIT_AUTHOR_NAME" &&
+
 	git reset --hard twerp &&
 	test_commit a conflict a conflict-a &&
 	git reset --hard twerp &&
-	GIT_AUTHOR_NAME=AttributeMe \
+
+	GIT_AUTHOR_NAME=AttributeMe &&
+	export GIT_AUTHOR_NAME &&
 	test_commit b conflict b conflict-b &&
+	GIT_AUTHOR_NAME=$oGIT_AUTHOR_NAME &&
+
 	set_fake_editor &&
 	test_must_fail git rebase -i conflict-a &&
 	echo resolved >conflict &&
@@ -509,7 +525,7 @@ test_expect_success 'interrupted squash works as expected' '
 	one=$(git rev-parse HEAD~3) &&
 	set_fake_editor &&
 	test_must_fail env FAKE_LINES="1 squash 3 2" git rebase -i HEAD~3 &&
-	(echo one; echo two; echo four) > conflict &&
+	test_write_lines one two four > conflict &&
 	git add conflict &&
 	test_must_fail git rebase --continue &&
 	echo resolved > conflict &&
@@ -523,10 +539,10 @@ test_expect_success 'interrupted squash works as expected (case 2)' '
 	one=$(git rev-parse HEAD~3) &&
 	set_fake_editor &&
 	test_must_fail env FAKE_LINES="3 squash 1 2" git rebase -i HEAD~3 &&
-	(echo one; echo four) > conflict &&
+	test_write_lines one four > conflict &&
 	git add conflict &&
 	test_must_fail git rebase --continue &&
-	(echo one; echo two; echo four) > conflict &&
+	test_write_lines one two four > conflict &&
 	git add conflict &&
 	test_must_fail git rebase --continue &&
 	echo resolved > conflict &&
@@ -553,15 +569,16 @@ test_expect_success '--continue tries to commit, even for "edit"' '
 '
 
 test_expect_success 'aborted --continue does not squash commits after "edit"' '
+	test_when_finished "git rebase --abort" &&
 	old=$(git rev-parse HEAD) &&
 	test_tick &&
 	set_fake_editor &&
 	FAKE_LINES="edit 1" git rebase -i HEAD^ &&
 	echo "edited again" > file7 &&
 	git add file7 &&
-	test_must_fail env FAKE_COMMIT_MESSAGE=" " git rebase --continue &&
-	test $old = $(git rev-parse HEAD) &&
-	git rebase --abort
+	echo all the things >>conflict &&
+	test_must_fail git rebase --continue &&
+	test $old = $(git rev-parse HEAD)
 '
 
 test_expect_success 'auto-amend only edited commits after "edit"' '
@@ -711,13 +728,13 @@ test_expect_success 'rebase -i continue with unstaged submodule' '
 test_expect_success 'avoid unnecessary reset' '
 	git checkout master &&
 	git reset --hard &&
-	test-chmtime =123456789 file3 &&
+	test-tool chmtime =123456789 file3 &&
 	git update-index --refresh &&
 	HEAD=$(git rev-parse HEAD) &&
 	set_fake_editor &&
 	git rebase -i HEAD~4 &&
 	test $HEAD = $(git rev-parse HEAD) &&
-	MTIME=$(test-chmtime -v +0 file3 | sed 's/[^0-9].*$//') &&
+	MTIME=$(test-tool chmtime --get file3) &&
 	test 123456789 = $MTIME
 '
 
@@ -779,16 +796,15 @@ test_expect_success 'always cherry-pick with --no-ff' '
 	git tag original-no-ff-branch &&
 	set_fake_editor &&
 	git rebase -i --no-ff A &&
-	touch empty &&
 	for p in 0 1 2
 	do
 		test ! $(git rev-parse HEAD~$p) = $(git rev-parse original-no-ff-branch~$p) &&
 		git diff HEAD~$p original-no-ff-branch~$p > out &&
-		test_cmp empty out
+		test_must_be_empty out
 	done &&
 	test $(git rev-parse HEAD~3) = $(git rev-parse original-no-ff-branch~3) &&
 	git diff HEAD~3 original-no-ff-branch~3 > out &&
-	test_cmp empty out
+	test_must_be_empty out
 '
 
 test_expect_success 'set up commits with funny messages' '
@@ -927,10 +943,8 @@ test_expect_success 'rebase --exec works without -i ' '
 test_expect_success 'rebase -i --exec without <CMD>' '
 	git reset --hard execute &&
 	set_fake_editor &&
-	test_must_fail git rebase -i --exec 2>tmp &&
-	sed -e "1d" tmp >actual &&
-	test_must_fail git rebase -h >expected &&
-	test_cmp expected actual &&
+	test_must_fail git rebase -i --exec 2>actual &&
+	test_i18ngrep "requires a value" actual &&
 	git checkout master
 '
 
@@ -973,7 +987,45 @@ test_expect_success 'rebase -i --root fixup root commit' '
 	test 0 = $(git cat-file commit HEAD | grep -c ^parent\ )
 '
 
+test_expect_success 'rebase -i --root reword root commit' '
+	test_when_finished "test_might_fail git rebase --abort" &&
+	git checkout -b reword-root-branch master &&
+	set_fake_editor &&
+	FAKE_LINES="reword 1 2" FAKE_COMMIT_MESSAGE="A changed" \
+	git rebase -i --root &&
+	git show HEAD^ | grep "A changed" &&
+	test -z "$(git show -s --format=%p HEAD^)"
+'
+
+test_expect_success 'rebase -i --root when root has untracked file confilct' '
+	test_when_finished "reset_rebase" &&
+	git checkout -b failing-root-pick A &&
+	echo x >file2 &&
+	git rm file1 &&
+	git commit -m "remove file 1 add file 2" &&
+	echo z >file1 &&
+	set_fake_editor &&
+	test_must_fail env FAKE_LINES="1 2" git rebase -i --root &&
+	rm file1 &&
+	git rebase --continue &&
+	test "$(git log -1 --format=%B)" = "remove file 1 add file 2" &&
+	test "$(git rev-list --count HEAD)" = 2
+'
+
+test_expect_success 'rebase -i --root reword root when root has untracked file conflict' '
+	test_when_finished "reset_rebase" &&
+	echo z>file1 &&
+	set_fake_editor &&
+	test_must_fail env FAKE_LINES="reword 1 2" \
+		FAKE_COMMIT_MESSAGE="Modified A" git rebase -i --root &&
+	rm file1 &&
+	FAKE_COMMIT_MESSAGE="Reworded A" git rebase --continue &&
+	test "$(git log -1 --format=%B HEAD^)" = "Reworded A" &&
+	test "$(git rev-list --count HEAD)" = 2
+'
+
 test_expect_success C_LOCALE_OUTPUT 'rebase --edit-todo does not work on non-interactive rebase' '
+	git checkout reword-root-branch &&
 	git reset --hard &&
 	git checkout conflict-branch &&
 	set_fake_editor &&
@@ -1194,7 +1246,7 @@ rebase_setup_and_clean () {
 		test_might_fail git branch -D $1 &&
 		test_might_fail git rebase --abort
 	" &&
-	git checkout -b $1 master
+	git checkout -b $1 ${2:-master}
 }
 
 test_expect_success 'drop' '
@@ -1206,10 +1258,6 @@ test_expect_success 'drop' '
 	test A = $(git cat-file commit HEAD^^ | sed -ne \$p)
 '
 
-cat >expect <<EOF
-Successfully rebased and updated refs/heads/missing-commit.
-EOF
-
 test_expect_success 'rebase -i respects rebase.missingCommitsCheck = ignore' '
 	test_config rebase.missingCommitsCheck ignore &&
 	rebase_setup_and_clean missing-commit &&
@@ -1217,7 +1265,9 @@ test_expect_success 'rebase -i respects rebase.missingCommitsCheck = ignore' '
 	FAKE_LINES="1 2 3 4" \
 		git rebase -i --root 2>actual &&
 	test D = $(git cat-file commit HEAD | sed -ne \$p) &&
-	test_i18ncmp expect actual
+	test_i18ngrep \
+		"Successfully rebased and updated refs/heads/missing-commit" \
+		actual
 '
 
 cat >expect <<EOF
@@ -1229,15 +1279,24 @@ To avoid this message, use "drop" to explicitly remove a commit.
 Use 'git config rebase.missingCommitsCheck' to change the level of warnings.
 The possible behaviours are: ignore, warn, error.
 
+Rebasing (1/4)
+Rebasing (2/4)
+Rebasing (3/4)
+Rebasing (4/4)
 Successfully rebased and updated refs/heads/missing-commit.
 EOF
+
+cr_to_nl () {
+	tr '\015' '\012'
+}
 
 test_expect_success 'rebase -i respects rebase.missingCommitsCheck = warn' '
 	test_config rebase.missingCommitsCheck warn &&
 	rebase_setup_and_clean missing-commit &&
 	set_fake_editor &&
 	FAKE_LINES="1 2 3 4" \
-		git rebase -i --root 2>actual &&
+		git rebase -i --root 2>actual.2 &&
+	cr_to_nl <actual.2 >actual &&
 	test_i18ncmp expect actual &&
 	test D = $(git cat-file commit HEAD | sed -ne \$p)
 '
@@ -1362,6 +1421,26 @@ test_expect_success 'rebase -i --gpg-sign=<key-id> overrides commit.gpgSign' '
 	FAKE_LINES="edit 1" git rebase -i --gpg-sign="\"S I Gner\"" HEAD^ \
 		>out 2>err &&
 	test_i18ngrep "$SQ-S\"S I Gner\"$SQ" err
+'
+
+test_expect_success 'valid author header after --root swap' '
+	rebase_setup_and_clean author-header no-conflict-branch &&
+	set_fake_editor &&
+	git commit --amend --author="Au ${SQ}thor <author@example.com>" --no-edit &&
+	git cat-file commit HEAD | grep ^author >expected &&
+	FAKE_LINES="5 1" git rebase -i --root &&
+	git cat-file commit HEAD^ | grep ^author >actual &&
+	test_cmp expected actual
+'
+
+test_expect_success 'valid author header when author contains single quote' '
+	rebase_setup_and_clean author-header no-conflict-branch &&
+	set_fake_editor &&
+	git commit --amend --author="Au ${SQ}thor <author@example.com>" --no-edit &&
+	git cat-file commit HEAD | grep ^author >expected &&
+	FAKE_LINES="2" git rebase -i HEAD~2 &&
+	git cat-file commit HEAD | grep ^author >actual &&
+	test_cmp expected actual
 '
 
 test_done

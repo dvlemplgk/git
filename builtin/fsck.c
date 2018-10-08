@@ -1,5 +1,6 @@
 #include "builtin.h"
 #include "cache.h"
+#include "repository.h"
 #include "config.h"
 #include "commit.h"
 #include "tree.h"
@@ -16,6 +17,8 @@
 #include "streaming.h"
 #include "decorate.h"
 #include "packfile.h"
+#include "object-store.h"
+#include "run-command.h"
 
 #define REACHABLE 0x0001
 #define SEEN      0x0002
@@ -45,6 +48,7 @@ static int name_objects;
 #define ERROR_REACHABLE 02
 #define ERROR_PACK 04
 #define ERROR_REFS 010
+#define ERROR_COMMIT_GRAPH 020
 
 static const char *describe_object(struct object *obj)
 {
@@ -65,9 +69,10 @@ static const char *printable_type(struct object *obj)
 	const char *ret;
 
 	if (obj->type == OBJ_NONE) {
-		enum object_type type = sha1_object_info(obj->oid.hash, NULL);
+		enum object_type type = oid_object_info(the_repository,
+							&obj->oid, NULL);
 		if (type > 0)
-			object_as_type(obj, type, 0);
+			object_as_type(the_repository, obj, type, 0);
 	}
 
 	ret = type_name(obj->type);
@@ -225,7 +230,7 @@ static void check_reachable_object(struct object *obj)
 	if (!(obj->flags & HAS_OBJ)) {
 		if (is_promisor_object(&obj->oid))
 			return;
-		if (has_sha1_pack(obj->oid.hash))
+		if (has_object_pack(&obj->oid))
 			return; /* it is in pack - forget about it */
 		printf("missing %s %s\n", printable_type(obj),
 			describe_object(obj));
@@ -389,7 +394,8 @@ static int fsck_obj_buffer(const struct object_id *oid, enum object_type type,
 	 * verify_packfile(), data_valid variable for details.
 	 */
 	struct object *obj;
-	obj = parse_object_buffer(oid, type, size, buffer, eaten);
+	obj = parse_object_buffer(the_repository, oid, type, size, buffer,
+				  eaten);
 	if (!obj) {
 		errors_found |= ERROR_OBJECT;
 		return error("%s: object corrupt or missing", oid_to_hex(oid));
@@ -407,7 +413,7 @@ static void fsck_handle_reflog_oid(const char *refname, struct object_id *oid,
 	struct object *obj;
 
 	if (!is_null_oid(oid)) {
-		obj = lookup_object(oid->hash);
+		obj = lookup_object(the_repository, oid->hash);
 		if (obj && (obj->flags & HAS_OBJ)) {
 			if (timestamp && name_objects)
 				add_decoration(fsck_walk_options.object_names,
@@ -449,7 +455,7 @@ static int fsck_handle_ref(const char *refname, const struct object_id *oid,
 {
 	struct object *obj;
 
-	obj = parse_object(oid);
+	obj = parse_object(the_repository, oid);
 	if (!obj) {
 		if (is_promisor_object(oid)) {
 			/*
@@ -512,7 +518,7 @@ static int fsck_loose(const struct object_id *oid, const char *path, void *data)
 	void *contents;
 	int eaten;
 
-	if (read_loose_object(path, oid->hash, &type, &size, &contents) < 0) {
+	if (read_loose_object(path, oid, &type, &size, &contents) < 0) {
 		errors_found |= ERROR_OBJECT;
 		error("%s: object corrupt or missing: %s",
 		      oid_to_hex(oid), path);
@@ -522,7 +528,9 @@ static int fsck_loose(const struct object_id *oid, const char *path, void *data)
 	if (!contents && type != OBJ_BLOB)
 		BUG("read_loose_object streamed a non-blob");
 
-	obj = parse_object_buffer(oid, type, size, contents, &eaten);
+	obj = parse_object_buffer(the_repository, oid, type, size,
+				  contents, &eaten);
+
 	if (!obj) {
 		errors_found |= ERROR_OBJECT;
 		error("%s: object could not be parsed: %s",
@@ -611,7 +619,7 @@ static int fsck_cache_tree(struct cache_tree *it)
 		fprintf(stderr, "Checking cache tree\n");
 
 	if (0 <= it->entry_count) {
-		struct object *obj = parse_object(&it->oid);
+		struct object *obj = parse_object(the_repository, &it->oid);
 		if (!obj) {
 			error("%s: invalid sha1 pointer in cache-tree",
 			      oid_to_hex(&it->oid));
@@ -686,7 +694,7 @@ int cmd_fsck(int argc, const char **argv, const char *prefix)
 	fetch_if_missing = 0;
 
 	errors_found = 0;
-	check_replace_refs = 0;
+	read_replace_refs = 0;
 
 	argc = parse_options(argc, argv, prefix, fsck_opts, fsck_usage, 0);
 
@@ -717,9 +725,12 @@ int cmd_fsck(int argc, const char **argv, const char *prefix)
 		for_each_loose_object(mark_loose_for_connectivity, NULL, 0);
 		for_each_packed_object(mark_packed_for_connectivity, NULL, 0);
 	} else {
+		struct alternate_object_database *alt_odb_list;
+
 		fsck_object_dir(get_object_directory());
 
-		prepare_alt_odb();
+		prepare_alt_odb(the_repository);
+		alt_odb_list = the_repository->objects->alt_odb_list;
 		for (alt = alt_odb_list; alt; alt = alt->next)
 			fsck_object_dir(alt->path);
 
@@ -728,10 +739,9 @@ int cmd_fsck(int argc, const char **argv, const char *prefix)
 			uint32_t total = 0, count = 0;
 			struct progress *progress = NULL;
 
-			prepare_packed_git();
-
 			if (show_progress) {
-				for (p = packed_git; p; p = p->next) {
+				for (p = get_packed_git(the_repository); p;
+				     p = p->next) {
 					if (open_pack_index(p))
 						continue;
 					total += p->num_objects;
@@ -739,7 +749,8 @@ int cmd_fsck(int argc, const char **argv, const char *prefix)
 
 				progress = start_progress(_("Checking objects"), total);
 			}
-			for (p = packed_git; p; p = p->next) {
+			for (p = get_packed_git(the_repository); p;
+			     p = p->next) {
 				/* verify gives error messages itself */
 				if (verify_pack(p, fsck_obj_buffer,
 						progress, count))
@@ -757,7 +768,8 @@ int cmd_fsck(int argc, const char **argv, const char *prefix)
 		const char *arg = argv[i];
 		struct object_id oid;
 		if (!get_oid(arg, &oid)) {
-			struct object *obj = lookup_object(oid.hash);
+			struct object *obj = lookup_object(the_repository,
+							   oid.hash);
 
 			if (!obj || !(obj->flags & HAS_OBJ)) {
 				if (is_promisor_object(&oid))
@@ -800,7 +812,8 @@ int cmd_fsck(int argc, const char **argv, const char *prefix)
 			mode = active_cache[i]->ce_mode;
 			if (S_ISGITLINK(mode))
 				continue;
-			blob = lookup_blob(&active_cache[i]->oid);
+			blob = lookup_blob(the_repository,
+					   &active_cache[i]->oid);
 			if (!blob)
 				continue;
 			obj = &blob->object;
@@ -816,5 +829,24 @@ int cmd_fsck(int argc, const char **argv, const char *prefix)
 	}
 
 	check_connectivity();
+
+	if (!git_config_get_bool("core.commitgraph", &i) && i) {
+		struct child_process commit_graph_verify = CHILD_PROCESS_INIT;
+		const char *verify_argv[] = { "commit-graph", "verify", NULL, NULL, NULL };
+
+		commit_graph_verify.argv = verify_argv;
+		commit_graph_verify.git_cmd = 1;
+		if (run_command(&commit_graph_verify))
+			errors_found |= ERROR_COMMIT_GRAPH;
+
+		prepare_alt_odb(the_repository);
+		for (alt =  the_repository->objects->alt_odb_list; alt; alt = alt->next) {
+			verify_argv[2] = "--object-dir";
+			verify_argv[3] = alt->path;
+			if (run_command(&commit_graph_verify))
+				errors_found |= ERROR_COMMIT_GRAPH;
+		}
+	}
+
 	return errors_found;
 }

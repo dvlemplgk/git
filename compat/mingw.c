@@ -341,12 +341,44 @@ int mingw_mkdir(const char *path, int mode)
 	return ret;
 }
 
+static int mingw_open_append(wchar_t const *wfilename, int oflags, ...)
+{
+	HANDLE handle;
+	int fd;
+	DWORD create = (oflags & O_CREAT) ? OPEN_ALWAYS : OPEN_EXISTING;
+
+	/* only these flags are supported */
+	if ((oflags & ~O_CREAT) != (O_WRONLY | O_APPEND))
+		return errno = ENOSYS, -1;
+
+	/*
+	 * FILE_SHARE_WRITE is required to permit child processes
+	 * to append to the file.
+	 */
+	handle = CreateFileW(wfilename, FILE_APPEND_DATA,
+			FILE_SHARE_WRITE | FILE_SHARE_READ,
+			NULL, create, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (handle == INVALID_HANDLE_VALUE)
+		return errno = err_win_to_posix(GetLastError()), -1;
+	/*
+	 * No O_APPEND here, because the CRT uses it only to reset the
+	 * file pointer to EOF on write(); but that is not necessary
+	 * for a file created with FILE_APPEND_DATA.
+	 */
+	fd = _open_osfhandle((intptr_t)handle, O_BINARY);
+	if (fd < 0)
+		CloseHandle(handle);
+	return fd;
+}
+
 int mingw_open (const char *filename, int oflags, ...)
 {
+	typedef int (*open_fn_t)(wchar_t const *wfilename, int oflags, ...);
 	va_list args;
 	unsigned mode;
 	int fd;
 	wchar_t wfilename[MAX_PATH];
+	open_fn_t open_fn;
 
 	va_start(args, oflags);
 	mode = va_arg(args, int);
@@ -355,9 +387,14 @@ int mingw_open (const char *filename, int oflags, ...)
 	if (filename && !strcmp(filename, "/dev/null"))
 		filename = "nul";
 
+	if (oflags & O_APPEND)
+		open_fn = mingw_open_append;
+	else
+		open_fn = _wopen;
+
 	if (xutftowcs_path(wfilename, filename) < 0)
 		return -1;
-	fd = _wopen(wfilename, oflags, mode);
+	fd = open_fn(wfilename, oflags, mode);
 
 	if (fd < 0 && (oflags & O_ACCMODE) != O_RDONLY && errno == EACCES) {
 		DWORD attrs = GetFileAttributesW(wfilename);
@@ -375,7 +412,7 @@ int mingw_open (const char *filename, int oflags, ...)
 		 * CREATE_ALWAYS flag of CreateFile()).
 		 */
 		if (fd < 0 && errno == EACCES)
-			fd = _wopen(wfilename, oflags & ~O_CREAT, mode);
+			fd = open_fn(wfilename, oflags & ~O_CREAT, mode);
 		if (fd >= 0 && set_hidden_flag(wfilename, 1))
 			warning("could not mark '%s' as hidden.", filename);
 	}
@@ -2221,7 +2258,7 @@ void mingw_startup(void)
 		die_startup();
 
 	/* determine size of argv and environ conversion buffer */
-	maxlen = wcslen(_wpgmptr);
+	maxlen = wcslen(wargv[0]);
 	for (i = 1; i < argc; i++)
 		maxlen = max(maxlen, wcslen(wargv[i]));
 	for (i = 0; wenv[i]; i++)
@@ -2241,8 +2278,7 @@ void mingw_startup(void)
 	buffer = malloc_startup(maxlen);
 
 	/* convert command line arguments and environment to UTF-8 */
-	__argv[0] = wcstoutfdup_startup(buffer, _wpgmptr, maxlen);
-	for (i = 1; i < argc; i++)
+	for (i = 0; i < argc; i++)
 		__argv[i] = wcstoutfdup_startup(buffer, wargv[i], maxlen);
 	for (i = 0; wenv[i]; i++)
 		environ[i] = wcstoutfdup_startup(buffer, wenv[i], maxlen);

@@ -10,6 +10,7 @@
 #include "submodule-config.h"
 #include "path.h"
 #include "packfile.h"
+#include "object-store.h"
 
 static int get_st_mode_bits(const char *path, int *mode)
 {
@@ -382,7 +383,7 @@ static void adjust_git_path(const struct repository *repo,
 		strbuf_splice(buf, 0, buf->len,
 			      repo->index_file, strlen(repo->index_file));
 	else if (dir_prefix(base, "objects"))
-		replace_dir(buf, git_dir_len + 7, repo->objectdir);
+		replace_dir(buf, git_dir_len + 7, repo->objects->objectdir);
 	else if (git_hooks_path && dir_prefix(base, "hooks"))
 		replace_dir(buf, git_dir_len + 5, git_hooks_path);
 	else if (repo->different_commondir)
@@ -1441,12 +1442,12 @@ char *xdg_cache_home(const char *filename)
 	return NULL;
 }
 
-GIT_PATH_FUNC(git_path_cherry_pick_head, "CHERRY_PICK_HEAD")
-GIT_PATH_FUNC(git_path_revert_head, "REVERT_HEAD")
-GIT_PATH_FUNC(git_path_squash_msg, "SQUASH_MSG")
-GIT_PATH_FUNC(git_path_merge_msg, "MERGE_MSG")
-GIT_PATH_FUNC(git_path_merge_rr, "MERGE_RR")
-GIT_PATH_FUNC(git_path_merge_mode, "MERGE_MODE")
-GIT_PATH_FUNC(git_path_merge_head, "MERGE_HEAD")
-GIT_PATH_FUNC(git_path_fetch_head, "FETCH_HEAD")
-GIT_PATH_FUNC(git_path_shallow, "shallow")
+REPO_GIT_PATH_FUNC(cherry_pick_head, "CHERRY_PICK_HEAD")
+REPO_GIT_PATH_FUNC(revert_head, "REVERT_HEAD")
+REPO_GIT_PATH_FUNC(squash_msg, "SQUASH_MSG")
+REPO_GIT_PATH_FUNC(merge_msg, "MERGE_MSG")
+REPO_GIT_PATH_FUNC(merge_rr, "MERGE_RR")
+REPO_GIT_PATH_FUNC(merge_mode, "MERGE_MODE")
+REPO_GIT_PATH_FUNC(merge_head, "MERGE_HEAD")
+REPO_GIT_PATH_FUNC(fetch_head, "FETCH_HEAD")
+REPO_GIT_PATH_FUNC(shallow, "shallow")

@@ -1,6 +1,8 @@
 #include "cache.h"
 #include "commit.h"
 #include "refs.h"
+#include "object-store.h"
+#include "repository.h"
 #include "diff.h"
 #include "diffcore.h"
 #include "xdiff-interface.h"
@@ -322,7 +324,7 @@ static void write_note_to_worktree(const struct object_id *obj,
 {
 	enum object_type type;
 	unsigned long size;
-	void *buf = read_sha1_file(note->hash, &type, &size);
+	void *buf = read_object_file(note, &type, &size);
 
 	if (!buf)
 		die("cannot read note %s for object %s",
@@ -442,7 +444,7 @@ static int merge_one_change(struct notes_merge_options *o,
 			printf("Using remote notes for %s\n",
 						oid_to_hex(&p->obj));
 		if (add_note(t, &p->obj, &p->remote, combine_notes_overwrite))
-			die("BUG: combine_notes_overwrite failed");
+			BUG("combine_notes_overwrite failed");
 		return 0;
 	case NOTES_MERGE_RESOLVE_UNION:
 		if (o->verbosity >= 2)
@@ -490,7 +492,7 @@ static int merge_changes(struct notes_merge_options *o,
 			trace_printf("\t\t\tno local change, adopted remote\n");
 			if (add_note(t, &p->obj, &p->remote,
 				     combine_notes_overwrite))
-				die("BUG: combine_notes_overwrite failed");
+				BUG("combine_notes_overwrite failed");
 		} else {
 			/* need file-level merge between local and remote */
 			trace_printf("\t\t\tneed content-level merge\n");
@@ -552,7 +554,7 @@ int notes_merge(struct notes_merge_options *o,
 	else if (!check_refname_format(o->local_ref, 0) &&
 		is_null_oid(&local_oid))
 		local = NULL; /* local_oid == null_oid indicates unborn ref */
-	else if (!(local = lookup_commit_reference(&local_oid)))
+	else if (!(local = lookup_commit_reference(the_repository, &local_oid)))
 		die("Could not parse local commit %s (%s)",
 		    oid_to_hex(&local_oid), o->local_ref);
 	trace_printf("\tlocal commit: %.7s\n", oid_to_hex(&local_oid));
@@ -570,7 +572,7 @@ int notes_merge(struct notes_merge_options *o,
 			die("Failed to resolve remote notes ref '%s'",
 			    o->remote_ref);
 		}
-	} else if (!(remote = lookup_commit_reference(&remote_oid))) {
+	} else if (!(remote = lookup_commit_reference(the_repository, &remote_oid))) {
 		die("Could not parse remote commit %s (%s)",
 		    oid_to_hex(&remote_oid), o->remote_ref);
 	}
@@ -600,14 +602,14 @@ int notes_merge(struct notes_merge_options *o,
 			printf("No merge base found; doing history-less merge\n");
 	} else if (!bases->next) {
 		base_oid = &bases->item->object.oid;
-		base_tree_oid = &bases->item->tree->object.oid;
+		base_tree_oid = get_commit_tree_oid(bases->item);
 		if (o->verbosity >= 4)
 			printf("One merge base found (%.7s)\n",
 			       oid_to_hex(base_oid));
 	} else {
 		/* TODO: How to handle multiple merge-bases? */
 		base_oid = &bases->item->object.oid;
-		base_tree_oid = &bases->item->tree->object.oid;
+		base_tree_oid = get_commit_tree_oid(bases->item);
 		if (o->verbosity >= 3)
 			printf("Multiple merge bases found. Using the first "
 				"(%.7s)\n", oid_to_hex(base_oid));
@@ -634,8 +636,9 @@ int notes_merge(struct notes_merge_options *o,
 		goto found_result;
 	}
 
-	result = merge_from_diffs(o, base_tree_oid, &local->tree->object.oid,
-				  &remote->tree->object.oid, local_tree);
+	result = merge_from_diffs(o, base_tree_oid,
+				  get_commit_tree_oid(local),
+				  get_commit_tree_oid(remote), local_tree);
 
 	if (result != 0) { /* non-trivial merge (with or without conflicts) */
 		/* Commit (partial) result */
