@@ -31,6 +31,7 @@ test_http_env() {
 		PATH_TRANSLATED="$PWD/.git/git-$handler_type-pack" \
 		GIT_HTTP_EXPORT_ALL=TRUE \
 		REQUEST_METHOD=POST \
+		"$PERL_PATH" \
 		"$TEST_DIRECTORY"/t5562/invoke-with-content-length.pl \
 		    "$request_body" git http-backend >act.out 2>act.err
 }
@@ -155,8 +156,8 @@ test_expect_success 'CONTENT_LENGTH overflow ssite_t' '
 
 test_expect_success 'empty CONTENT_LENGTH' '
 	env \
-		QUERY_STRING=/repo.git/HEAD \
-		PATH_TRANSLATED="$PWD"/.git/HEAD \
+		QUERY_STRING="service=git-receive-pack" \
+		PATH_TRANSLATED="$PWD"/.git/info/refs \
 		GIT_HTTP_EXPORT_ALL=TRUE \
 		REQUEST_METHOD=GET \
 		CONTENT_LENGTH="" \
