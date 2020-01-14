@@ -224,17 +224,6 @@ static struct commit *make_virtual_commit(struct repository *repo,
 	return commit;
 }
 
-/*
- * Since we use get_tree_entry(), which does not put the read object into
- * the object pool, we cannot rely on a == b.
- */
-static int oid_eq(const struct object_id *a, const struct object_id *b)
-{
-	if (!a && !b)
-		return 2;
-	return a && b && oideq(a, b);
-}
-
 enum rename_type {
 	RENAME_NORMAL = 0,
 	RENAME_VIA_DIR,
@@ -805,7 +794,7 @@ static int was_tracked_and_matches(struct merge_options *opt, const char *path,
 
 	/* See if the file we were tracking before matches */
 	ce = opt->priv->orig_index.cache[pos];
-	return (oid_eq(&ce->oid, &blob->oid) && ce->ce_mode == blob->mode);
+	return (oideq(&ce->oid, &blob->oid) && ce->ce_mode == blob->mode);
 }
 
 /*
@@ -1317,7 +1306,7 @@ static int merge_mode_and_contents(struct merge_options *opt,
 			oidcpy(&result->blob.oid, &b->oid);
 		}
 	} else {
-		if (!oid_eq(&a->oid, &o->oid) && !oid_eq(&b->oid, &o->oid))
+		if (!oideq(&a->oid, &o->oid) && !oideq(&b->oid, &o->oid))
 			result->merge = 1;
 
 		/*
@@ -1333,9 +1322,9 @@ static int merge_mode_and_contents(struct merge_options *opt,
 			}
 		}
 
-		if (oid_eq(&a->oid, &b->oid) || oid_eq(&a->oid, &o->oid))
+		if (oideq(&a->oid, &b->oid) || oideq(&a->oid, &o->oid))
 			oidcpy(&result->blob.oid, &b->oid);
-		else if (oid_eq(&b->oid, &o->oid))
+		else if (oideq(&b->oid, &o->oid))
 			oidcpy(&result->blob.oid, &a->oid);
 		else if (S_ISREG(a->mode)) {
 			mmbuffer_t result_buf;
@@ -1368,7 +1357,7 @@ static int merge_mode_and_contents(struct merge_options *opt,
 			switch (opt->recursive_variant) {
 			case MERGE_VARIANT_NORMAL:
 				oidcpy(&result->blob.oid, &a->oid);
-				if (!oid_eq(&a->oid, &b->oid))
+				if (!oideq(&a->oid, &b->oid))
 					result->clean = 0;
 				break;
 			case MERGE_VARIANT_OURS:
@@ -1951,6 +1940,16 @@ static char *apply_dir_rename(struct dir_rename_entry *entry,
 		return NULL;
 
 	oldlen = strlen(entry->dir);
+	if (entry->new_dir.len == 0)
+		/*
+		 * If someone renamed/merged a subdirectory into the root
+		 * directory (e.g. 'some/subdir' -> ''), then we want to
+		 * avoid returning
+		 *     '' + '/filename'
+		 * as the rename; we need to make old_path + oldlen advance
+		 * past the '/' character.
+		 */
+		oldlen++;
 	newlen = entry->new_dir.len + (strlen(old_path) - oldlen) + 1;
 	strbuf_grow(&new_path, newlen);
 	strbuf_addbuf(&new_path, &entry->new_dir);
@@ -1963,8 +1962,8 @@ static void get_renamed_dir_portion(const char *old_path, const char *new_path,
 				    char **old_dir, char **new_dir)
 {
 	char *end_of_old, *end_of_new;
-	int old_len, new_len;
 
+	/* Default return values: NULL, meaning no rename */
 	*old_dir = NULL;
 	*new_dir = NULL;
 
@@ -1975,43 +1974,91 @@ static void get_renamed_dir_portion(const char *old_path, const char *new_path,
 	 *    "a/b/c/d" was renamed to "a/b/some/thing/else"
 	 * so, for this example, this function returns "a/b/c/d" in
 	 * *old_dir and "a/b/some/thing/else" in *new_dir.
-	 *
-	 * Also, if the basename of the file changed, we don't care.  We
-	 * want to know which portion of the directory, if any, changed.
+	 */
+
+	/*
+	 * If the basename of the file changed, we don't care.  We want
+	 * to know which portion of the directory, if any, changed.
 	 */
 	end_of_old = strrchr(old_path, '/');
 	end_of_new = strrchr(new_path, '/');
 
-	if (end_of_old == NULL || end_of_new == NULL)
+	/*
+	 * If end_of_old is NULL, old_path wasn't in a directory, so there
+	 * could not be a directory rename (our rule elsewhere that a
+	 * directory which still exists is not considered to have been
+	 * renamed means the root directory can never be renamed -- because
+	 * the root directory always exists).
+	 */
+	if (end_of_old == NULL)
+		return; /* Note: *old_dir and *new_dir are still NULL */
+
+	/*
+	 * If new_path contains no directory (end_of_new is NULL), then we
+	 * have a rename of old_path's directory to the root directory.
+	 */
+	if (end_of_new == NULL) {
+		*old_dir = xstrndup(old_path, end_of_old - old_path);
+		*new_dir = xstrdup("");
 		return;
+	}
+
+	/* Find the first non-matching character traversing backwards */
 	while (*--end_of_new == *--end_of_old &&
 	       end_of_old != old_path &&
 	       end_of_new != new_path)
 		; /* Do nothing; all in the while loop */
+
+	/*
+	 * If both got back to the beginning of their strings, then the
+	 * directory didn't change at all, only the basename did.
+	 */
+	if (end_of_old == old_path && end_of_new == new_path &&
+	    *end_of_old == *end_of_new)
+		return; /* Note: *old_dir and *new_dir are still NULL */
+
+	/*
+	 * If end_of_new got back to the beginning of its string, and
+	 * end_of_old got back to the beginning of some subdirectory, then
+	 * we have a rename/merge of a subdirectory into the root, which
+	 * needs slightly special handling.
+	 *
+	 * Note: There is no need to consider the opposite case, with a
+	 * rename/merge of the root directory into some subdirectory
+	 * because as noted above the root directory always exists so it
+	 * cannot be considered to be renamed.
+	 */
+	if (end_of_new == new_path &&
+	    end_of_old != old_path && end_of_old[-1] == '/') {
+		*old_dir = xstrndup(old_path, --end_of_old - old_path);
+		*new_dir = xstrdup("");
+		return;
+	}
+
 	/*
 	 * We've found the first non-matching character in the directory
-	 * paths.  That means the current directory we were comparing
-	 * represents the rename.  Move end_of_old and end_of_new back
-	 * to the full directory name.
+	 * paths.  That means the current characters we were looking at
+	 * were part of the first non-matching subdir name going back from
+	 * the end of the strings.  Get the whole name by advancing both
+	 * end_of_old and end_of_new to the NEXT '/' character.  That will
+	 * represent the entire directory rename.
+	 *
+	 * The reason for the increment is cases like
+	 *    a/b/star/foo/whatever.c -> a/b/tar/foo/random.c
+	 * After dropping the basename and going back to the first
+	 * non-matching character, we're now comparing:
+	 *    a/b/s          and         a/b/
+	 * and we want to be comparing:
+	 *    a/b/star/      and         a/b/tar/
+	 * but without the pre-increment, the one on the right would stay
+	 * a/b/.
 	 */
-	if (*end_of_old == '/')
-		end_of_old++;
-	if (*end_of_old != '/')
-		end_of_new++;
-	end_of_old = strchr(end_of_old, '/');
-	end_of_new = strchr(end_of_new, '/');
+	end_of_old = strchr(++end_of_old, '/');
+	end_of_new = strchr(++end_of_new, '/');
 
-	/*
-	 * It may have been the case that old_path and new_path were the same
-	 * directory all along.  Don't claim a rename if they're the same.
-	 */
-	old_len = end_of_old - old_path;
-	new_len = end_of_new - new_path;
-
-	if (old_len != new_len || strncmp(old_path, new_path, old_len)) {
-		*old_dir = xstrndup(old_path, old_len);
-		*new_dir = xstrndup(new_path, new_len);
-	}
+	/* Copy the old and new directories into *old_dir and *new_dir. */
+	*old_dir = xstrndup(old_path, end_of_old - old_path);
+	*new_dir = xstrndup(new_path, end_of_new - new_path);
 }
 
 static void remove_hashmap_entries(struct hashmap *dir_renames,
@@ -2778,15 +2825,15 @@ static int process_renames(struct merge_options *opt,
 			dst_other.mode = ren1->dst_entry->stages[other_stage].mode;
 			try_merge = 0;
 
-			if (oid_eq(&src_other.oid, &null_oid) &&
+			if (oideq(&src_other.oid, &null_oid) &&
 			    ren1->dir_rename_original_type == 'A') {
 				setup_rename_conflict_info(RENAME_VIA_DIR,
 							   opt, ren1, NULL);
-			} else if (oid_eq(&src_other.oid, &null_oid)) {
+			} else if (oideq(&src_other.oid, &null_oid)) {
 				setup_rename_conflict_info(RENAME_DELETE,
 							   opt, ren1, NULL);
 			} else if ((dst_other.mode == ren1->pair->two->mode) &&
-				   oid_eq(&dst_other.oid, &ren1->pair->two->oid)) {
+				   oideq(&dst_other.oid, &ren1->pair->two->oid)) {
 				/*
 				 * Added file on the other side identical to
 				 * the file being renamed: clean merge.
@@ -2801,7 +2848,7 @@ static int process_renames(struct merge_options *opt,
 						      1, /* update_cache */
 						      0  /* update_wd    */))
 					clean_merge = -1;
-			} else if (!oid_eq(&dst_other.oid, &null_oid)) {
+			} else if (!oideq(&dst_other.oid, &null_oid)) {
 				/*
 				 * Probably not a clean merge, but it's
 				 * premature to set clean_merge to 0 here,
@@ -2979,7 +3026,7 @@ static int blob_unchanged(struct merge_options *opt,
 
 	if (a->mode != o->mode)
 		return 0;
-	if (oid_eq(&o->oid, &a->oid))
+	if (oideq(&o->oid, &a->oid))
 		return 1;
 	if (!renormalize)
 		return 0;
@@ -3420,7 +3467,7 @@ static int merge_trees_internal(struct merge_options *opt,
 					       opt->subtree_shift);
 	}
 
-	if (oid_eq(&merge_base->object.oid, &merge->object.oid)) {
+	if (oideq(&merge_base->object.oid, &merge->object.oid)) {
 		output(opt, 0, _("Already up to date!"));
 		*result = head;
 		return 1;

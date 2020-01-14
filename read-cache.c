@@ -959,7 +959,7 @@ static int verify_dotfile(const char *rest, unsigned mode)
 
 int verify_path(const char *path, unsigned mode)
 {
-	char c;
+	char c = 0;
 
 	if (has_dos_drive_prefix(path))
 		return 0;
@@ -974,6 +974,7 @@ int verify_path(const char *path, unsigned mode)
 		if (is_dir_sep(c)) {
 inside:
 			if (protect_hfs) {
+
 				if (is_hfs_dotgit(path))
 					return 0;
 				if (S_ISLNK(mode)) {
@@ -982,6 +983,10 @@ inside:
 				}
 			}
 			if (protect_ntfs) {
+#ifdef GIT_WINDOWS_NATIVE
+				if (c == '\\')
+					return 0;
+#endif
 				if (is_ntfs_dotgit(path))
 					return 0;
 				if (S_ISLNK(mode)) {
@@ -1801,7 +1806,7 @@ static struct cache_entry *create_from_disk(struct mem_pool *ce_mem_pool,
 		const unsigned char *cp = (const unsigned char *)name;
 		size_t strip_len, previous_len;
 
-		/* If we're at the begining of a block, ignore the previous name */
+		/* If we're at the beginning of a block, ignore the previous name */
 		strip_len = decode_varint(&cp);
 		if (previous_ce) {
 			previous_len = previous_ce->ce_namelen;
