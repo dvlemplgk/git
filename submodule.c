@@ -82,7 +82,7 @@ int is_staging_gitmodules_ok(struct index_state *istate)
 	if ((pos >= 0) && (pos < istate->cache_nr)) {
 		struct stat st;
 		if (lstat(GITMODULES_FILE, &st) == 0 &&
-		    ie_match_stat(istate, istate->cache[pos], &st, 0) & DATA_CHANGED)
+		    ie_modified(istate, istate->cache[pos], &st, 0) & DATA_CHANGED)
 			return 0;
 	}
 
@@ -1811,7 +1811,7 @@ out:
 void submodule_unset_core_worktree(const struct submodule *sub)
 {
 	char *config_path = xstrfmt("%s/modules/%s/config",
-				    get_git_common_dir(), sub->name);
+				    get_git_dir(), sub->name);
 
 	if (git_config_set_in_file_gently(config_path, "core.worktree", NULL))
 		warning(_("Could not unset core.worktree setting in submodule '%s'"),
@@ -1914,7 +1914,7 @@ int submodule_move_head(const char *path,
 					ABSORB_GITDIR_RECURSE_SUBMODULES);
 		} else {
 			char *gitdir = xstrfmt("%s/modules/%s",
-				    get_git_common_dir(), sub->name);
+				    get_git_dir(), sub->name);
 			connect_work_tree_and_git_dir(path, gitdir, 0);
 			free(gitdir);
 
@@ -1924,7 +1924,7 @@ int submodule_move_head(const char *path,
 
 		if (old_head && (flags & SUBMODULE_MOVE_HEAD_FORCE)) {
 			char *gitdir = xstrfmt("%s/modules/%s",
-				    get_git_common_dir(), sub->name);
+				    get_git_dir(), sub->name);
 			connect_work_tree_and_git_dir(path, gitdir, 1);
 			free(gitdir);
 		}
