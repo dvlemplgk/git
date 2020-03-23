@@ -553,6 +553,19 @@ test_expect_success 'diffs can be colorized' '
 	grep "$(printf "\\033")" output
 '
 
+test_expect_success 'colorized diffs respect diff.wsErrorHighlight' '
+	git reset --hard &&
+
+	echo "old " >test &&
+	git add test &&
+	echo "new " >test &&
+
+	printf y >y &&
+	force_color git -c diff.wsErrorHighlight=all add -p >output.raw 2>&1 <y &&
+	test_decode_color <output.raw >output &&
+	grep "old<" output
+'
+
 test_expect_success 'diffFilter filters diff' '
 	git reset --hard &&
 
@@ -570,7 +583,7 @@ test_expect_success 'detect bogus diffFilter output' '
 	git reset --hard &&
 
 	echo content >test &&
-	test_config interactive.diffFilter "echo too-short" &&
+	test_config interactive.diffFilter "sed 1d" &&
 	printf y >y &&
 	test_must_fail force_color git add -p <y
 '
