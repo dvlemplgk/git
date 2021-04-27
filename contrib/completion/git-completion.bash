@@ -3516,6 +3516,18 @@ ___git_complete ()
 		|| complete -o default -o nospace -F $wrapper $1
 }
 
+# wrapper for backwards compatibility
+_git ()
+{
+	__git_wrap__git_main
+}
+
+# wrapper for backwards compatibility
+_gitk ()
+{
+	__git_wrap__gitk_main
+}
+
 # Setup the completion for git commands
 # 1: command or alias
 # 2: function to call (e.g. `git`, `gitk`, `git_fetch`)
