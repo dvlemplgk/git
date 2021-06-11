@@ -579,7 +579,9 @@ GENERATED_H =
 EXTRA_CPPFLAGS =
 FUZZ_OBJS =
 FUZZ_PROGRAMS =
+GIT_OBJS =
 LIB_OBJS =
+OBJECTS =
 PROGRAM_OBJS =
 PROGRAMS =
 EXCLUDED_PROGRAMS =
@@ -588,6 +590,7 @@ SCRIPT_PYTHON =
 SCRIPT_SH =
 SCRIPT_LIB =
 TEST_BUILTINS_OBJS =
+TEST_OBJS =
 TEST_PROGRAMS_NEED_X =
 THIRD_PARTY_SOURCES =
 
@@ -663,6 +666,8 @@ ETAGS_TARGET = TAGS
 FUZZ_OBJS += fuzz-commit-graph.o
 FUZZ_OBJS += fuzz-pack-headers.o
 FUZZ_OBJS += fuzz-pack-idx.o
+.PHONY: fuzz-objs
+fuzz-objs: $(FUZZ_OBJS)
 
 # Always build fuzz objects even if not testing, to prevent bit-rot.
 all:: $(FUZZ_OBJS)
@@ -680,6 +685,8 @@ PROGRAM_OBJS += http-backend.o
 PROGRAM_OBJS += imap-send.o
 PROGRAM_OBJS += sh-i18n--envsubst.o
 PROGRAM_OBJS += shell.o
+.PHONY: program-objs
+program-objs: $(PROGRAM_OBJS)
 
 # Binary suffix, set to .exe for Windows builds
 X =
@@ -687,6 +694,7 @@ X =
 PROGRAMS += $(patsubst %.o,git-%$X,$(PROGRAM_OBJS))
 
 TEST_BUILTINS_OBJS += test-advise.o
+TEST_BUILTINS_OBJS += test-bitmap.o
 TEST_BUILTINS_OBJS += test-bloom.o
 TEST_BUILTINS_OBJS += test-chmtime.o
 TEST_BUILTINS_OBJS += test-config.o
@@ -738,6 +746,7 @@ TEST_BUILTINS_OBJS += test-serve-v2.o
 TEST_BUILTINS_OBJS += test-sha1.o
 TEST_BUILTINS_OBJS += test-sha256.o
 TEST_BUILTINS_OBJS += test-sigchain.o
+TEST_BUILTINS_OBJS += test-simple-ipc.o
 TEST_BUILTINS_OBJS += test-strcmp-offset.o
 TEST_BUILTINS_OBJS += test-string-list.o
 TEST_BUILTINS_OBJS += test-submodule-config.o
@@ -745,6 +754,7 @@ TEST_BUILTINS_OBJS += test-submodule-nested-repo-config.o
 TEST_BUILTINS_OBJS += test-subprocess.o
 TEST_BUILTINS_OBJS += test-trace2.o
 TEST_BUILTINS_OBJS += test-urlmatch-normalization.o
+TEST_BUILTINS_OBJS += test-userdiff.o
 TEST_BUILTINS_OBJS += test-wildmatch.o
 TEST_BUILTINS_OBJS += test-windows-named-pipe.o
 TEST_BUILTINS_OBJS += test-write-cache.o
@@ -939,6 +949,7 @@ LIB_OBJS += pack-revindex.o
 LIB_OBJS += pack-write.o
 LIB_OBJS += packfile.o
 LIB_OBJS += pager.o
+LIB_OBJS += parallel-checkout.o
 LIB_OBJS += parse-options-cb.o
 LIB_OBJS += parse-options.o
 LIB_OBJS += patch-delta.o
@@ -953,6 +964,7 @@ LIB_OBJS += progress.o
 LIB_OBJS += promisor-remote.o
 LIB_OBJS += prompt.o
 LIB_OBJS += protocol.o
+LIB_OBJS += protocol-caps.o
 LIB_OBJS += prune-packed.o
 LIB_OBJS += quote.o
 LIB_OBJS += range-diff.o
@@ -986,6 +998,7 @@ LIB_OBJS += setup.o
 LIB_OBJS += shallow.o
 LIB_OBJS += sideband.o
 LIB_OBJS += sigchain.o
+LIB_OBJS += sparse-index.o
 LIB_OBJS += split-index.o
 LIB_OBJS += stable-qsort.o
 LIB_OBJS += strbuf.o
@@ -1054,6 +1067,7 @@ BUILTIN_OBJS += builtin/check-attr.o
 BUILTIN_OBJS += builtin/check-ignore.o
 BUILTIN_OBJS += builtin/check-mailmap.o
 BUILTIN_OBJS += builtin/check-ref-format.o
+BUILTIN_OBJS += builtin/checkout--worker.o
 BUILTIN_OBJS += builtin/checkout-index.o
 BUILTIN_OBJS += builtin/checkout.o
 BUILTIN_OBJS += builtin/clean.o
@@ -1673,6 +1687,32 @@ ifdef NO_UNIX_SOCKETS
 	BASIC_CFLAGS += -DNO_UNIX_SOCKETS
 else
 	LIB_OBJS += unix-socket.o
+	LIB_OBJS += unix-stream-server.o
+endif
+
+# Simple IPC requires threads and platform-specific IPC support.
+# Only platforms that have both should include these source files
+# in the build.
+#
+# On Windows-based systems, Simple IPC requires threads and Windows
+# Named Pipes.  These are always available, so Simple IPC support
+# is optional.
+#
+# On Unix-based systems, Simple IPC requires pthreads and Unix
+# domain sockets.  So support is only enabled when both are present.
+#
+ifdef USE_WIN32_IPC
+	BASIC_CFLAGS += -DSUPPORTS_SIMPLE_IPC
+	LIB_OBJS += compat/simple-ipc/ipc-shared.o
+	LIB_OBJS += compat/simple-ipc/ipc-win32.o
+else
+ifndef NO_PTHREADS
+ifndef NO_UNIX_SOCKETS
+	BASIC_CFLAGS += -DSUPPORTS_SIMPLE_IPC
+	LIB_OBJS += compat/simple-ipc/ipc-shared.o
+	LIB_OBJS += compat/simple-ipc/ipc-unix-socket.o
+endif
+endif
 endif
 
 ifdef NO_ICONV
@@ -1966,6 +2006,7 @@ ETC_GITCONFIG_SQ = $(subst ','\'',$(ETC_GITCONFIG))
 ETC_GITATTRIBUTES_SQ = $(subst ','\'',$(ETC_GITATTRIBUTES))
 
 DESTDIR_SQ = $(subst ','\'',$(DESTDIR))
+NO_GETTEXT_SQ = $(subst ','\'',$(NO_GETTEXT))
 bindir_SQ = $(subst ','\'',$(bindir))
 bindir_relative_SQ = $(subst ','\'',$(bindir_relative))
 mandir_SQ = $(subst ','\'',$(mandir))
@@ -2187,13 +2228,13 @@ $(BUILT_INS): git$X
 
 config-list.h: generate-configlist.sh
 
-config-list.h:
+config-list.h: Documentation/*config.txt Documentation/config/*.txt
 	$(QUIET_GEN)$(SHELL_PATH) ./generate-configlist.sh \
 		>$@+ && mv $@+ $@
 
 command-list.h: generate-cmdlist.sh command-list.txt
 
-command-list.h: $(wildcard Documentation/git*.txt) Documentation/*config.txt Documentation/config/*.txt
+command-list.h: $(wildcard Documentation/git*.txt)
 	$(QUIET_GEN)$(SHELL_PATH) ./generate-cmdlist.sh \
 		$(patsubst %,--exclude-program %,$(EXCLUDED_PROGRAMS)) \
 		command-list.txt >$@+ && mv $@+ $@
@@ -2250,10 +2291,13 @@ perl_localedir_SQ = $(localedir_SQ)
 
 ifndef NO_PERL
 PERL_HEADER_TEMPLATE = perl/header_templates/fixed_prefix.template.pl
-PERL_DEFINES = $(PERL_PATH_SQ):$(PERLLIB_EXTRA_SQ):$(perllibdir_SQ)
-
-PERL_DEFINES := $(PERL_PATH_SQ) $(PERLLIB_EXTRA_SQ) $(perllibdir_SQ)
+PERL_DEFINES =
+PERL_DEFINES += $(PERL_PATH_SQ)
+PERL_DEFINES += $(PERLLIB_EXTRA_SQ)
+PERL_DEFINES += $(perllibdir_SQ)
 PERL_DEFINES += $(RUNTIME_PREFIX)
+PERL_DEFINES += $(NO_PERL_CPAN_FALLBACKS)
+PERL_DEFINES += $(NO_GETTEXT)
 
 # Support Perl runtime prefix. In this mode, a different header is installed
 # into Perl scripts.
@@ -2379,16 +2423,30 @@ XDIFF_OBJS += xdiff/xmerge.o
 XDIFF_OBJS += xdiff/xpatience.o
 XDIFF_OBJS += xdiff/xprepare.o
 XDIFF_OBJS += xdiff/xutils.o
+.PHONY: xdiff-objs
+xdiff-objs: $(XDIFF_OBJS)
 
 TEST_OBJS := $(patsubst %$X,%.o,$(TEST_PROGRAMS)) $(patsubst %,t/helper/%,$(TEST_BUILTINS_OBJS))
-OBJECTS := $(LIB_OBJS) $(BUILTIN_OBJS) $(PROGRAM_OBJS) $(TEST_OBJS) \
-	$(XDIFF_OBJS) \
-	$(FUZZ_OBJS) \
-	common-main.o \
-	git.o
+.PHONY: test-objs
+test-objs: $(TEST_OBJS)
+
+GIT_OBJS += $(LIB_OBJS)
+GIT_OBJS += $(BUILTIN_OBJS)
+GIT_OBJS += common-main.o
+GIT_OBJS += git.o
+.PHONY: git-objs
+git-objs: $(GIT_OBJS)
+
+OBJECTS += $(GIT_OBJS)
+OBJECTS += $(PROGRAM_OBJS)
+OBJECTS += $(TEST_OBJS)
+OBJECTS += $(XDIFF_OBJS)
+OBJECTS += $(FUZZ_OBJS)
 ifndef NO_CURL
 	OBJECTS += http.o http-walker.o remote-curl.o
 endif
+.PHONY: objects
+objects: $(OBJECTS)
 
 dep_files := $(foreach f,$(OBJECTS),$(dir $f).depend/$(notdir $f).d)
 dep_dirs := $(addsuffix .depend,$(sort $(dir $(OBJECTS))))
@@ -2641,9 +2699,10 @@ endif
 NO_PERL_CPAN_FALLBACKS_SQ = $(subst ','\'',$(NO_PERL_CPAN_FALLBACKS))
 endif
 
-perl/build/lib/%.pm: perl/%.pm
+perl/build/lib/%.pm: perl/%.pm GIT-PERL-DEFINES
 	$(QUIET_GEN)mkdir -p $(dir $@) && \
 	sed -e 's|@@LOCALEDIR@@|$(perl_localedir_SQ)|g' \
+	    -e 's|@@NO_GETTEXT@@|$(NO_GETTEXT_SQ)|g' \
 	    -e 's|@@NO_PERL_CPAN_FALLBACKS@@|$(NO_PERL_CPAN_FALLBACKS_SQ)|g' \
 	< $< > $@
 
@@ -2670,12 +2729,14 @@ FIND_SOURCE_FILES = ( \
 	)
 
 $(ETAGS_TARGET): FORCE
-	$(RM) $(ETAGS_TARGET)
-	$(FIND_SOURCE_FILES) | xargs etags -a -o $(ETAGS_TARGET)
+	$(QUIET_GEN)$(RM) "$(ETAGS_TARGET)+" && \
+	$(FIND_SOURCE_FILES) | xargs etags -a -o "$(ETAGS_TARGET)+" && \
+	mv "$(ETAGS_TARGET)+" "$(ETAGS_TARGET)"
 
 tags: FORCE
-	$(RM) tags
-	$(FIND_SOURCE_FILES) | xargs ctags -a
+	$(QUIET_GEN)$(RM) tags+ && \
+	$(FIND_SOURCE_FILES) | xargs ctags -a -o tags+ && \
+	mv tags+ tags
 
 cscope:
 	$(RM) cscope*
