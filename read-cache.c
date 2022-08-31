@@ -620,6 +620,11 @@ int index_name_pos(struct index_state *istate, const char *name, int namelen)
 	return index_name_stage_pos(istate, name, namelen, 0, EXPAND_SPARSE);
 }
 
+int index_name_pos_sparse(struct index_state *istate, const char *name, int namelen)
+{
+	return index_name_stage_pos(istate, name, namelen, 0, NO_EXPAND_SPARSE);
+}
+
 int index_entry_exists(struct index_state *istate, const char *name, int namelen)
 {
 	return index_name_stage_pos(istate, name, namelen, 0, NO_EXPAND_SPARSE) >= 0;
@@ -2294,6 +2299,8 @@ int do_read_index(struct index_state *istate, const char *path, int must_exist)
 	fd = open(path, O_RDONLY);
 	if (fd < 0) {
 		if (!must_exist && errno == ENOENT) {
+			if (!istate->repo)
+				istate->repo = the_repository;
 			set_new_index_sparsity(istate);
 			return 0;
 		}
