@@ -1,5 +1,10 @@
 #include "cache.h"
+#include "advice.h"
 #include "config.h"
+#include "convert.h"
+#include "copy.h"
+#include "gettext.h"
+#include "hex.h"
 #include "object-store.h"
 #include "attr.h"
 #include "run-command.h"
@@ -7,8 +12,10 @@
 #include "sigchain.h"
 #include "pkt-line.h"
 #include "sub-process.h"
+#include "trace.h"
 #include "utf8.h"
 #include "ll-merge.h"
+#include "wrapper.h"
 
 /*
  * convert.c - convert a file when checking it out and checking it in.
@@ -1308,7 +1315,7 @@ void convert_attrs(struct index_state *istate,
 		git_config(read_convert_config, NULL);
 	}
 
-	git_check_attr(istate, NULL, path, check);
+	git_check_attr(istate, path, check);
 	ccheck = check->items;
 	ca->crlf_action = git_path_check_crlf(ccheck + 4);
 	if (ca->crlf_action == CRLF_UNDEFINED)

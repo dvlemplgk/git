@@ -1,9 +1,15 @@
 #include "cache.h"
+#include "abspath.h"
 #include "config.h"
 #include "dir.h"
+#include "environment.h"
+#include "gettext.h"
 #include "pathspec.h"
 #include "attr.h"
+#include "repository.h"
+#include "setup.h"
 #include "strvec.h"
+#include "symlinks.h"
 #include "quote.h"
 
 /*
@@ -730,7 +736,7 @@ int match_pathspec_attrs(struct index_state *istate,
 	if (name[namelen])
 		name = to_free = xmemdupz(name, namelen);
 
-	git_check_attr(istate, NULL, name, item->attr_check);
+	git_check_attr(istate, name, item->attr_check);
 
 	free(to_free);
 
