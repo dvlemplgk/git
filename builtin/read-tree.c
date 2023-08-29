@@ -5,7 +5,7 @@
  */
 
 #define USE_THE_INDEX_VARIABLE
-#include "cache.h"
+#include "builtin.h"
 #include "config.h"
 #include "gettext.h"
 #include "hex.h"
@@ -17,11 +17,11 @@
 #include "cache-tree.h"
 #include "unpack-trees.h"
 #include "dir.h"
-#include "builtin.h"
 #include "parse-options.h"
 #include "repository.h"
 #include "resolve-undo.h"
 #include "setup.h"
+#include "sparse-index.h"
 #include "submodule.h"
 #include "submodule-config.h"
 
@@ -102,12 +102,13 @@ static int debug_merge(const struct cache_entry * const *stages,
 	return 0;
 }
 
-static int git_read_tree_config(const char *var, const char *value, void *cb)
+static int git_read_tree_config(const char *var, const char *value,
+				const struct config_context *ctx, void *cb)
 {
 	if (!strcmp(var, "submodule.recurse"))
 		return git_default_submodule_config(var, value, cb);
 
-	return git_default_config(var, value, cb);
+	return git_default_config(var, value, ctx, cb);
 }
 
 int cmd_read_tree(int argc, const char **argv, const char *cmd_prefix)

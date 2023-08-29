@@ -1,11 +1,11 @@
 #include "builtin.h"
-#include "alloc.h"
 #include "config.h"
 #include "dir.h"
 #include "environment.h"
 #include "gettext.h"
 #include "hex.h"
 #include "parse-options.h"
+#include "path.h"
 #include "run-command.h"
 #include "server-info.h"
 #include "sigchain.h"
@@ -15,7 +15,7 @@
 #include "midx.h"
 #include "packfile.h"
 #include "prune-packed.h"
-#include "object-store.h"
+#include "object-store-ll.h"
 #include "promisor-remote.h"
 #include "shallow.h"
 #include "pack.h"
@@ -59,7 +59,8 @@ struct pack_objects_args {
 	int local;
 };
 
-static int repack_config(const char *var, const char *value, void *cb)
+static int repack_config(const char *var, const char *value,
+			 const struct config_context *ctx, void *cb)
 {
 	struct pack_objects_args *cruft_po_args = cb;
 	if (!strcmp(var, "repack.usedeltabaseoffset")) {
@@ -91,12 +92,12 @@ static int repack_config(const char *var, const char *value, void *cb)
 		return git_config_string(&cruft_po_args->depth, var, value);
 	if (!strcmp(var, "repack.cruftthreads"))
 		return git_config_string(&cruft_po_args->threads, var, value);
-	return git_default_config(var, value, cb);
+	return git_default_config(var, value, ctx, cb);
 }
 
 /*
- * Adds all packs hex strings to either fname_nonkept_list or
- * fname_kept_list based on whether each pack has a corresponding
+ * Adds all packs hex strings (pack-$HASH) to either fname_nonkept_list
+ * or fname_kept_list based on whether each pack has a corresponding
  * .keep file or not.  Packs without a .keep file are not to be kept
  * if we are going to pack everything into one file.
  */
@@ -104,40 +105,38 @@ static void collect_pack_filenames(struct string_list *fname_nonkept_list,
 				   struct string_list *fname_kept_list,
 				   const struct string_list *extra_keep)
 {
-	DIR *dir;
-	struct dirent *e;
-	char *fname;
+	struct packed_git *p;
+	struct strbuf buf = STRBUF_INIT;
 
-	if (!(dir = opendir(packdir)))
-		return;
-
-	while ((e = readdir(dir)) != NULL) {
-		size_t len;
+	for (p = get_all_packs(the_repository); p; p = p->next) {
 		int i;
+		const char *base;
 
-		if (!strip_suffix(e->d_name, ".pack", &len))
+		if (!p->pack_local)
 			continue;
 
+		base = pack_basename(p);
+
 		for (i = 0; i < extra_keep->nr; i++)
-			if (!fspathcmp(e->d_name, extra_keep->items[i].string))
+			if (!fspathcmp(base, extra_keep->items[i].string))
 				break;
 
-		fname = xmemdupz(e->d_name, len);
+		strbuf_reset(&buf);
+		strbuf_addstr(&buf, base);
+		strbuf_strip_suffix(&buf, ".pack");
 
-		if ((extra_keep->nr > 0 && i < extra_keep->nr) ||
-		    (file_exists(mkpath("%s/%s.keep", packdir, fname)))) {
-			string_list_append_nodup(fname_kept_list, fname);
-		} else {
+		if ((extra_keep->nr > 0 && i < extra_keep->nr) || p->pack_keep)
+			string_list_append(fname_kept_list, buf.buf);
+		else {
 			struct string_list_item *item;
-			item = string_list_append_nodup(fname_nonkept_list,
-							fname);
-			if (file_exists(mkpath("%s/%s.mtimes", packdir, fname)))
+			item = string_list_append(fname_nonkept_list, buf.buf);
+			if (p->is_cruft)
 				item->util = (void*)(uintptr_t)CRUFT_PACK;
 		}
 	}
-	closedir(dir);
 
 	string_list_sort(fname_kept_list);
+	strbuf_release(&buf);
 }
 
 static void remove_redundant_pack(const char *dir_name, const char *base_name)
@@ -493,15 +492,13 @@ static struct packed_git *get_preferred_pack(struct pack_geometry *geometry)
 	return NULL;
 }
 
-static void clear_pack_geometry(struct pack_geometry *geometry)
+static void free_pack_geometry(struct pack_geometry *geometry)
 {
 	if (!geometry)
 		return;
 
 	free(geometry->pack);
-	geometry->pack_nr = 0;
-	geometry->pack_alloc = 0;
-	geometry->split = 0;
+	free(geometry);
 }
 
 struct midx_snapshot_ref_data {
@@ -1229,7 +1226,7 @@ cleanup:
 	string_list_clear(&names, 1);
 	string_list_clear(&existing_nonkept_packs, 0);
 	string_list_clear(&existing_kept_packs, 0);
-	clear_pack_geometry(geometry);
+	free_pack_geometry(geometry);
 
 	return ret;
 }

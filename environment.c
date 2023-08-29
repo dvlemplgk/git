@@ -20,14 +20,14 @@
 #include "commit.h"
 #include "strvec.h"
 #include "object-file.h"
-#include "object-store.h"
+#include "object-store-ll.h"
+#include "path.h"
 #include "replace-object.h"
 #include "tmp-objdir.h"
 #include "chdir-notify.h"
 #include "setup.h"
 #include "shallow.h"
 #include "trace.h"
-#include "wrapper.h"
 #include "write-or-die.h"
 
 int trust_executable_bit = 1;
@@ -42,7 +42,6 @@ int is_bare_repository_cfg = -1; /* unspecified */
 int warn_ambiguous_refs = 1;
 int warn_on_object_refname_ambiguity = 1;
 int repository_format_precious_objects;
-int repository_format_worktree_config;
 const char *git_commit_encoding;
 const char *git_log_output_encoding;
 char *apply_default_whitespace;
@@ -63,7 +62,6 @@ const char *editor_program;
 const char *askpass_program;
 const char *excludes_file;
 enum auto_crlf auto_crlf = AUTO_CRLF_FALSE;
-int read_replace_refs = 1;
 enum eol core_eol = EOL_UNSET;
 int global_conv_flags_eol = CONV_EOL_RNDTRP_WARN;
 char *check_roundtrip_encoding = "SHIFT-JIS";
@@ -75,7 +73,7 @@ enum push_default_type push_default = PUSH_DEFAULT_UNSPECIFIED;
 #endif
 enum object_creation_mode object_creation_mode = OBJECT_CREATION_MODE;
 char *notes_ref_name;
-int grafts_replace_parents = 1;
+int grafts_keep_true_parents;
 int core_apply_sparse_checkout;
 int core_sparse_checkout_cone;
 int sparse_expect_files_outside_of_patterns;
@@ -110,7 +108,7 @@ char *git_work_tree_cfg;
 static char *git_namespace;
 
 /*
- * Repository-local GIT_* environment variables; see cache.h for details.
+ * Repository-local GIT_* environment variables; see environment.h for details.
  */
 const char * const local_repo_env[] = {
 	ALTERNATE_DB_ENVIRONMENT,
@@ -184,7 +182,7 @@ void setup_git_env(const char *git_dir)
 	strvec_clear(&to_free);
 
 	if (getenv(NO_REPLACE_OBJECTS_ENVIRONMENT))
-		read_replace_refs = 0;
+		disable_replace_refs();
 	replace_ref_base = getenv(GIT_REPLACE_REF_BASE_ENVIRONMENT);
 	git_replace_ref_base = xstrdup(replace_ref_base ? replace_ref_base
 							  : "refs/replace/");

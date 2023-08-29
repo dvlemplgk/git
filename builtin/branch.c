@@ -5,20 +5,20 @@
  * Based on git-branch.sh by Junio C Hamano.
  */
 
-#include "cache.h"
+#include "builtin.h"
 #include "config.h"
 #include "color.h"
 #include "editor.h"
 #include "environment.h"
 #include "refs.h"
 #include "commit.h"
-#include "builtin.h"
 #include "gettext.h"
 #include "object-name.h"
 #include "remote.h"
 #include "parse-options.h"
 #include "branch.h"
 #include "diff.h"
+#include "path.h"
 #include "revision.h"
 #include "string-list.h"
 #include "column.h"
@@ -28,7 +28,6 @@
 #include "worktree.h"
 #include "help.h"
 #include "commit-reach.h"
-#include "wrapper.h"
 
 static const char * const builtin_branch_usage[] = {
 	N_("git branch [<options>] [-r | -a] [--merged] [--no-merged]"),
@@ -83,7 +82,8 @@ static unsigned int colopts;
 
 define_list_config_array(color_branch_slots);
 
-static int git_branch_config(const char *var, const char *value, void *cb)
+static int git_branch_config(const char *var, const char *value,
+			     const struct config_context *ctx, void *cb)
 {
 	const char *slot_name;
 
@@ -117,7 +117,10 @@ static int git_branch_config(const char *var, const char *value, void *cb)
 		return 0;
 	}
 
-	return git_color_default_config(var, value, cb);
+	if (git_color_config(var, value, cb) < 0)
+		return -1;
+
+	return git_default_config(var, value, ctx, cb);
 }
 
 static const char *branch_get_color(enum color_branch ix)
@@ -366,17 +369,8 @@ static const char *quote_literal_for_format(const char *s)
 	static struct strbuf buf = STRBUF_INIT;
 
 	strbuf_reset(&buf);
-	while (*s) {
-		const char *ep = strchrnul(s, '%');
-		if (s < ep)
-			strbuf_add(&buf, s, ep - s);
-		if (*ep == '%') {
-			strbuf_addstr(&buf, "%%");
-			s = ep + 1;
-		} else {
-			s = ep;
-		}
-	}
+	while (strbuf_expand_step(&buf, &s))
+		strbuf_addstr(&buf, "%%");
 	return buf.buf;
 }
 
@@ -674,7 +668,7 @@ static int edit_branch_description(const char *branch_name)
 	exists = !read_branch_desc(&buf, branch_name);
 	if (!buf.len || buf.buf[buf.len-1] != '\n')
 		strbuf_addch(&buf, '\n');
-	strbuf_commented_addf(&buf,
+	strbuf_commented_addf(&buf, comment_line_char,
 		    _("Please edit the description for the branch\n"
 		      "  %s\n"
 		      "Lines starting with '%c' will be stripped.\n"),
@@ -685,7 +679,7 @@ static int edit_branch_description(const char *branch_name)
 		strbuf_release(&buf);
 		return -1;
 	}
-	strbuf_stripspace(&buf, 1);
+	strbuf_stripspace(&buf, comment_line_char);
 
 	strbuf_addf(&name, "branch.%s.description", branch_name);
 	if (buf.len || exists)
@@ -707,7 +701,7 @@ int cmd_branch(int argc, const char **argv, const char *prefix)
 	int reflog = 0, quiet = 0, icase = 0, force = 0,
 	    recurse_submodules_explicit = 0;
 	enum branch_track track;
-	struct ref_filter filter;
+	struct ref_filter filter = REF_FILTER_INIT;
 	static struct ref_sorting *sorting;
 	struct string_list sorting_options = STRING_LIST_INIT_DUP;
 	struct ref_format format = REF_FORMAT_INIT;
@@ -726,8 +720,9 @@ int cmd_branch(int argc, const char **argv, const char *prefix)
 		OPT_STRING('u', "set-upstream-to", &new_upstream, N_("upstream"), N_("change the upstream info")),
 		OPT_BOOL(0, "unset-upstream", &unset_upstream, N_("unset the upstream info")),
 		OPT__COLOR(&branch_use_color, N_("use colored output")),
-		OPT_SET_INT('r', "remotes",     &filter.kind, N_("act on remote-tracking branches"),
-			FILTER_REFS_REMOTES),
+		OPT_SET_INT_F('r', "remotes",     &filter.kind, N_("act on remote-tracking branches"),
+			      FILTER_REFS_REMOTES,
+			      PARSE_OPT_NONEG),
 		OPT_CONTAINS(&filter.with_commit, N_("print only branches that contain the commit")),
 		OPT_NO_CONTAINS(&filter.no_commit, N_("print only branches that don't contain the commit")),
 		OPT_WITH(&filter.with_commit, N_("print only branches that contain the commit")),
@@ -735,8 +730,9 @@ int cmd_branch(int argc, const char **argv, const char *prefix)
 		OPT__ABBREV(&filter.abbrev),
 
 		OPT_GROUP(N_("Specific git-branch actions:")),
-		OPT_SET_INT('a', "all", &filter.kind, N_("list both remote-tracking and local branches"),
-			FILTER_REFS_REMOTES | FILTER_REFS_BRANCHES),
+		OPT_SET_INT_F('a', "all", &filter.kind, N_("list both remote-tracking and local branches"),
+			      FILTER_REFS_REMOTES | FILTER_REFS_BRANCHES,
+			      PARSE_OPT_NONEG),
 		OPT_BIT('d', "delete", &delete, N_("delete fully merged branch"), 1),
 		OPT_BIT('D', NULL, &delete, N_("delete branch (even if not merged)"), 2),
 		OPT_BIT('m', "move", &rename, N_("move/rename a branch and its reflog"), 1),
@@ -765,7 +761,6 @@ int cmd_branch(int argc, const char **argv, const char *prefix)
 
 	setup_ref_filter_porcelain_msg();
 
-	memset(&filter, 0, sizeof(filter));
 	filter.kind = FILTER_REFS_BRANCHES;
 	filter.abbrev = -1;
 
@@ -832,6 +827,8 @@ int cmd_branch(int argc, const char **argv, const char *prefix)
 	if (list)
 		setup_auto_pager("branch", 1);
 
+	UNLEAK(sorting_options);
+
 	if (delete) {
 		if (!argc)
 			die(_("branch name required"));
@@ -859,6 +856,7 @@ int cmd_branch(int argc, const char **argv, const char *prefix)
 		print_columns(&output, colopts, NULL);
 		string_list_clear(&output, 0);
 		ref_sorting_release(sorting);
+		ref_filter_clear(&filter);
 		return 0;
 	} else if (edit_description) {
 		const char *branch_name;

@@ -4,11 +4,10 @@
  * Based on git-am.sh by Junio C Hamano.
  */
 #define USE_THE_INDEX_VARIABLE
-#include "cache.h"
+#include "builtin.h"
 #include "abspath.h"
 #include "advice.h"
 #include "config.h"
-#include "builtin.h"
 #include "editor.h"
 #include "environment.h"
 #include "exec-cmd.h"
@@ -29,6 +28,7 @@
 #include "unpack-trees.h"
 #include "branch.h"
 #include "object-name.h"
+#include "preload-index.h"
 #include "sequencer.h"
 #include "revision.h"
 #include "merge-recursive.h"
@@ -41,9 +41,9 @@
 #include "string-list.h"
 #include "packfile.h"
 #include "pager.h"
+#include "path.h"
 #include "repository.h"
 #include "pretty.h"
-#include "wrapper.h"
 
 /**
  * Returns the length of the first line of msg.
@@ -786,7 +786,7 @@ static int split_mail_conv(mail_conv_fn fn, struct am_state *state,
  * A split_mail_conv() callback that converts an StGit patch to an RFC2822
  * message suitable for parsing with git-mailinfo.
  */
-static int stgit_patch_to_mail(FILE *out, FILE *in, int keep_cr)
+static int stgit_patch_to_mail(FILE *out, FILE *in, int keep_cr UNUSED)
 {
 	struct strbuf sb = STRBUF_INIT;
 	int subject_printed = 0;
@@ -869,7 +869,7 @@ static int split_mail_stgit_series(struct am_state *state, const char **paths,
  * A split_patches_conv() callback that converts a mercurial patch to a RFC2822
  * message suitable for parsing with git-mailinfo.
  */
-static int hg_patch_to_mail(FILE *out, FILE *in, int keep_cr)
+static int hg_patch_to_mail(FILE *out, FILE *in, int keep_cr UNUSED)
 {
 	struct strbuf sb = STRBUF_INIT;
 	int rc = 0;
@@ -1283,7 +1283,7 @@ static int parse_mail(struct am_state *state, const char *mail)
 
 	strbuf_addstr(&msg, "\n\n");
 	strbuf_addbuf(&msg, &mi.log_message);
-	strbuf_stripspace(&msg, 0);
+	strbuf_stripspace(&msg, '\0');
 
 	assert(!state->author_name);
 	state->author_name = strbuf_detach(&author_name, NULL);
@@ -2347,12 +2347,9 @@ int cmd_am(int argc, const char **argv, const char *prefix)
 			N_("pass -b flag to git-mailinfo"), KEEP_NON_PATCH),
 		OPT_BOOL('m', "message-id", &state.message_id,
 			N_("pass -m flag to git-mailinfo")),
-		OPT_SET_INT_F(0, "keep-cr", &keep_cr,
-			N_("pass --keep-cr flag to git-mailsplit for mbox format"),
-			1, PARSE_OPT_NONEG),
-		OPT_SET_INT_F(0, "no-keep-cr", &keep_cr,
-			N_("do not pass --keep-cr flag to git-mailsplit independent of am.keepcr"),
-			0, PARSE_OPT_NONEG),
+		OPT_SET_INT(0, "keep-cr", &keep_cr,
+			    N_("pass --keep-cr flag to git-mailsplit for mbox format"),
+			    1),
 		OPT_BOOL('c', "scissors", &state.scissors,
 			N_("strip everything before a scissors line")),
 		OPT_CALLBACK_F(0, "quoted-cr", &state.quoted_cr, N_("action"),

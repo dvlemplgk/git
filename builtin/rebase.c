@@ -24,6 +24,7 @@
 #include "object-file.h"
 #include "object-name.h"
 #include "parse-options.h"
+#include "path.h"
 #include "commit.h"
 #include "diff.h"
 #include "wt-status.h"
@@ -36,7 +37,6 @@
 #include "reset.h"
 #include "trace2.h"
 #include "hook.h"
-#include "wrapper.h"
 
 static char const * const builtin_rebase_usage[] = {
 	N_("git rebase [-i] [options] [--exec <cmd>] "
@@ -209,7 +209,7 @@ static int edit_todo_file(unsigned flags)
 	if (strbuf_read_file(&todo_list.buf, todo_file, 0) < 0)
 		return error_errno(_("could not read '%s'."), todo_file);
 
-	strbuf_stripspace(&todo_list.buf, 1);
+	strbuf_stripspace(&todo_list.buf, comment_line_char);
 	res = edit_todo_list(the_repository, &todo_list, &new_todo, NULL, NULL, flags);
 	if (!res && todo_list_write_to_file(the_repository, &new_todo, todo_file,
 					    NULL, NULL, -1, flags & ~(TODO_LIST_SHORTEN_IDS)))
@@ -772,7 +772,8 @@ static void parse_rebase_merges_value(struct rebase_options *options, const char
 		die(_("Unknown rebase-merges mode: %s"), value);
 }
 
-static int rebase_config(const char *var, const char *value, void *data)
+static int rebase_config(const char *var, const char *value,
+			 const struct config_context *ctx, void *data)
 {
 	struct rebase_options *opts = data;
 
@@ -831,7 +832,7 @@ static int rebase_config(const char *var, const char *value, void *data)
 		return git_config_string(&opts->default_backend, var, value);
 	}
 
-	return git_default_config(var, value, data);
+	return git_default_config(var, value, ctx, data);
 }
 
 static int checkout_up_to_date(struct rebase_options *options)

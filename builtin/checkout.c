@@ -13,13 +13,16 @@
 #include "gettext.h"
 #include "hex.h"
 #include "hook.h"
-#include "ll-merge.h"
+#include "merge-ll.h"
 #include "lockfile.h"
 #include "mem-pool.h"
 #include "merge-recursive.h"
 #include "object-name.h"
-#include "object-store.h"
+#include "object-store-ll.h"
 #include "parse-options.h"
+#include "path.h"
+#include "preload-index.h"
+#include "read-cache.h"
 #include "refs.h"
 #include "remote.h"
 #include "resolve-undo.h"
@@ -861,7 +864,7 @@ static int merge_working_tree(const struct checkout_opts *opts,
 			 * entries in the index.
 			 */
 
-			add_files_to_cache(NULL, NULL, 0);
+			add_files_to_cache(the_repository, NULL, NULL, 0, 0);
 			init_merge_options(&o, the_repository);
 			o.verbosity = 0;
 			work = write_in_core_index_as_tree(the_repository);
@@ -913,7 +916,7 @@ static void report_tracking(struct branch_info *new_branch_info)
 	struct strbuf sb = STRBUF_INIT;
 	struct branch *branch = branch_get(new_branch_info->name);
 
-	if (!format_tracking_info(branch, &sb, AHEAD_BEHIND_FULL))
+	if (!format_tracking_info(branch, &sb, AHEAD_BEHIND_FULL, 1))
 		return;
 	fputs(sb.buf, stdout);
 	strbuf_release(&sb);
@@ -1186,7 +1189,8 @@ static int switch_branches(const struct checkout_opts *opts,
 	return ret || writeout_error;
 }
 
-static int git_checkout_config(const char *var, const char *value, void *cb)
+static int git_checkout_config(const char *var, const char *value,
+			       const struct config_context *ctx, void *cb)
 {
 	struct checkout_opts *opts = cb;
 
@@ -1202,7 +1206,7 @@ static int git_checkout_config(const char *var, const char *value, void *cb)
 	if (starts_with(var, "submodule."))
 		return git_default_submodule_config(var, value, NULL);
 
-	return git_xmerge_config(var, value, NULL);
+	return git_xmerge_config(var, value, ctx, NULL);
 }
 
 static void setup_new_branch_info_and_source_tree(
@@ -1689,8 +1693,13 @@ static int checkout_main(int argc, const char **argv, const char *prefix,
 	}
 
 	if (opts->conflict_style) {
+		struct key_value_info kvi = KVI_INIT;
+		struct config_context ctx = {
+			.kvi = &kvi,
+		};
 		opts->merge = 1; /* implied */
-		git_xmerge_config("merge.conflictstyle", opts->conflict_style, NULL);
+		git_xmerge_config("merge.conflictstyle", opts->conflict_style,
+				  &ctx, NULL);
 	}
 	if (opts->force) {
 		opts->discard_changes = 1;

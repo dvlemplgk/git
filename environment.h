@@ -1,9 +1,8 @@
 #ifndef ENVIRONMENT_H
 #define ENVIRONMENT_H
 
-#include "strvec.h"
-
 struct repository;
+struct strvec;
 
 /*
  * The character that begins a commented line in user-editable file
@@ -194,10 +193,9 @@ extern enum object_creation_mode object_creation_mode;
 
 extern char *notes_ref_name;
 
-extern int grafts_replace_parents;
+extern int grafts_keep_true_parents;
 
 extern int repository_format_precious_objects;
-extern int repository_format_worktree_config;
 
 /*
  * Create a temporary file rooted in the object database directory, or

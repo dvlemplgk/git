@@ -9,7 +9,7 @@
 #include "commit-reach.h"
 #include "merge-ort.h"
 #include "object-name.h"
-#include "object-store.h"
+#include "object-store-ll.h"
 #include "parse-options.h"
 #include "repository.h"
 #include "blob.h"
@@ -324,7 +324,9 @@ static void unresolved(const struct traverse_info *info, struct name_entry n[3])
  * The successful merge rules are the same as for the three-way merge
  * in git-read-tree.
  */
-static int threeway_callback(int n, unsigned long mask, unsigned long dirmask, struct name_entry *entry, struct traverse_info *info)
+static int threeway_callback(int n UNUSED, unsigned long mask,
+			     unsigned long dirmask UNUSED,
+			     struct name_entry *entry, struct traverse_info *info)
 {
 	/* Same in both? */
 	if (same_entry(entry+1, entry+2) || both_empty(entry+1, entry+2)) {
@@ -448,7 +450,7 @@ static int real_merge(struct merge_tree_options *o,
 
 		base_commit = lookup_commit_reference_by_name(merge_base);
 		if (!base_commit)
-			die(_("could not lookup commit %s"), merge_base);
+			die(_("could not lookup commit '%s'"), merge_base);
 
 		opt.ancestor = merge_base;
 		base_tree = repo_get_commit_tree(the_repository, base_commit);

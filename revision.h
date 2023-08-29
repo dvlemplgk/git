@@ -10,6 +10,7 @@
 #include "decorate.h"
 #include "ident.h"
 #include "list-objects-filter-options.h"
+#include "strvec.h"
 
 /**
  * The revision walking API offers functions to build a list of revisions
@@ -87,7 +88,7 @@ struct rev_cmdline_info {
 struct ref_exclusions {
 	/*
 	 * Excluded refs is a list of wildmatch patterns. If any of the
-	 * patterns matches, the reference will be excluded.
+	 * patterns match, the reference will be excluded.
 	 */
 	struct string_list excluded_refs;
 
@@ -95,7 +96,7 @@ struct ref_exclusions {
 	 * Hidden refs is a list of patterns that is to be hidden via
 	 * `ref_is_hidden()`.
 	 */
-	struct string_list hidden_refs;
+	struct strvec hidden_refs;
 
 	/*
 	 * Indicates whether hidden refs have been configured. This is to
@@ -110,7 +111,7 @@ struct ref_exclusions {
  */
 #define REF_EXCLUSIONS_INIT { \
 	.excluded_refs = STRING_LIST_INIT_DUP, \
-	.hidden_refs = STRING_LIST_INIT_DUP, \
+	.hidden_refs = STRVEC_INIT, \
 }
 
 struct oidset;
@@ -428,7 +429,7 @@ void repo_init_revisions(struct repository *r,
  */
 struct setup_revision_opt {
 	const char *def;
-	void (*tweak)(struct rev_info *, struct setup_revision_opt *);
+	void (*tweak)(struct rev_info *);
 	unsigned int	assume_dashdash:1,
 			allow_exclude_promisor_objects:1,
 			free_removed_argv_elements:1;

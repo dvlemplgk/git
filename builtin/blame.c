@@ -6,7 +6,6 @@
  */
 
 #include "git-compat-util.h"
-#include "alloc.h"
 #include "config.h"
 #include "color.h"
 #include "builtin.h"
@@ -29,7 +28,7 @@
 #include "dir.h"
 #include "progress.h"
 #include "object-name.h"
-#include "object-store.h"
+#include "object-store-ll.h"
 #include "pager.h"
 #include "blame.h"
 #include "refs.h"
@@ -694,7 +693,8 @@ static const char *add_prefix(const char *prefix, const char *path)
 	return prefix_path(prefix, prefix ? strlen(prefix) : 0, path);
 }
 
-static int git_blame_config(const char *var, const char *value, void *cb)
+static int git_blame_config(const char *var, const char *value,
+			    const struct config_context *ctx, void *cb)
 {
 	if (!strcmp(var, "blame.showroot")) {
 		show_root = git_config_bool(var, value);
@@ -767,7 +767,7 @@ static int git_blame_config(const char *var, const char *value, void *cb)
 	if (userdiff_config(var, value) < 0)
 		return -1;
 
-	return git_default_config(var, value, cb);
+	return git_default_config(var, value, ctx, cb);
 }
 
 static int blame_copy_callback(const struct option *option, const char *arg, int unset)

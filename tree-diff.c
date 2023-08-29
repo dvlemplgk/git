@@ -4,6 +4,7 @@
 #include "git-compat-util.h"
 #include "diff.h"
 #include "diffcore.h"
+#include "hash.h"
 #include "tree.h"
 #include "tree-walk.h"
 
@@ -316,7 +317,7 @@ static void skip_uninteresting(struct tree_desc *t, struct strbuf *base,
 
 	while (t->size) {
 		match = tree_entry_interesting(opt->repo->index, &t->entry,
-					       base, 0, &opt->pathspec);
+					       base, &opt->pathspec);
 		if (match) {
 			if (match == all_entries_not_interesting)
 				t->size = 0;

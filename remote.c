@@ -1,6 +1,5 @@
 #include "git-compat-util.h"
 #include "abspath.h"
-#include "alloc.h"
 #include "config.h"
 #include "environment.h"
 #include "gettext.h"
@@ -10,7 +9,8 @@
 #include "refs.h"
 #include "refspec.h"
 #include "object-name.h"
-#include "object-store.h"
+#include "object-store-ll.h"
+#include "path.h"
 #include "commit.h"
 #include "diff.h"
 #include "revision.h"
@@ -349,7 +349,8 @@ static void read_branches_file(struct remote_state *remote_state,
 	remote->fetch_tags = 1; /* always auto-follow */
 }
 
-static int handle_config(const char *key, const char *value, void *cb)
+static int handle_config(const char *key, const char *value,
+			 const struct config_context *ctx, void *cb)
 {
 	const char *name;
 	size_t namelen;
@@ -357,6 +358,7 @@ static int handle_config(const char *key, const char *value, void *cb)
 	struct remote *remote;
 	struct branch *branch;
 	struct remote_state *remote_state = cb;
+	const struct key_value_info *kvi = ctx->kvi;
 
 	if (parse_config_key(key, "branch", &name, &namelen, &subkey) >= 0) {
 		/* There is no subsection. */
@@ -414,8 +416,8 @@ static int handle_config(const char *key, const char *value, void *cb)
 	}
 	remote = make_remote(remote_state, name, namelen);
 	remote->origin = REMOTE_CONFIG;
-	if (current_config_scope() == CONFIG_SCOPE_LOCAL ||
-	    current_config_scope() == CONFIG_SCOPE_WORKTREE)
+	if (kvi->scope == CONFIG_SCOPE_LOCAL ||
+	    kvi->scope == CONFIG_SCOPE_WORKTREE)
 		remote->configured_in_repo = 1;
 	if (!strcmp(subkey, "mirror"))
 		remote->mirror = git_config_bool(key, value);
@@ -890,7 +892,7 @@ static int query_matches_negative_refspec(struct refspec *rs, struct refspec_ite
 {
 	int i, matched_negative = 0;
 	int find_src = !query->src;
-	struct string_list reversed = STRING_LIST_INIT_NODUP;
+	struct string_list reversed = STRING_LIST_INIT_DUP;
 	const char *needle = find_src ? query->dst : query->src;
 
 	/*
@@ -2257,7 +2259,8 @@ int stat_tracking_info(struct branch *branch, int *num_ours, int *num_theirs,
  * Return true when there is anything to report, otherwise false.
  */
 int format_tracking_info(struct branch *branch, struct strbuf *sb,
-			 enum ahead_behind_flags abf)
+			 enum ahead_behind_flags abf,
+			 int show_divergence_advice)
 {
 	int ours, theirs, sti;
 	const char *full_base;
@@ -2320,9 +2323,10 @@ int format_tracking_info(struct branch *branch, struct strbuf *sb,
 			       "respectively.\n",
 			   ours + theirs),
 			base, ours, theirs);
-		if (advice_enabled(ADVICE_STATUS_HINTS))
+		if (show_divergence_advice &&
+		    advice_enabled(ADVICE_STATUS_HINTS))
 			strbuf_addstr(sb,
-				_("  (use \"git pull\" to merge the remote branch into yours)\n"));
+				_("  (use \"git pull\" if you want to integrate the remote branch with yours)\n"));
 	}
 	free(base);
 	return 1;

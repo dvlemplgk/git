@@ -3,8 +3,7 @@
  *
  * Copyright (c) 2006 Junio C Hamano
  */
-#include "cache.h"
-#include "alloc.h"
+#include "builtin.h"
 #include "gettext.h"
 #include "hex.h"
 #include "repository.h"
@@ -14,7 +13,6 @@
 #include "commit.h"
 #include "tag.h"
 #include "tree-walk.h"
-#include "builtin.h"
 #include "parse-options.h"
 #include "string-list.h"
 #include "run-command.h"
@@ -28,9 +26,11 @@
 #include "submodule-config.h"
 #include "object-file.h"
 #include "object-name.h"
-#include "object-store.h"
+#include "object-store-ll.h"
 #include "packfile.h"
 #include "pager.h"
+#include "path.h"
+#include "read-cache-ll.h"
 #include "write-or-die.h"
 
 static const char *grep_prefix;
@@ -290,14 +290,18 @@ static int wait_all(void)
 	return hit;
 }
 
-static int grep_cmd_config(const char *var, const char *value, void *cb)
+static int grep_cmd_config(const char *var, const char *value,
+			   const struct config_context *ctx, void *cb)
 {
-	int st = grep_config(var, value, cb);
-	if (git_color_default_config(var, value, NULL) < 0)
+	int st = grep_config(var, value, ctx, cb);
+
+	if (git_color_config(var, value, cb) < 0)
+		st = -1;
+	else if (git_default_config(var, value, ctx, cb) < 0)
 		st = -1;
 
 	if (!strcmp(var, "grep.threads")) {
-		num_threads = git_config_int(var, value);
+		num_threads = git_config_int(var, value, ctx->kvi);
 		if (num_threads < 0)
 			die(_("invalid number of threads specified (%d) for %s"),
 			    num_threads, var);
@@ -639,7 +643,7 @@ static int grep_tree(struct grep_opt *opt, const struct pathspec *pathspec,
 			strbuf_addstr(&name, base->buf + tn_len);
 			match = tree_entry_interesting(repo->index,
 						       &entry, &name,
-						       0, pathspec);
+						       pathspec);
 			strbuf_setlen(&name, name_base_len);
 
 			if (match == all_entries_not_interesting)

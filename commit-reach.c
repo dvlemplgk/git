@@ -1,5 +1,4 @@
 #include "git-compat-util.h"
-#include "alloc.h"
 #include "commit.h"
 #include "commit-graph.h"
 #include "decorate.h"
@@ -943,6 +942,8 @@ struct commit_list *get_reachable_subset(struct commit **from, int nr_from,
 			prio_queue_put(&queue, p);
 		}
 	}
+
+	clear_prio_queue(&queue);
 
 	clear_commit_marks_many(nr_to, to, PARENT1);
 	clear_commit_marks_many(nr_from, from, PARENT2);

@@ -12,7 +12,7 @@
 #include "list-objects-filter.h"
 #include "list-objects-filter-options.h"
 #include "packfile.h"
-#include "object-store.h"
+#include "object-store-ll.h"
 #include "trace.h"
 
 struct traversal_context {
@@ -102,7 +102,7 @@ static void process_tree_contents(struct traversal_context *ctx,
 	while (tree_entry(&desc, &entry)) {
 		if (match != all_entries_interesting) {
 			match = tree_entry_interesting(ctx->revs->repo->index,
-						       &entry, base, 0,
+						       &entry, base,
 						       &ctx->revs->diffopt.pathspec);
 			if (match == all_entries_not_interesting)
 				break;

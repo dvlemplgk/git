@@ -5,7 +5,7 @@
 #include "environment.h"
 #include "hex.h"
 #include "object-name.h"
-#include "object-store.h"
+#include "object-store-ll.h"
 #include "repository.h"
 #include "tmp-objdir.h"
 #include "commit.h"
@@ -16,6 +16,7 @@
 #include "reflog-walk.h"
 #include "refs.h"
 #include "replace-object.h"
+#include "revision.h"
 #include "string-list.h"
 #include "color.h"
 #include "gpg-interface.h"
@@ -25,6 +26,7 @@
 #include "range-diff.h"
 #include "strmap.h"
 #include "tree.h"
+#include "wildmatch.h"
 #include "write-or-die.h"
 
 static struct decoration name_decoration = { "object names" };
@@ -156,7 +158,7 @@ static int add_ref_decoration(const char *refname, const struct object_id *oid,
 
 	if (starts_with(refname, git_replace_ref_base)) {
 		struct object_id original_oid;
-		if (!read_replace_refs)
+		if (!replace_refs_enabled(the_repository))
 			return 0;
 		if (get_oid_hex(refname + strlen(git_replace_ref_base),
 				&original_oid)) {

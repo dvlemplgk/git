@@ -6,17 +6,17 @@
  * Based on git-tag.sh and mktag.c by Linus Torvalds.
  */
 
-#include "cache.h"
+#include "builtin.h"
 #include "advice.h"
 #include "config.h"
-#include "builtin.h"
 #include "editor.h"
 #include "environment.h"
 #include "gettext.h"
 #include "hex.h"
 #include "refs.h"
 #include "object-name.h"
-#include "object-store.h"
+#include "object-store-ll.h"
+#include "path.h"
 #include "tag.h"
 #include "run-command.h"
 #include "parse-options.h"
@@ -121,7 +121,7 @@ static int for_each_tag_name(const char **argv, each_tag_name_fn fn,
 	return had_error;
 }
 
-static int collect_tags(const char *name, const char *ref,
+static int collect_tags(const char *name UNUSED, const char *ref,
 			const struct object_id *oid, void *cb_data)
 {
 	struct string_list *ref_list = cb_data;
@@ -155,7 +155,7 @@ static int delete_tags(const char **argv)
 	return result;
 }
 
-static int verify_tag(const char *name, const char *ref,
+static int verify_tag(const char *name, const char *ref UNUSED,
 		      const struct object_id *oid, void *cb_data)
 {
 	int flags;
@@ -188,7 +188,8 @@ static const char tag_template_nocleanup[] =
 	"Lines starting with '%c' will be kept; you may remove them"
 	" yourself if you want to.\n");
 
-static int git_tag_config(const char *var, const char *value, void *cb)
+static int git_tag_config(const char *var, const char *value,
+			  const struct config_context *ctx, void *cb)
 {
 	if (!strcmp(var, "tag.gpgsign")) {
 		config_sign_tag = git_config_bool(var, value);
@@ -209,7 +210,11 @@ static int git_tag_config(const char *var, const char *value, void *cb)
 
 	if (starts_with(var, "column."))
 		return git_column_config(var, value, "tag", &colopts);
-	return git_color_default_config(var, value, cb);
+
+	if (git_color_config(var, value, cb) < 0)
+		return -1;
+
+	return git_default_config(var, value, ctx, cb);
 }
 
 static void write_tag_body(int fd, const struct object_id *oid)
@@ -271,11 +276,10 @@ static const char message_advice_nested_tag[] =
 static void create_tag(const struct object_id *object, const char *object_ref,
 		       const char *tag,
 		       struct strbuf *buf, struct create_tag_options *opt,
-		       struct object_id *prev, struct object_id *result)
+		       struct object_id *prev, struct object_id *result, char *path)
 {
 	enum object_type type;
 	struct strbuf header = STRBUF_INIT;
-	char *path = NULL;
 
 	type = oid_object_info(the_repository, object, NULL);
 	if (type <= OBJ_NONE)
@@ -299,7 +303,6 @@ static void create_tag(const struct object_id *object, const char *object_ref,
 		int fd;
 
 		/* write the template message before editing: */
-		path = git_pathdup("TAG_EDITMSG");
 		fd = xopen(path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
 
 		if (opt->message_given) {
@@ -311,9 +314,11 @@ static void create_tag(const struct object_id *object, const char *object_ref,
 			struct strbuf buf = STRBUF_INIT;
 			strbuf_addch(&buf, '\n');
 			if (opt->cleanup_mode == CLEANUP_ALL)
-				strbuf_commented_addf(&buf, _(tag_template), tag, comment_line_char);
+				strbuf_commented_addf(&buf, comment_line_char,
+				      _(tag_template), tag, comment_line_char);
 			else
-				strbuf_commented_addf(&buf, _(tag_template_nocleanup), tag, comment_line_char);
+				strbuf_commented_addf(&buf, comment_line_char,
+				      _(tag_template_nocleanup), tag, comment_line_char);
 			write_or_die(fd, buf.buf, buf.len);
 			strbuf_release(&buf);
 		}
@@ -327,7 +332,8 @@ static void create_tag(const struct object_id *object, const char *object_ref,
 	}
 
 	if (opt->cleanup_mode != CLEANUP_NONE)
-		strbuf_stripspace(buf, opt->cleanup_mode == CLEANUP_ALL);
+		strbuf_stripspace(buf,
+		  opt->cleanup_mode == CLEANUP_ALL ? comment_line_char : '\0');
 
 	if (!opt->message_given && !buf->len)
 		die(_("no tag message?"));
@@ -340,10 +346,6 @@ static void create_tag(const struct object_id *object, const char *object_ref,
 			fprintf(stderr, _("The tag message has been left in %s\n"),
 				path);
 		exit(128);
-	}
-	if (path) {
-		unlink_or_warn(path);
-		free(path);
 	}
 }
 
@@ -443,7 +445,7 @@ int cmd_tag(int argc, const char **argv, const char *prefix)
 	struct msg_arg msg = { .buf = STRBUF_INIT };
 	struct ref_transaction *transaction;
 	struct strbuf err = STRBUF_INIT;
-	struct ref_filter filter;
+	struct ref_filter filter = REF_FILTER_INIT;
 	struct ref_sorting *sorting;
 	struct string_list sorting_options = STRING_LIST_INIT_DUP;
 	struct ref_format format = REF_FORMAT_INIT;
@@ -495,13 +497,13 @@ int cmd_tag(int argc, const char **argv, const char *prefix)
 	};
 	int ret = 0;
 	const char *only_in_list = NULL;
+	char *path = NULL;
 
 	setup_ref_filter_porcelain_msg();
 
 	git_config(git_tag_config, &sorting_options);
 
 	memset(&opt, 0, sizeof(opt));
-	memset(&filter, 0, sizeof(filter));
 	filter.lines = -1;
 	opt.sign = -1;
 
@@ -629,7 +631,9 @@ int cmd_tag(int argc, const char **argv, const char *prefix)
 	if (create_tag_object) {
 		if (force_sign_annotate && !annotate)
 			opt.sign = 1;
-		create_tag(&object, object_ref, tag, &buf, &opt, &prev, &object);
+		path = git_pathdup("TAG_EDITMSG");
+		create_tag(&object, object_ref, tag, &buf, &opt, &prev, &object,
+			   path);
 	}
 
 	transaction = ref_transaction_begin(&err);
@@ -637,8 +641,17 @@ int cmd_tag(int argc, const char **argv, const char *prefix)
 	    ref_transaction_update(transaction, ref.buf, &object, &prev,
 				   create_reflog ? REF_FORCE_CREATE_REFLOG : 0,
 				   reflog_msg.buf, &err) ||
-	    ref_transaction_commit(transaction, &err))
+	    ref_transaction_commit(transaction, &err)) {
+		if (path)
+			fprintf(stderr,
+				_("The tag message has been left in %s\n"),
+				path);
 		die("%s", err.buf);
+	}
+	if (path) {
+		unlink_or_warn(path);
+		free(path);
+	}
 	ref_transaction_free(transaction);
 	if (force && !is_null_oid(&prev) && !oideq(&prev, &object))
 		printf(_("Updated tag '%s' (was %s)\n"), tag,
@@ -646,6 +659,7 @@ int cmd_tag(int argc, const char **argv, const char *prefix)
 
 cleanup:
 	ref_sorting_release(sorting);
+	ref_filter_clear(&filter);
 	strbuf_release(&buf);
 	strbuf_release(&ref);
 	strbuf_release(&reflog_msg);

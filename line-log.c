@@ -1,5 +1,4 @@
 #include "git-compat-util.h"
-#include "alloc.h"
 #include "line-range.h"
 #include "hex.h"
 #include "tag.h"
@@ -8,6 +7,7 @@
 #include "diff.h"
 #include "commit.h"
 #include "decorate.h"
+#include "repository.h"
 #include "revision.h"
 #include "xdiff-interface.h"
 #include "strbuf.h"

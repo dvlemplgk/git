@@ -1,5 +1,4 @@
 #include "builtin.h"
-#include "alloc.h"
 #include "config.h"
 #include "delta.h"
 #include "environment.h"
@@ -14,17 +13,17 @@
 #include "progress.h"
 #include "fsck.h"
 #include "exec-cmd.h"
+#include "strbuf.h"
 #include "streaming.h"
 #include "thread-utils.h"
 #include "packfile.h"
 #include "pack-revindex.h"
 #include "object-file.h"
-#include "object-store.h"
+#include "object-store-ll.h"
 #include "oid-array.h"
 #include "replace-object.h"
 #include "promisor-remote.h"
 #include "setup.h"
-#include "wrapper.h"
 
 static const char index_pack_usage[] =
 "git index-pack [-v] [-o <index-file>] [--keep | --keep=<msg>] [--[no-]rev-index] [--verify] [--strict] (<pack-file> | --stdin [--fix-thin] [<pack-file>])";
@@ -222,7 +221,8 @@ static void cleanup_thread(void)
 }
 
 static int mark_link(struct object *obj, enum object_type type,
-		     void *data, struct fsck_options *options)
+		     void *data UNUSED,
+		     struct fsck_options *options UNUSED)
 {
 	if (!obj)
 		return -1;
@@ -1581,18 +1581,19 @@ static void final(const char *final_pack_name, const char *curr_pack_name,
 	strbuf_release(&pack_name);
 }
 
-static int git_index_pack_config(const char *k, const char *v, void *cb)
+static int git_index_pack_config(const char *k, const char *v,
+				 const struct config_context *ctx, void *cb)
 {
 	struct pack_idx_option *opts = cb;
 
 	if (!strcmp(k, "pack.indexversion")) {
-		opts->version = git_config_int(k, v);
+		opts->version = git_config_int(k, v, ctx->kvi);
 		if (opts->version > 2)
 			die(_("bad pack.indexVersion=%"PRIu32), opts->version);
 		return 0;
 	}
 	if (!strcmp(k, "pack.threads")) {
-		nr_threads = git_config_int(k, v);
+		nr_threads = git_config_int(k, v, ctx->kvi);
 		if (nr_threads < 0)
 			die(_("invalid number of threads specified (%d)"),
 			    nr_threads);
@@ -1608,7 +1609,7 @@ static int git_index_pack_config(const char *k, const char *v, void *cb)
 		else
 			opts->flags &= ~WRITE_REV;
 	}
-	return git_default_config(k, v, cb);
+	return git_default_config(k, v, ctx, cb);
 }
 
 static int cmp_uint32(const void *a_, const void *b_)
@@ -1752,7 +1753,7 @@ int cmd_index_pack(int argc, const char **argv, const char *prefix)
 	if (argc == 2 && !strcmp(argv[1], "-h"))
 		usage(index_pack_usage);
 
-	read_replace_refs = 0;
+	disable_replace_refs();
 	fsck_options.walk = mark_link;
 
 	reset_pack_idx_option(&opts);

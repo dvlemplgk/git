@@ -3,7 +3,7 @@
 #include "hex.h"
 #include "tree.h"
 #include "object-name.h"
-#include "object-store.h"
+#include "object-store-ll.h"
 #include "blob.h"
 #include "commit.h"
 #include "tag.h"
@@ -32,7 +32,7 @@ int read_tree_at(struct repository *r,
 	while (tree_entry(&desc, &entry)) {
 		if (retval != all_entries_interesting) {
 			retval = tree_entry_interesting(r->index, &entry,
-							base, 0, pathspec);
+							base, pathspec);
 			if (retval == all_entries_not_interesting)
 				break;
 			if (retval == entry_not_interesting)

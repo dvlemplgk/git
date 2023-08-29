@@ -1,4 +1,4 @@
-#include "cache.h"
+#include "git-compat-util.h"
 #include "advice.h"
 #include "wt-status.h"
 #include "object.h"
@@ -7,8 +7,10 @@
 #include "diff.h"
 #include "environment.h"
 #include "gettext.h"
+#include "hash.h"
 #include "hex.h"
 #include "object-name.h"
+#include "path.h"
 #include "revision.h"
 #include "diffcore.h"
 #include "quote.h"
@@ -18,6 +20,7 @@
 #include "refs.h"
 #include "submodule.h"
 #include "column.h"
+#include "read-cache.h"
 #include "setup.h"
 #include "strbuf.h"
 #include "trace.h"
@@ -1024,7 +1027,7 @@ static void wt_longstatus_print_submodule_summary(struct wt_status *s, int uncom
 	if (s->display_comment_prefix) {
 		size_t len;
 		summary_content = strbuf_detach(&summary, &len);
-		strbuf_add_commented_lines(&summary, summary_content, len);
+		strbuf_add_commented_lines(&summary, summary_content, len, comment_line_char);
 		free(summary_content);
 	}
 
@@ -1099,8 +1102,8 @@ void wt_status_append_cut_line(struct strbuf *buf)
 {
 	const char *explanation = _("Do not modify or remove the line above.\nEverything below it will be ignored.");
 
-	strbuf_commented_addf(buf, "%s", cut_line);
-	strbuf_add_commented_lines(buf, explanation, strlen(explanation));
+	strbuf_commented_addf(buf, comment_line_char, "%s", cut_line);
+	strbuf_add_commented_lines(buf, explanation, strlen(explanation), comment_line_char);
 }
 
 void wt_status_add_cut_line(FILE *fp)
@@ -1183,7 +1186,8 @@ static void wt_longstatus_print_tracking(struct wt_status *s)
 
 	t_begin = getnanotime();
 
-	if (!format_tracking_info(branch, &sb, s->ahead_behind_flags))
+	if (!format_tracking_info(branch, &sb, s->ahead_behind_flags,
+				  !s->commit_template))
 		return;
 
 	if (advice_enabled(ADVICE_STATUS_AHEAD_BEHIND_WARNING) &&
@@ -1790,10 +1794,10 @@ void wt_status_get_state(struct repository *r,
 		oidcpy(&state->revert_head_oid, &oid);
 	}
 	if (!sequencer_get_last_command(r, &action)) {
-		if (action == REPLAY_PICK) {
+		if (action == REPLAY_PICK && !state->cherry_pick_in_progress) {
 			state->cherry_pick_in_progress = 1;
 			oidcpy(&state->cherry_pick_head_oid, null_oid());
-		} else {
+		} else if (action == REPLAY_REVERT && !state->revert_in_progress) {
 			state->revert_in_progress = 1;
 			oidcpy(&state->revert_head_oid, null_oid());
 		}

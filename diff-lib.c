@@ -1,18 +1,21 @@
 /*
  * Copyright (C) 2005 Junio C Hamano
  */
-#include "cache.h"
+#include "git-compat-util.h"
 #include "quote.h"
 #include "commit.h"
 #include "diff.h"
 #include "diffcore.h"
 #include "gettext.h"
+#include "hash.h"
 #include "hex.h"
 #include "object-name.h"
+#include "read-cache.h"
 #include "revision.h"
 #include "cache-tree.h"
 #include "unpack-trees.h"
 #include "refs.h"
+#include "repository.h"
 #include "submodule.h"
 #include "symlinks.h"
 #include "trace.h"
@@ -669,8 +672,15 @@ int index_differs_from(struct repository *r,
 	setup_revisions(0, NULL, &rev, &opt);
 	rev.diffopt.flags.quick = 1;
 	rev.diffopt.flags.exit_with_status = 1;
-	if (flags)
+	if (flags) {
 		diff_flags_or(&rev.diffopt.flags, flags);
+		/*
+		 * Now that flags are merged, honor override_submodule_config
+		 * and ignore_submodules from passed flags.
+		 */
+		if (flags->override_submodule_config)
+			rev.diffopt.flags.ignore_submodules = flags->ignore_submodules;
+	}
 	rev.diffopt.ita_invisible_in_index = ita_invisible_in_index;
 	run_diff_index(&rev, 1);
 	has_changes = rev.diffopt.flags.has_changes;

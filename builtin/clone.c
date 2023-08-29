@@ -23,7 +23,7 @@
 #include "refs.h"
 #include "refspec.h"
 #include "object-file.h"
-#include "object-store.h"
+#include "object-store-ll.h"
 #include "tree.h"
 #include "tree-walk.h"
 #include "unpack-trees.h"
@@ -39,12 +39,12 @@
 #include "setup.h"
 #include "connected.h"
 #include "packfile.h"
+#include "path.h"
 #include "pkt-line.h"
 #include "list-objects-filter-options.h"
 #include "hook.h"
 #include "bundle.h"
 #include "bundle-uri.h"
-#include "wrapper.h"
 
 /*
  * Overall FIXMEs:
@@ -161,10 +161,7 @@ static struct option builtin_clone_options[] = {
 			N_("set config inside the new repository")),
 	OPT_STRING_LIST(0, "server-option", &server_options,
 			N_("server-specific"), N_("option to transmit")),
-	OPT_SET_INT('4', "ipv4", &family, N_("use IPv4 addresses only"),
-			TRANSPORT_FAMILY_IPV4),
-	OPT_SET_INT('6', "ipv6", &family, N_("use IPv6 addresses only"),
-			TRANSPORT_FAMILY_IPV6),
+	OPT_IPVERSION(&family),
 	OPT_PARSE_LIST_OBJECTS_FILTER(&filter_options),
 	OPT_BOOL(0, "also-filter-submodules", &option_filter_submodules,
 		    N_("apply partial clone filters to submodules")),
@@ -790,7 +787,8 @@ static int checkout(int submodule_progress, int filter_submodules)
 	return err;
 }
 
-static int git_clone_config(const char *k, const char *v, void *cb)
+static int git_clone_config(const char *k, const char *v,
+			    const struct config_context *ctx, void *cb)
 {
 	if (!strcmp(k, "clone.defaultremotename")) {
 		free(remote_name);
@@ -801,17 +799,19 @@ static int git_clone_config(const char *k, const char *v, void *cb)
 	if (!strcmp(k, "clone.filtersubmodules"))
 		config_filter_submodules = git_config_bool(k, v);
 
-	return git_default_config(k, v, cb);
+	return git_default_config(k, v, ctx, cb);
 }
 
-static int write_one_config(const char *key, const char *value, void *data)
+static int write_one_config(const char *key, const char *value,
+			    const struct config_context *ctx,
+			    void *data)
 {
 	/*
 	 * give git_clone_config a chance to write config values back to the
 	 * environment, since git_config_set_multivar_gently only deals with
 	 * config-file writes
 	 */
-	int apply_failed = git_clone_config(key, value, data);
+	int apply_failed = git_clone_config(key, value, ctx, data);
 	if (apply_failed)
 		return apply_failed;
 
@@ -930,6 +930,7 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 	int submodule_progress;
 	int filter_submodules = 0;
 	int hash_algo;
+	const int do_not_override_repo_unix_permissions = -1;
 
 	struct transport_ls_refs_options transport_ls_refs_options =
 		TRANSPORT_LS_REFS_OPTIONS_INIT;
@@ -1097,7 +1098,7 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 	}
 
 	init_db(git_dir, real_git_dir, option_template, GIT_HASH_UNKNOWN, NULL,
-		INIT_DB_QUIET);
+		do_not_override_repo_unix_permissions, INIT_DB_QUIET);
 
 	if (real_git_dir) {
 		free((char *)git_dir);

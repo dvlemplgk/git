@@ -1,18 +1,18 @@
 #include "builtin.h"
-#include "cache.h"
 #include "bulk-checkin.h"
 #include "config.h"
 #include "environment.h"
 #include "gettext.h"
 #include "git-zlib.h"
 #include "hex.h"
-#include "object-store.h"
+#include "object-store-ll.h"
 #include "object.h"
 #include "delta.h"
 #include "pack.h"
 #include "blob.h"
 #include "commit.h"
 #include "replace-object.h"
+#include "strbuf.h"
 #include "tag.h"
 #include "tree.h"
 #include "tree-walk.h"
@@ -215,7 +215,8 @@ static void write_cached_object(struct object *obj, struct obj_buffer *obj_buf)
  * Verify its reachability and validity recursively and write it out.
  */
 static int check_object(struct object *obj, enum object_type type,
-			void *data, struct fsck_options *options)
+			void *data UNUSED,
+			struct fsck_options *options UNUSED)
 {
 	struct obj_buffer *obj_buf;
 
@@ -609,7 +610,7 @@ int cmd_unpack_objects(int argc, const char **argv, const char *prefix UNUSED)
 	int i;
 	struct object_id oid;
 
-	read_replace_refs = 0;
+	disable_replace_refs();
 
 	git_config(git_default_config, NULL);
 

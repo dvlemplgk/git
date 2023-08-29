@@ -8,6 +8,7 @@
 #include "gettext.h"
 #include "hex.h"
 #include "object-name.h"
+#include "repository.h"
 #include "revision.h"
 #include "remote.h"
 #include "string-list.h"
@@ -18,7 +19,6 @@
 #include "refspec.h"
 #include "transport-internal.h"
 #include "protocol.h"
-#include "wrapper.h"
 
 static int debug;
 

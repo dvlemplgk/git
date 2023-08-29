@@ -1,6 +1,5 @@
 #include "builtin.h"
 #include "abspath.h"
-#include "cache.h"
 #include "environment.h"
 #include "gettext.h"
 #include "hex.h"
@@ -13,6 +12,7 @@
 #include "commit.h"
 #include "delta.h"
 #include "pack.h"
+#include "path.h"
 #include "refs.h"
 #include "csum-file.h"
 #include "quote.h"
@@ -21,12 +21,11 @@
 #include "packfile.h"
 #include "object-file.h"
 #include "object-name.h"
-#include "object-store.h"
+#include "object-store-ll.h"
 #include "mem-pool.h"
 #include "commit-reach.h"
 #include "khash.h"
 #include "date.h"
-#include "wrapper.h"
 
 #define PACK_ID_BITS 16
 #define MAX_PACK_ID ((1<<PACK_ID_BITS)-1)

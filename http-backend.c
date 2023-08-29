@@ -1,9 +1,9 @@
 #include "git-compat-util.h"
-#include "alloc.h"
 #include "config.h"
 #include "environment.h"
 #include "git-zlib.h"
 #include "hex.h"
+#include "path.h"
 #include "repository.h"
 #include "refs.h"
 #include "pkt-line.h"
@@ -15,10 +15,9 @@
 #include "url.h"
 #include "strvec.h"
 #include "packfile.h"
-#include "object-store.h"
+#include "object-store-ll.h"
 #include "protocol.h"
 #include "date.h"
-#include "wrapper.h"
 #include "write-or-die.h"
 
 static const char content_type[] = "Content-Type";
@@ -559,7 +558,7 @@ static void get_info_refs(struct strbuf *hdr, char *arg UNUSED)
 
 	} else {
 		select_getanyfile(hdr);
-		for_each_namespaced_ref(show_text_ref, &buf);
+		for_each_namespaced_ref(NULL, show_text_ref, &buf);
 		send_strbuf(hdr, "text/plain", &buf);
 	}
 	strbuf_release(&buf);

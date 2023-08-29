@@ -5,7 +5,6 @@
  */
 #define USE_THE_INDEX_VARIABLE
 #include "builtin.h"
-#include "alloc.h"
 #include "advice.h"
 #include "config.h"
 #include "lockfile.h"
@@ -16,9 +15,11 @@
 #include "tree-walk.h"
 #include "object-name.h"
 #include "parse-options.h"
+#include "read-cache.h"
 #include "repository.h"
 #include "string-list.h"
 #include "setup.h"
+#include "sparse-index.h"
 #include "submodule.h"
 #include "pathspec.h"
 

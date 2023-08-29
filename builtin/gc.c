@@ -27,9 +27,10 @@
 #include "commit-graph.h"
 #include "packfile.h"
 #include "object-file.h"
-#include "object-store.h"
+#include "object-store-ll.h"
 #include "pack.h"
 #include "pack-objects.h"
+#include "path.h"
 #include "blob.h"
 #include "tree.h"
 #include "promisor-remote.h"
@@ -40,7 +41,6 @@
 #include "hook.h"
 #include "setup.h"
 #include "trace2.h"
-#include "wrapper.h"
 
 #define FAILED_RUN "failed to run %s"
 
@@ -2068,7 +2068,7 @@ static int schtasks_schedule_task(const char *exec_path, enum schedule_priority 
 	      "</Settings>\n"
 	      "<Actions Context=\"Author\">\n"
 	      "<Exec>\n"
-	      "<Command>\"%s\\git.exe\"</Command>\n"
+	      "<Command>\"%s\\headless-git.exe\"</Command>\n"
 	      "<Arguments>--exec-path=\"%s\" for-each-repo --config=maintenance.repo maintenance run --schedule=%s</Arguments>\n"
 	      "</Exec>\n"
 	      "</Actions>\n"

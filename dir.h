@@ -1,10 +1,13 @@
 #ifndef DIR_H
 #define DIR_H
 
+#include "hash-ll.h"
 #include "hashmap.h"
 #include "pathspec.h"
 #include "statinfo.h"
 #include "strbuf.h"
+
+struct repository;
 
 /**
  * The directory listing API is used to enumerate paths in the work tree,
@@ -39,6 +42,8 @@
  * - Call `dir_clear()` when the contained elements are no longer in use.
  *
  */
+
+struct repository;
 
 struct dir_entry {
 	unsigned int len;
@@ -640,19 +645,5 @@ static inline int starts_with_dot_dot_slash_native(const char *const path)
 
 	return path_match_flags(path, what | PATH_MATCH_NATIVE);
 }
-
-#if defined(DT_UNKNOWN) && !defined(NO_D_TYPE_IN_DIRENT)
-#define DTYPE(de)	((de)->d_type)
-#else
-#undef DT_UNKNOWN
-#undef DT_DIR
-#undef DT_REG
-#undef DT_LNK
-#define DT_UNKNOWN	0
-#define DT_DIR		1
-#define DT_REG		2
-#define DT_LNK		3
-#define DTYPE(de)	DT_UNKNOWN
-#endif
 
 #endif

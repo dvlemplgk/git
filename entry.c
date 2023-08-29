@@ -1,10 +1,12 @@
-#include "cache.h"
+#include "git-compat-util.h"
 #include "blob.h"
-#include "object-store.h"
+#include "object-store-ll.h"
 #include "dir.h"
 #include "environment.h"
 #include "gettext.h"
 #include "hex.h"
+#include "name-hash.h"
+#include "sparse-index.h"
 #include "streaming.h"
 #include "submodule.h"
 #include "symlinks.h"
@@ -12,7 +14,6 @@
 #include "fsmonitor.h"
 #include "entry.h"
 #include "parallel-checkout.h"
-#include "wrapper.h"
 
 static void create_directories(const char *path, int path_len,
 			       const struct checkout *state)
