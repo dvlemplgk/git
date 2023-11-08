@@ -1430,7 +1430,7 @@ static void write_index_patch(const struct am_state *state)
 	rev_info.diffopt.close_file = 1;
 	add_pending_object(&rev_info, &tree->object, "");
 	diff_setup_done(&rev_info.diffopt);
-	run_diff_index(&rev_info, 1);
+	run_diff_index(&rev_info, DIFF_INDEX_CACHED);
 	release_revisions(&rev_info);
 }
 
@@ -1593,7 +1593,7 @@ static int fall_back_threeway(const struct am_state *state, const char *index_pa
 		rev_info.diffopt.filter |= diff_filter_bit('M');
 		add_pending_oid(&rev_info, "HEAD", &our_tree, 0);
 		diff_setup_done(&rev_info.diffopt);
-		run_diff_index(&rev_info, 1);
+		run_diff_index(&rev_info, DIFF_INDEX_CACHED);
 		release_revisions(&rev_info);
 	}
 
@@ -2303,7 +2303,8 @@ static int parse_opt_show_current_patch(const struct option *opt, const char *ar
 	if (resume->mode == RESUME_SHOW_PATCH && new_value != resume->sub_mode)
 		return error(_("options '%s=%s' and '%s=%s' "
 					   "cannot be used together"),
-					 "--show-current-patch", "--show-current-patch", arg, valid_modes[resume->sub_mode]);
+			     "--show-current-patch", arg,
+			     "--show-current-patch", valid_modes[resume->sub_mode]);
 
 	resume->mode = RESUME_SHOW_PATCH;
 	resume->sub_mode = new_value;
