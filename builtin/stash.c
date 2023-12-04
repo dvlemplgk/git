@@ -362,7 +362,7 @@ static int is_path_a_directory(const char *path)
 }
 
 static void add_diff_to_buf(struct diff_queue_struct *q,
-			    struct diff_options *options,
+			    struct diff_options *options UNUSED,
 			    void *data)
 {
 	int i;
@@ -989,6 +989,12 @@ usage:
 static int do_store_stash(const struct object_id *w_commit, const char *stash_msg,
 			  int quiet)
 {
+	struct stash_info info;
+	char revision[GIT_MAX_HEXSZ];
+
+	oid_to_hex_r(revision, w_commit);
+	assert_stash_like(&info, revision);
+
 	if (!stash_msg)
 		stash_msg = "Created via \"git stash store\".";
 
