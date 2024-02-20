@@ -2,8 +2,6 @@
 #include "parse-options.h"
 #include "abspath.h"
 #include "parse.h"
-#include "commit.h"
-#include "color.h"
 #include "gettext.h"
 #include "strbuf.h"
 #include "string-list.h"
@@ -279,7 +277,8 @@ static enum parse_opt_result get_value(struct parse_opt_ctx_t *p,
 
 	opt_name = optnamearg(opt, arg, flags);
 	other_opt_name = optnamearg(elem->opt, elem->arg, elem->flags);
-	error(_("%s is incompatible with %s"), opt_name, other_opt_name);
+	error(_("options '%s' and '%s' cannot be used together"),
+	      opt_name, other_opt_name);
 	free(opt_name);
 	free(other_opt_name);
 	return -1;
@@ -358,6 +357,7 @@ static enum parse_opt_result parse_long_opt(
 	const char *arg_end = strchrnul(arg, '=');
 	const struct option *abbrev_option = NULL, *ambiguous_option = NULL;
 	enum opt_parsed abbrev_flags = OPT_LONG, ambiguous_flags = OPT_LONG;
+	int allow_abbrev = !(p->flags & PARSE_OPT_KEEP_UNKNOWN_OPT);
 
 	for (; options->type != OPTION_END; options++) {
 		const char *rest, *long_name = options->long_name;
@@ -368,12 +368,16 @@ static enum parse_opt_result parse_long_opt(
 		if (!long_name)
 			continue;
 
-again:
+		if (!starts_with(arg, "no-") &&
+		    !(options->flags & PARSE_OPT_NONEG) &&
+		    skip_prefix(long_name, "no-", &long_name))
+			opt_flags |= OPT_UNSET;
+
 		if (!skip_prefix(arg, long_name, &rest))
 			rest = NULL;
 		if (!rest) {
 			/* abbreviated? */
-			if (!(p->flags & PARSE_OPT_KEEP_UNKNOWN_OPT) &&
+			if (allow_abbrev &&
 			    !strncmp(long_name, arg, arg_end - arg)) {
 is_abbreviated:
 				if (abbrev_option &&
@@ -397,22 +401,18 @@ is_abbreviated:
 			if (options->flags & PARSE_OPT_NONEG)
 				continue;
 			/* negated and abbreviated very much? */
-			if (starts_with("no-", arg)) {
+			if (allow_abbrev && starts_with("no-", arg)) {
 				flags |= OPT_UNSET;
 				goto is_abbreviated;
 			}
 			/* negated? */
-			if (!starts_with(arg, "no-")) {
-				if (skip_prefix(long_name, "no-", &long_name)) {
-					opt_flags |= OPT_UNSET;
-					goto again;
-				}
+			if (!starts_with(arg, "no-"))
 				continue;
-			}
 			flags |= OPT_UNSET;
 			if (!skip_prefix(arg + 3, long_name, &rest)) {
 				/* abbreviated and negated? */
-				if (starts_with(long_name, arg + 3))
+				if (allow_abbrev &&
+				    starts_with(long_name, arg + 3))
 					goto is_abbreviated;
 				else
 					continue;
@@ -929,9 +929,14 @@ enum parse_opt_result parse_options_step(struct parse_opt_ctx_t *ctx,
 			continue;
 		}
 
-		if (!arg[2] /* "--" */ ||
-		    !strcmp(arg + 2, "end-of-options")) {
+		if (!arg[2] /* "--" */) {
 			if (!(ctx->flags & PARSE_OPT_KEEP_DASHDASH)) {
+				ctx->argc--;
+				ctx->argv++;
+			}
+			break;
+		} else if (!strcmp(arg + 2, "end-of-options")) {
+			if (!(ctx->flags & PARSE_OPT_KEEP_UNKNOWN_OPT)) {
 				ctx->argc--;
 				ctx->argv++;
 			}

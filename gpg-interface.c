@@ -12,7 +12,6 @@
 #include "sigchain.h"
 #include "tempfile.h"
 #include "alias.h"
-#include "environment.h"
 
 static int git_gpg_config(const char *, const char *,
 			  const struct config_context *, void *);
@@ -762,23 +761,14 @@ static int git_gpg_config(const char *var, const char *value,
 		return 0;
 	}
 
-	if (!strcmp(var, "gpg.ssh.defaultkeycommand")) {
-		if (!value)
-			return config_error_nonbool(var);
+	if (!strcmp(var, "gpg.ssh.defaultkeycommand"))
 		return git_config_string(&ssh_default_key_command, var, value);
-	}
 
-	if (!strcmp(var, "gpg.ssh.allowedsignersfile")) {
-		if (!value)
-			return config_error_nonbool(var);
+	if (!strcmp(var, "gpg.ssh.allowedsignersfile"))
 		return git_config_pathname(&ssh_allowed_signers, var, value);
-	}
 
-	if (!strcmp(var, "gpg.ssh.revocationfile")) {
-		if (!value)
-			return config_error_nonbool(var);
+	if (!strcmp(var, "gpg.ssh.revocationfile"))
 		return git_config_pathname(&ssh_revocation_file, var, value);
-	}
 
 	if (!strcmp(var, "gpg.program") || !strcmp(var, "gpg.openpgp.program"))
 		fmtname = "openpgp";
@@ -1088,7 +1078,7 @@ static int sign_buffer_ssh(struct strbuf *buffer, struct strbuf *signature,
 		if (strstr(signer_stderr.buf, "usage:"))
 			error(_("ssh-keygen -Y sign is needed for ssh signing (available in openssh version 8.2p1+)"));
 
-		error("%s", signer_stderr.buf);
+		ret = error("%s", signer_stderr.buf);
 		goto out;
 	}
 

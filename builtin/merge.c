@@ -31,8 +31,6 @@
 #include "unpack-trees.h"
 #include "cache-tree.h"
 #include "dir.h"
-#include "utf8.h"
-#include "log-tree.h"
 #include "color.h"
 #include "rerere.h"
 #include "help.h"
@@ -42,10 +40,8 @@
 #include "resolve-undo.h"
 #include "remote.h"
 #include "fmt-merge-msg.h"
-#include "gpg-interface.h"
 #include "sequencer.h"
 #include "string-list.h"
-#include "packfile.h"
 #include "tag.h"
 #include "alias.h"
 #include "branch.h"
@@ -869,7 +865,7 @@ static void prepare_to_commit(struct commit_list *remoteheads)
 				_(no_scissors_editor_comment), comment_line_char);
 	}
 	if (signoff)
-		append_signoff(&msg, ignore_non_trailer(msg.buf, msg.len), 0);
+		append_signoff(&msg, ignored_log_message_bytes(msg.buf, msg.len), 0);
 	write_merge_heads(remoteheads);
 	write_file_buf(git_path_merge_msg(the_repository), msg.buf, msg.len);
 	if (run_commit_hook(0 < option_edit, get_index_file(), NULL,

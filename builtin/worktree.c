@@ -49,14 +49,14 @@
 	_("No possible source branch, inferring '--orphan'")
 
 #define WORKTREE_ADD_ORPHAN_WITH_DASH_B_HINT_TEXT \
-	_("If you meant to create a worktree containing a new orphan branch\n" \
+	_("If you meant to create a worktree containing a new unborn branch\n" \
 	"(branch with no commits) for this repository, you can do so\n" \
 	"using the --orphan flag:\n" \
 	"\n" \
 	"    git worktree add --orphan -b %s %s\n")
 
 #define WORKTREE_ADD_ORPHAN_NO_DASH_B_HINT_TEXT \
-	_("If you meant to create a worktree containing a new orphan branch\n" \
+	_("If you meant to create a worktree containing a new unborn branch\n" \
 	"(branch with no commits) for this repository, you can do so\n" \
 	"using the --orphan flag:\n" \
 	"\n" \
@@ -730,11 +730,11 @@ static int dwim_orphan(const struct add_opts *opts, int opt_track, int remote)
 	}
 
 	if (opt_track) {
-		die(_("'%s' and '%s' cannot be used together"), "--orphan",
-		    "--track");
+		die(_("options '%s' and '%s' cannot be used together"),
+		    "--orphan", "--track");
 	} else if (!opts->checkout) {
-		die(_("'%s' and '%s' cannot be used together"), "--orphan",
-		    "--no-checkout");
+		die(_("options '%s' and '%s' cannot be used together"),
+		    "--orphan", "--no-checkout");
 	}
 	return 1;
 }
@@ -784,7 +784,7 @@ static int add(int ac, const char **av, const char *prefix)
 			   N_("create a new branch")),
 		OPT_STRING('B', NULL, &new_branch_force, N_("branch"),
 			   N_("create or reset a branch")),
-		OPT_BOOL(0, "orphan", &opts.orphan, N_("create unborn/orphaned branch")),
+		OPT_BOOL(0, "orphan", &opts.orphan, N_("create unborn branch")),
 		OPT_BOOL('d', "detach", &opts.detach, N_("detach HEAD at named commit")),
 		OPT_BOOL(0, "checkout", &opts.checkout, N_("populate the new working tree")),
 		OPT_BOOL(0, "lock", &keep_locked, N_("keep the new working tree locked")),
@@ -806,16 +806,17 @@ static int add(int ac, const char **av, const char *prefix)
 	if (!!opts.detach + !!new_branch + !!new_branch_force > 1)
 		die(_("options '%s', '%s', and '%s' cannot be used together"), "-b", "-B", "--detach");
 	if (opts.detach && opts.orphan)
-		die(_("options '%s', and '%s' cannot be used together"),
+		die(_("options '%s' and '%s' cannot be used together"),
 		    "--orphan", "--detach");
 	if (opts.orphan && opt_track)
-		die(_("'%s' and '%s' cannot be used together"), "--orphan", "--track");
+		die(_("options '%s' and '%s' cannot be used together"),
+		    "--orphan", "--track");
 	if (opts.orphan && !opts.checkout)
-		die(_("'%s' and '%s' cannot be used together"), "--orphan",
-		    "--no-checkout");
+		die(_("options '%s' and '%s' cannot be used together"),
+		    "--orphan", "--no-checkout");
 	if (opts.orphan && ac == 2)
-		die(_("'%s' and '%s' cannot be used together"), "--orphan",
-		    _("<commit-ish>"));
+		die(_("option '%s' and commit-ish cannot be used together"),
+		    "--orphan");
 	if (lock_reason && !keep_locked)
 		die(_("the option '%s' requires '%s'"), "--reason", "--lock");
 	if (lock_reason)
@@ -850,21 +851,21 @@ static int add(int ac, const char **av, const char *prefix)
 		const char *s = worktree_basename(path, &n);
 		new_branch = xstrndup(s, n);
 	} else if (opts.orphan) {
-		// No-op
+		; /* no-op */
 	} else if (opts.detach) {
-		// Check HEAD
+		/* Check HEAD */
 		if (!strcmp(branch, "HEAD"))
 			can_use_local_refs(&opts);
 	} else if (ac < 2 && new_branch) {
-		// DWIM: Infer --orphan when repo has no refs.
+		/* DWIM: Infer --orphan when repo has no refs. */
 		opts.orphan = dwim_orphan(&opts, !!opt_track, 0);
 	} else if (ac < 2) {
-		// DWIM: Guess branch name from path.
+		/* DWIM: Guess branch name from path. */
 		const char *s = dwim_branch(path, &new_branch);
 		if (s)
 			branch = s;
 
-		// DWIM: Infer --orphan when repo has no refs.
+		/* DWIM: Infer --orphan when repo has no refs. */
 		opts.orphan = (!s) && dwim_orphan(&opts, !!opt_track, 1);
 	} else if (ac == 2) {
 		struct object_id oid;

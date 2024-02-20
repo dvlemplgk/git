@@ -19,7 +19,6 @@
 #include "hex.h"
 #include "lockfile.h"
 #include "parse-options.h"
-#include "fetch-pack.h"
 #include "refs.h"
 #include "refspec.h"
 #include "object-file.h"
@@ -791,6 +790,8 @@ static int git_clone_config(const char *k, const char *v,
 			    const struct config_context *ctx, void *cb)
 {
 	if (!strcmp(k, "clone.defaultremotename")) {
+		if (!v)
+			return config_error_nonbool(k);
 		free(remote_name);
 		remote_name = xstrdup(v);
 	}
@@ -965,7 +966,9 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 	}
 
 	if (bundle_uri && deepen)
-		die(_("--bundle-uri is incompatible with --depth, --shallow-since, and --shallow-exclude"));
+		die(_("options '%s' and '%s' cannot be used together"),
+		    "--bundle-uri",
+		    "--depth/--shallow-since/--shallow-exclude");
 
 	repo_name = argv[0];
 

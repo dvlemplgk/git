@@ -19,7 +19,6 @@
 
 #include "alloc.h"
 #include "attr.h"
-#include "blob.h"
 #include "cache-tree.h"
 #include "commit.h"
 #include "commit-reach.h"
@@ -42,8 +41,6 @@
 #include "revision.h"
 #include "sparse-index.h"
 #include "strmap.h"
-#include "submodule-config.h"
-#include "submodule.h"
 #include "trace2.h"
 #include "tree.h"
 #include "unpack-trees.h"
@@ -2644,7 +2641,7 @@ static void apply_directory_rename_modifications(struct merge_options *opt,
 			oidcpy(&ci->stages[i].oid, null_oid());
 		}
 
-		// Now we want to focus on new_ci, so reassign ci to it
+		/* Now we want to focus on new_ci, so reassign ci to it. */
 		ci = new_ci;
 	}
 

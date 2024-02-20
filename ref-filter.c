@@ -22,16 +22,13 @@
 #include "ref-filter.h"
 #include "revision.h"
 #include "utf8.h"
-#include "version.h"
 #include "versioncmp.h"
 #include "trailer.h"
 #include "wt-status.h"
 #include "commit-slab.h"
-#include "commit-graph.h"
 #include "commit-reach.h"
 #include "worktree.h"
 #include "hashmap.h"
-#include "strvec.h"
 
 static struct ref_msg {
 	const char *gone;
@@ -2212,7 +2209,7 @@ char *get_head_description(void)
 				    state.detached_from);
 	} else if (state.bisect_in_progress)
 		strbuf_addf(&desc, _("(no branch, bisect started on %s)"),
-			    state.branch);
+			    state.bisecting_from);
 	else if (state.detached_from) {
 		if (state.detached_at)
 			strbuf_addf(&desc, _("(HEAD detached at %s)"),

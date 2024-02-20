@@ -15,10 +15,8 @@
 #include "pager.h"
 #include "commit.h"
 #include "sequencer.h"
-#include "tag.h"
 #include "run-command.h"
 #include "hook.h"
-#include "exec-cmd.h"
 #include "utf8.h"
 #include "cache-tree.h"
 #include "diff.h"
@@ -39,7 +37,6 @@
 #include "notes-utils.h"
 #include "sigchain.h"
 #include "unpack-trees.h"
-#include "worktree.h"
 #include "oidmap.h"
 #include "oidset.h"
 #include "commit-slab.h"
@@ -238,34 +235,29 @@ static int git_sequencer_config(const char *k, const char *v,
 				const struct config_context *ctx, void *cb)
 {
 	struct replay_opts *opts = cb;
-	int status;
 
 	if (!strcmp(k, "commit.cleanup")) {
-		const char *s;
+		if (!v)
+			return config_error_nonbool(k);
 
-		status = git_config_string(&s, k, v);
-		if (status)
-			return status;
-
-		if (!strcmp(s, "verbatim")) {
+		if (!strcmp(v, "verbatim")) {
 			opts->default_msg_cleanup = COMMIT_MSG_CLEANUP_NONE;
 			opts->explicit_cleanup = 1;
-		} else if (!strcmp(s, "whitespace")) {
+		} else if (!strcmp(v, "whitespace")) {
 			opts->default_msg_cleanup = COMMIT_MSG_CLEANUP_SPACE;
 			opts->explicit_cleanup = 1;
-		} else if (!strcmp(s, "strip")) {
+		} else if (!strcmp(v, "strip")) {
 			opts->default_msg_cleanup = COMMIT_MSG_CLEANUP_ALL;
 			opts->explicit_cleanup = 1;
-		} else if (!strcmp(s, "scissors")) {
+		} else if (!strcmp(v, "scissors")) {
 			opts->default_msg_cleanup = COMMIT_MSG_CLEANUP_SCISSORS;
 			opts->explicit_cleanup = 1;
 		} else {
 			warning(_("invalid commit message cleanup mode '%s'"),
-				  s);
+				  v);
 		}
 
-		free((char *)s);
-		return status;
+		return 0;
 	}
 
 	if (!strcmp(k, "commit.gpgsign")) {
@@ -345,7 +337,7 @@ static int has_conforming_footer(struct strbuf *sb, struct strbuf *sob,
 	if (ignore_footer)
 		sb->buf[sb->len - ignore_footer] = saved_char;
 
-	if (info.trailer_start == info.trailer_end)
+	if (info.trailer_block_start == info.trailer_block_end)
 		return 0;
 
 	for (i = 0; i < info.trailer_nr; i++)

@@ -18,7 +18,6 @@
 #include "object-store-ll.h"
 #include "path.h"
 #include "tag.h"
-#include "run-command.h"
 #include "parse-options.h"
 #include "diff.h"
 #include "revision.h"
@@ -176,7 +175,7 @@ static int verify_tag(const char *name, const char *ref UNUSED,
 
 static int do_sign(struct strbuf *buffer)
 {
-	return sign_buffer(buffer, buffer, get_signing_key());
+	return sign_buffer(buffer, buffer, get_signing_key()) ? -1 : 0;
 }
 
 static const char tag_template[] =

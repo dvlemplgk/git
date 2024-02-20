@@ -13,7 +13,6 @@
 #include "string-list.h"
 #include "chdir-notify.h"
 #include "path.h"
-#include "promisor-remote.h"
 #include "quote.h"
 #include "trace2.h"
 #include "worktree.h"
@@ -559,6 +558,8 @@ static enum extension_result handle_extension_v0(const char *var,
 			data->precious_objects = git_config_bool(var, value);
 			return EXTENSION_OK;
 		} else if (!strcmp(ext, "partialclone")) {
+			if (!value)
+				return config_error_nonbool(var);
 			data->partial_clone = xstrdup(value);
 			return EXTENSION_OK;
 		} else if (!strcmp(ext, "worktreeconfig")) {
