@@ -68,23 +68,6 @@ static void imap_warn(const char *, ...);
 
 static char *next_arg(char **);
 
-__attribute__((format (printf, 3, 4)))
-static int nfsnprintf(char *buf, int blen, const char *fmt, ...);
-
-static int nfvasprintf(char **strp, const char *fmt, va_list ap)
-{
-	int len;
-	char tmp[8192];
-
-	len = vsnprintf(tmp, sizeof(tmp), fmt, ap);
-	if (len < 0)
-		die("Fatal: Out of memory");
-	if (len >= sizeof(tmp))
-		die("imap command overflow!");
-	*strp = xmemdupz(tmp, len);
-	return len;
-}
-
 struct imap_server_conf {
 	const char *name;
 	const char *tunnel;
@@ -500,30 +483,17 @@ static char *next_arg(char **s)
 	return ret;
 }
 
-__attribute__((format (printf, 3, 4)))
-static int nfsnprintf(char *buf, int blen, const char *fmt, ...)
-{
-	int ret;
-	va_list va;
-
-	va_start(va, fmt);
-	if (blen <= 0 || (unsigned)(ret = vsnprintf(buf, blen, fmt, va)) >= (unsigned)blen)
-		BUG("buffer too small. Please report a bug.");
-	va_end(va);
-	return ret;
-}
-
 static struct imap_cmd *issue_imap_cmd(struct imap_store *ctx,
 				       struct imap_cmd_cb *cb,
 				       const char *fmt, va_list ap)
 {
 	struct imap *imap = ctx->imap;
 	struct imap_cmd *cmd;
-	int n, bufl;
-	char buf[1024];
+	int n;
+	struct strbuf buf = STRBUF_INIT;
 
 	cmd = xmalloc(sizeof(struct imap_cmd));
-	nfvasprintf(&cmd->cmd, fmt, ap);
+	cmd->cmd = xstrvfmt(fmt, ap);
 	cmd->tag = ++imap->nexttag;
 
 	if (cb)
@@ -535,27 +505,30 @@ static struct imap_cmd *issue_imap_cmd(struct imap_store *ctx,
 		get_cmd_result(ctx, NULL);
 
 	if (!cmd->cb.data)
-		bufl = nfsnprintf(buf, sizeof(buf), "%d %s\r\n", cmd->tag, cmd->cmd);
+		strbuf_addf(&buf, "%d %s\r\n", cmd->tag, cmd->cmd);
 	else
-		bufl = nfsnprintf(buf, sizeof(buf), "%d %s{%d%s}\r\n",
-				  cmd->tag, cmd->cmd, cmd->cb.dlen,
-				  CAP(LITERALPLUS) ? "+" : "");
+		strbuf_addf(&buf, "%d %s{%d%s}\r\n", cmd->tag, cmd->cmd,
+			    cmd->cb.dlen, CAP(LITERALPLUS) ? "+" : "");
+	if (buf.len > INT_MAX)
+		die("imap command overflow!");
 
 	if (0 < verbosity) {
 		if (imap->num_in_progress)
 			printf("(%d in progress) ", imap->num_in_progress);
 		if (!starts_with(cmd->cmd, "LOGIN"))
-			printf(">>> %s", buf);
+			printf(">>> %s", buf.buf);
 		else
 			printf(">>> %d LOGIN <user> <pass>\n", cmd->tag);
 	}
-	if (socket_write(&imap->buf.sock, buf, bufl) != bufl) {
+	if (socket_write(&imap->buf.sock, buf.buf, buf.len) != buf.len) {
 		free(cmd->cmd);
 		free(cmd);
 		if (cb)
 			free(cb->data);
+		strbuf_release(&buf);
 		return NULL;
 	}
+	strbuf_release(&buf);
 	if (cmd->cb.data) {
 		if (CAP(LITERALPLUS)) {
 			n = socket_write(&imap->buf.sock, cmd->cb.data, cmd->cb.dlen);

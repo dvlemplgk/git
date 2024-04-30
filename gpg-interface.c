@@ -483,7 +483,7 @@ static int verify_ssh_signed_buffer(struct signature_check *sigc,
 
 	if (sigc->payload_timestamp)
 		strbuf_addf(&verify_time, "-Overify-time=%s",
-			show_date(sigc->payload_timestamp, 0, &verify_date_mode));
+			show_date(sigc->payload_timestamp, 0, verify_date_mode));
 
 	/* Find the principal from the signers */
 	strvec_pushl(&ssh_keygen.args, fmt->program,
@@ -586,8 +586,8 @@ static int verify_ssh_signed_buffer(struct signature_check *sigc,
 		}
 	}
 
-	strbuf_stripspace(&ssh_keygen_out, '\0');
-	strbuf_stripspace(&ssh_keygen_err, '\0');
+	strbuf_stripspace(&ssh_keygen_out, NULL);
+	strbuf_stripspace(&ssh_keygen_err, NULL);
 	/* Add stderr outputs to show the user actual ssh-keygen errors */
 	strbuf_add(&ssh_keygen_out, ssh_principals_err.buf, ssh_principals_err.len);
 	strbuf_add(&ssh_keygen_out, ssh_keygen_err.buf, ssh_keygen_err.len);
