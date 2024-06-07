@@ -286,7 +286,11 @@ msgstr "Neuen Zweig erstellen"
 msgid "Cherry-pick this commit"
 msgstr "Diese Version pflücken"
 
-#: gitk:2624
+#: gitk:2678
+msgid "Cherry-pick this commit (-x)"
+msgstr "Diese Version pflücken (-x)"
+
+#: gitk:2679
 msgid "Reset HEAD branch to here"
 msgstr "HEAD-Zweig auf diese Version zurücksetzen"
 
