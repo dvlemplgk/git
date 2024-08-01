@@ -18,6 +18,10 @@ https://developers.google.com/open-source/licenses/bsd
  * allocation overhead.
  */
 struct block_writer {
+	z_stream *zstream;
+	unsigned char *compressed;
+	size_t compressed_cap;
+
 	uint8_t *buf;
 	uint32_t block_size;
 
@@ -25,7 +29,7 @@ struct block_writer {
 	uint32_t header_off;
 
 	/* How often to restart keys. */
-	int restart_interval;
+	uint16_t restart_interval;
 	int hash_size;
 
 	/* Offset of next uint8_t to write. */

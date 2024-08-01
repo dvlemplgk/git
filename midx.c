@@ -1,3 +1,5 @@
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "git-compat-util.h"
 #include "config.h"
 #include "dir.h"
@@ -25,13 +27,15 @@ const unsigned char *get_midx_checksum(struct multi_pack_index *m)
 
 void get_midx_filename(struct strbuf *out, const char *object_dir)
 {
-	strbuf_addf(out, "%s/pack/multi-pack-index", object_dir);
+	get_midx_filename_ext(out, object_dir, NULL, NULL);
 }
 
-void get_midx_rev_filename(struct strbuf *out, struct multi_pack_index *m)
+void get_midx_filename_ext(struct strbuf *out, const char *object_dir,
+			   const unsigned char *hash, const char *ext)
 {
-	get_midx_filename(out, m->object_dir);
-	strbuf_addf(out, "-%s.rev", hash_to_hex(get_midx_checksum(m)));
+	strbuf_addf(out, "%s/pack/multi-pack-index", object_dir);
+	if (ext)
+		strbuf_addf(out, "-%s.%s", hash_to_hex(hash), ext);
 }
 
 static int midx_read_oid_fanout(const unsigned char *chunk_start,
@@ -302,7 +306,8 @@ struct object_id *nth_midxed_object_oid(struct object_id *oid,
 	if (n >= m->num_objects)
 		return NULL;
 
-	oidread(oid, m->chunk_oid_lookup + st_mult(m->hash_len, n));
+	oidread(oid, m->chunk_oid_lookup + st_mult(m->hash_len, n),
+		the_repository->hash_algo);
 	return oid;
 }
 

@@ -1,3 +1,5 @@
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "git-compat-util.h"
 #include "object.h"
 #include "commit.h"
@@ -313,7 +315,7 @@ struct island_load_data {
 	size_t nr;
 	size_t alloc;
 };
-static const char *core_island_name;
+static char *core_island_name;
 
 static void free_config_regexes(struct island_load_data *ild)
 {
@@ -488,7 +490,8 @@ void load_delta_islands(struct repository *r, int progress)
 
 	git_config(island_config_callback, &ild);
 	ild.remote_islands = kh_init_str();
-	for_each_ref(find_island_for_ref, &ild);
+	refs_for_each_ref(get_main_ref_store(the_repository),
+			  find_island_for_ref, &ild);
 	free_config_regexes(&ild);
 	deduplicate_islands(ild.remote_islands, r);
 	free_remote_islands(ild.remote_islands);

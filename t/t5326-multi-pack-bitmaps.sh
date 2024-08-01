@@ -434,6 +434,27 @@ test_expect_success 'tagged commits are selected for bitmapping' '
 	)
 '
 
+test_expect_success 'do not follow replace objects for MIDX bitmap' '
+	rm -fr repo &&
+	git init repo &&
+	test_when_finished "rm -fr repo" &&
+	(
+		cd repo &&
+
+		test_commit A &&
+		test_commit B &&
+		git checkout --orphan=orphan A &&
+		test_commit orphan &&
+
+		git replace A HEAD &&
+		git repack -ad --write-midx --write-bitmap-index &&
+
+		# generating reachability bitmaps with replace refs
+		# enabled will result in broken clones
+		git clone --no-local --bare . clone.git
+	)
+'
+
 corrupt_file () {
 	chmod a+w "$1" &&
 	printf "bogus" | dd of="$1" bs=1 seek="12" conv=notrunc
@@ -529,5 +550,35 @@ do
 		)
 	'
 done
+
+test_expect_success 'remove one packfile between MIDX bitmap writes' '
+	git init remove-pack-between-writes &&
+	(
+		cd remove-pack-between-writes &&
+
+		test_commit A &&
+		test_commit B &&
+		test_commit C &&
+
+		# Create packs with the prefix "pack-A", "pack-B",
+		# "pack-C" to impose a lexicographic order on these
+		# packs so the pack being removed is always from the
+		# middle.
+		packdir=.git/objects/pack &&
+		A="$(echo A | git pack-objects $packdir/pack-A --revs)" &&
+		B="$(echo B | git pack-objects $packdir/pack-B --revs)" &&
+		C="$(echo C | git pack-objects $packdir/pack-C --revs)" &&
+
+		git multi-pack-index write --bitmap &&
+
+		cat >in <<-EOF &&
+		pack-A-$A.idx
+		pack-C-$C.idx
+		EOF
+		git multi-pack-index write --bitmap --stdin-packs <in &&
+
+		git rev-list --test-bitmap HEAD
+	)
+'
 
 test_done

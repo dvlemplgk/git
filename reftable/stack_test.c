@@ -83,7 +83,7 @@ static void test_read_file(void)
 	char out[1024] = "line1\n\nline2\nline3";
 	int n, err;
 	char **names = NULL;
-	char *want[] = { "line1", "line2", "line3" };
+	const char *want[] = { "line1", "line2", "line3" };
 	int i = 0;
 
 	EXPECT(fd > 0);
@@ -100,29 +100,6 @@ static void test_read_file(void)
 	}
 	free_names(names);
 	(void) remove(fn);
-}
-
-static void test_parse_names(void)
-{
-	char buf[] = "line\n";
-	char **names = NULL;
-	parse_names(buf, strlen(buf), &names);
-
-	EXPECT(NULL != names[0]);
-	EXPECT(0 == strcmp(names[0], "line"));
-	EXPECT(NULL == names[1]);
-	free_names(names);
-}
-
-static void test_names_equal(void)
-{
-	char *a[] = { "a", "b", "c", NULL };
-	char *b[] = { "a", "b", "d", NULL };
-	char *c[] = { "a", "b", NULL };
-
-	EXPECT(names_equal(a, a));
-	EXPECT(!names_equal(a, b));
-	EXPECT(!names_equal(a, c));
 }
 
 static int write_test_ref(struct reftable_writer *wr, void *arg)
@@ -150,20 +127,20 @@ static void test_reftable_stack_add_one(void)
 	char *dir = get_tmp_dir(__LINE__);
 	struct strbuf scratch = STRBUF_INIT;
 	int mask = umask(002);
-	struct reftable_write_options cfg = {
+	struct reftable_write_options opts = {
 		.default_permissions = 0660,
 	};
 	struct reftable_stack *st = NULL;
 	int err;
 	struct reftable_ref_record ref = {
-		.refname = "HEAD",
+		.refname = (char *) "HEAD",
 		.update_index = 1,
 		.value_type = REFTABLE_REF_SYMREF,
-		.value.symref = "master",
+		.value.symref = (char *) "master",
 	};
 	struct reftable_ref_record dest = { NULL };
 	struct stat stat_result = { 0 };
-	err = reftable_new_stack(&st, dir, cfg);
+	err = reftable_new_stack(&st, dir, &opts);
 	EXPECT_ERR(err);
 
 	err = reftable_stack_add(st, &write_test_ref, &ref);
@@ -186,7 +163,7 @@ static void test_reftable_stack_add_one(void)
 	strbuf_addstr(&scratch, "/tables.list");
 	err = stat(scratch.buf, &stat_result);
 	EXPECT(!err);
-	EXPECT((stat_result.st_mode & 0777) == cfg.default_permissions);
+	EXPECT((stat_result.st_mode & 0777) == opts.default_permissions);
 
 	strbuf_reset(&scratch);
 	strbuf_addstr(&scratch, dir);
@@ -195,7 +172,7 @@ static void test_reftable_stack_add_one(void)
 	strbuf_addstr(&scratch, st->readers[0]->name);
 	err = stat(scratch.buf, &stat_result);
 	EXPECT(!err);
-	EXPECT((stat_result.st_mode & 0777) == cfg.default_permissions);
+	EXPECT((stat_result.st_mode & 0777) == opts.default_permissions);
 #else
 	(void) stat_result;
 #endif
@@ -209,33 +186,33 @@ static void test_reftable_stack_add_one(void)
 
 static void test_reftable_stack_uptodate(void)
 {
-	struct reftable_write_options cfg = { 0 };
+	struct reftable_write_options opts = { 0 };
 	struct reftable_stack *st1 = NULL;
 	struct reftable_stack *st2 = NULL;
 	char *dir = get_tmp_dir(__LINE__);
 
 	int err;
 	struct reftable_ref_record ref1 = {
-		.refname = "HEAD",
+		.refname = (char *) "HEAD",
 		.update_index = 1,
 		.value_type = REFTABLE_REF_SYMREF,
-		.value.symref = "master",
+		.value.symref = (char *) "master",
 	};
 	struct reftable_ref_record ref2 = {
-		.refname = "branch2",
+		.refname = (char *) "branch2",
 		.update_index = 2,
 		.value_type = REFTABLE_REF_SYMREF,
-		.value.symref = "master",
+		.value.symref = (char *) "master",
 	};
 
 
 	/* simulate multi-process access to the same stack
 	   by creating two stacks for the same directory.
 	 */
-	err = reftable_new_stack(&st1, dir, cfg);
+	err = reftable_new_stack(&st1, dir, &opts);
 	EXPECT_ERR(err);
 
-	err = reftable_new_stack(&st2, dir, cfg);
+	err = reftable_new_stack(&st2, dir, &opts);
 	EXPECT_ERR(err);
 
 	err = reftable_stack_add(st1, &write_test_ref, &ref1);
@@ -257,22 +234,20 @@ static void test_reftable_stack_uptodate(void)
 static void test_reftable_stack_transaction_api(void)
 {
 	char *dir = get_tmp_dir(__LINE__);
-
-	struct reftable_write_options cfg = { 0 };
+	struct reftable_write_options opts = { 0 };
 	struct reftable_stack *st = NULL;
 	int err;
 	struct reftable_addition *add = NULL;
 
 	struct reftable_ref_record ref = {
-		.refname = "HEAD",
+		.refname = (char *) "HEAD",
 		.update_index = 1,
 		.value_type = REFTABLE_REF_SYMREF,
-		.value.symref = "master",
+		.value.symref = (char *) "master",
 	};
 	struct reftable_ref_record dest = { NULL };
 
-
-	err = reftable_new_stack(&st, dir, cfg);
+	err = reftable_new_stack(&st, dir, &opts);
 	EXPECT_ERR(err);
 
 	reftable_addition_destroy(add);
@@ -301,19 +276,19 @@ static void test_reftable_stack_transaction_api(void)
 static void test_reftable_stack_transaction_api_performs_auto_compaction(void)
 {
 	char *dir = get_tmp_dir(__LINE__);
-	struct reftable_write_options cfg = {0};
+	struct reftable_write_options opts = {0};
 	struct reftable_addition *add = NULL;
 	struct reftable_stack *st = NULL;
 	int i, n = 20, err;
 
-	err = reftable_new_stack(&st, dir, cfg);
+	err = reftable_new_stack(&st, dir, &opts);
 	EXPECT_ERR(err);
 
 	for (i = 0; i <= n; i++) {
 		struct reftable_ref_record ref = {
 			.update_index = reftable_stack_next_update_index(st),
 			.value_type = REFTABLE_REF_SYMREF,
-			.value.symref = "master",
+			.value.symref = (char *) "master",
 		};
 		char name[100];
 
@@ -325,7 +300,7 @@ static void test_reftable_stack_transaction_api_performs_auto_compaction(void)
 		 * we can ensure that we indeed honor this setting and have
 		 * better control over when exactly auto compaction runs.
 		 */
-		st->config.disable_auto_compact = i != n;
+		st->opts.disable_auto_compact = i != n;
 
 		err = reftable_stack_new_addition(&add, st);
 		EXPECT_ERR(err);
@@ -356,18 +331,18 @@ static void test_reftable_stack_transaction_api_performs_auto_compaction(void)
 static void test_reftable_stack_auto_compaction_fails_gracefully(void)
 {
 	struct reftable_ref_record ref = {
-		.refname = "refs/heads/master",
+		.refname = (char *) "refs/heads/master",
 		.update_index = 1,
 		.value_type = REFTABLE_REF_VAL1,
 		.value.val1 = {0x01},
 	};
-	struct reftable_write_options cfg = {0};
+	struct reftable_write_options opts = {0};
 	struct reftable_stack *st;
 	struct strbuf table_path = STRBUF_INIT;
 	char *dir = get_tmp_dir(__LINE__);
 	int err;
 
-	err = reftable_new_stack(&st, dir, cfg);
+	err = reftable_new_stack(&st, dir, &opts);
 	EXPECT_ERR(err);
 
 	err = reftable_stack_add(st, write_test_ref, &ref);
@@ -396,44 +371,6 @@ static void test_reftable_stack_auto_compaction_fails_gracefully(void)
 	clear_dir(dir);
 }
 
-static void test_reftable_stack_validate_refname(void)
-{
-	struct reftable_write_options cfg = { 0 };
-	struct reftable_stack *st = NULL;
-	int err;
-	char *dir = get_tmp_dir(__LINE__);
-
-	int i;
-	struct reftable_ref_record ref = {
-		.refname = "a/b",
-		.update_index = 1,
-		.value_type = REFTABLE_REF_SYMREF,
-		.value.symref = "master",
-	};
-	char *additions[] = { "a", "a/b/c" };
-
-	err = reftable_new_stack(&st, dir, cfg);
-	EXPECT_ERR(err);
-
-	err = reftable_stack_add(st, &write_test_ref, &ref);
-	EXPECT_ERR(err);
-
-	for (i = 0; i < ARRAY_SIZE(additions); i++) {
-		struct reftable_ref_record ref = {
-			.refname = additions[i],
-			.update_index = 1,
-			.value_type = REFTABLE_REF_SYMREF,
-			.value.symref = "master",
-		};
-
-		err = reftable_stack_add(st, &write_test_ref, &ref);
-		EXPECT(err == REFTABLE_NAME_CONFLICT);
-	}
-
-	reftable_stack_destroy(st);
-	clear_dir(dir);
-}
-
 static int write_error(struct reftable_writer *wr, void *arg)
 {
 	return *((int *)arg);
@@ -442,24 +379,23 @@ static int write_error(struct reftable_writer *wr, void *arg)
 static void test_reftable_stack_update_index_check(void)
 {
 	char *dir = get_tmp_dir(__LINE__);
-
-	struct reftable_write_options cfg = { 0 };
+	struct reftable_write_options opts = { 0 };
 	struct reftable_stack *st = NULL;
 	int err;
 	struct reftable_ref_record ref1 = {
-		.refname = "name1",
+		.refname = (char *) "name1",
 		.update_index = 1,
 		.value_type = REFTABLE_REF_SYMREF,
-		.value.symref = "master",
+		.value.symref = (char *) "master",
 	};
 	struct reftable_ref_record ref2 = {
-		.refname = "name2",
+		.refname = (char *) "name2",
 		.update_index = 1,
 		.value_type = REFTABLE_REF_SYMREF,
-		.value.symref = "master",
+		.value.symref = (char *) "master",
 	};
 
-	err = reftable_new_stack(&st, dir, cfg);
+	err = reftable_new_stack(&st, dir, &opts);
 	EXPECT_ERR(err);
 
 	err = reftable_stack_add(st, &write_test_ref, &ref1);
@@ -474,12 +410,11 @@ static void test_reftable_stack_update_index_check(void)
 static void test_reftable_stack_lock_failure(void)
 {
 	char *dir = get_tmp_dir(__LINE__);
-
-	struct reftable_write_options cfg = { 0 };
+	struct reftable_write_options opts = { 0 };
 	struct reftable_stack *st = NULL;
 	int err, i;
 
-	err = reftable_new_stack(&st, dir, cfg);
+	err = reftable_new_stack(&st, dir, &opts);
 	EXPECT_ERR(err);
 	for (i = -1; i != REFTABLE_EMPTY_TABLE_ERROR; i--) {
 		err = reftable_stack_add(st, &write_error, &i);
@@ -494,7 +429,7 @@ static void test_reftable_stack_add(void)
 {
 	int i = 0;
 	int err = 0;
-	struct reftable_write_options cfg = {
+	struct reftable_write_options opts = {
 		.exact_log_message = 1,
 		.default_permissions = 0660,
 		.disable_auto_compact = 1,
@@ -507,7 +442,7 @@ static void test_reftable_stack_add(void)
 	struct stat stat_result;
 	int N = ARRAY_SIZE(refs);
 
-	err = reftable_new_stack(&st, dir, cfg);
+	err = reftable_new_stack(&st, dir, &opts);
 	EXPECT_ERR(err);
 
 	for (i = 0; i < N; i++) {
@@ -566,7 +501,7 @@ static void test_reftable_stack_add(void)
 	strbuf_addstr(&path, "/tables.list");
 	err = stat(path.buf, &stat_result);
 	EXPECT(!err);
-	EXPECT((stat_result.st_mode & 0777) == cfg.default_permissions);
+	EXPECT((stat_result.st_mode & 0777) == opts.default_permissions);
 
 	strbuf_reset(&path);
 	strbuf_addstr(&path, dir);
@@ -575,7 +510,7 @@ static void test_reftable_stack_add(void)
 	strbuf_addstr(&path, st->readers[0]->name);
 	err = stat(path.buf, &stat_result);
 	EXPECT(!err);
-	EXPECT((stat_result.st_mode & 0777) == cfg.default_permissions);
+	EXPECT((stat_result.st_mode & 0777) == opts.default_permissions);
 #else
 	(void) stat_result;
 #endif
@@ -593,13 +528,13 @@ static void test_reftable_stack_add(void)
 static void test_reftable_stack_log_normalize(void)
 {
 	int err = 0;
-	struct reftable_write_options cfg = {
+	struct reftable_write_options opts = {
 		0,
 	};
 	struct reftable_stack *st = NULL;
 	char *dir = get_tmp_dir(__LINE__);
 	struct reftable_log_record input = {
-		.refname = "branch",
+		.refname = (char *) "branch",
 		.update_index = 1,
 		.value_type = REFTABLE_LOG_UPDATE,
 		.value = {
@@ -617,14 +552,14 @@ static void test_reftable_stack_log_normalize(void)
 		.update_index = 1,
 	};
 
-	err = reftable_new_stack(&st, dir, cfg);
+	err = reftable_new_stack(&st, dir, &opts);
 	EXPECT_ERR(err);
 
-	input.value.update.message = "one\ntwo";
+	input.value.update.message = (char *) "one\ntwo";
 	err = reftable_stack_add(st, &write_test_log, &arg);
 	EXPECT(err == REFTABLE_API_ERROR);
 
-	input.value.update.message = "one";
+	input.value.update.message = (char *) "one";
 	err = reftable_stack_add(st, &write_test_log, &arg);
 	EXPECT_ERR(err);
 
@@ -632,7 +567,7 @@ static void test_reftable_stack_log_normalize(void)
 	EXPECT_ERR(err);
 	EXPECT(0 == strcmp(dest.value.update.message, "one\n"));
 
-	input.value.update.message = "two\n";
+	input.value.update.message = (char *) "two\n";
 	arg.update_index = 2;
 	err = reftable_stack_add(st, &write_test_log, &arg);
 	EXPECT_ERR(err);
@@ -650,8 +585,7 @@ static void test_reftable_stack_tombstone(void)
 {
 	int i = 0;
 	char *dir = get_tmp_dir(__LINE__);
-
-	struct reftable_write_options cfg = { 0 };
+	struct reftable_write_options opts = { 0 };
 	struct reftable_stack *st = NULL;
 	int err;
 	struct reftable_ref_record refs[2] = { { NULL } };
@@ -660,8 +594,7 @@ static void test_reftable_stack_tombstone(void)
 	struct reftable_ref_record dest = { NULL };
 	struct reftable_log_record log_dest = { NULL };
 
-
-	err = reftable_new_stack(&st, dir, cfg);
+	err = reftable_new_stack(&st, dir, &opts);
 	EXPECT_ERR(err);
 
 	/* even entries add the refs, odd entries delete them. */
@@ -729,35 +662,34 @@ static void test_reftable_stack_tombstone(void)
 static void test_reftable_stack_hash_id(void)
 {
 	char *dir = get_tmp_dir(__LINE__);
-
-	struct reftable_write_options cfg = { 0 };
+	struct reftable_write_options opts = { 0 };
 	struct reftable_stack *st = NULL;
 	int err;
 
 	struct reftable_ref_record ref = {
-		.refname = "master",
+		.refname = (char *) "master",
 		.value_type = REFTABLE_REF_SYMREF,
-		.value.symref = "target",
+		.value.symref = (char *) "target",
 		.update_index = 1,
 	};
-	struct reftable_write_options cfg32 = { .hash_id = GIT_SHA256_FORMAT_ID };
+	struct reftable_write_options opts32 = { .hash_id = GIT_SHA256_FORMAT_ID };
 	struct reftable_stack *st32 = NULL;
-	struct reftable_write_options cfg_default = { 0 };
+	struct reftable_write_options opts_default = { 0 };
 	struct reftable_stack *st_default = NULL;
 	struct reftable_ref_record dest = { NULL };
 
-	err = reftable_new_stack(&st, dir, cfg);
+	err = reftable_new_stack(&st, dir, &opts);
 	EXPECT_ERR(err);
 
 	err = reftable_stack_add(st, &write_test_ref, &ref);
 	EXPECT_ERR(err);
 
 	/* can't read it with the wrong hash ID. */
-	err = reftable_new_stack(&st32, dir, cfg32);
+	err = reftable_new_stack(&st32, dir, &opts32);
 	EXPECT(err == REFTABLE_FORMAT_ERROR);
 
-	/* check that we can read it back with default config too. */
-	err = reftable_new_stack(&st_default, dir, cfg_default);
+	/* check that we can read it back with default opts too. */
+	err = reftable_new_stack(&st_default, dir, &opts_default);
 	EXPECT_ERR(err);
 
 	err = reftable_stack_read_ref(st_default, "master", &dest);
@@ -774,7 +706,7 @@ static void test_suggest_compaction_segment(void)
 {
 	uint64_t sizes[] = { 512, 64, 17, 16, 9, 9, 9, 16, 2, 16 };
 	struct segment min =
-		suggest_compaction_segment(sizes, ARRAY_SIZE(sizes));
+		suggest_compaction_segment(sizes, ARRAY_SIZE(sizes), 2);
 	EXPECT(min.start == 1);
 	EXPECT(min.end == 10);
 }
@@ -783,15 +715,14 @@ static void test_suggest_compaction_segment_nothing(void)
 {
 	uint64_t sizes[] = { 64, 32, 16, 8, 4, 2 };
 	struct segment result =
-		suggest_compaction_segment(sizes, ARRAY_SIZE(sizes));
+		suggest_compaction_segment(sizes, ARRAY_SIZE(sizes), 2);
 	EXPECT(result.start == result.end);
 }
 
 static void test_reflog_expire(void)
 {
 	char *dir = get_tmp_dir(__LINE__);
-
-	struct reftable_write_options cfg = { 0 };
+	struct reftable_write_options opts = { 0 };
 	struct reftable_stack *st = NULL;
 	struct reftable_log_record logs[20] = { { NULL } };
 	int N = ARRAY_SIZE(logs) - 1;
@@ -802,8 +733,7 @@ static void test_reflog_expire(void)
 	};
 	struct reftable_log_record log = { NULL };
 
-
-	err = reftable_new_stack(&st, dir, cfg);
+	err = reftable_new_stack(&st, dir, &opts);
 	EXPECT_ERR(err);
 
 	for (i = 1; i <= N; i++) {
@@ -866,21 +796,19 @@ static int write_nothing(struct reftable_writer *wr, void *arg)
 
 static void test_empty_add(void)
 {
-	struct reftable_write_options cfg = { 0 };
+	struct reftable_write_options opts = { 0 };
 	struct reftable_stack *st = NULL;
 	int err;
 	char *dir = get_tmp_dir(__LINE__);
-
 	struct reftable_stack *st2 = NULL;
 
-
-	err = reftable_new_stack(&st, dir, cfg);
+	err = reftable_new_stack(&st, dir, &opts);
 	EXPECT_ERR(err);
 
 	err = reftable_stack_add(st, &write_nothing, NULL);
 	EXPECT_ERR(err);
 
-	err = reftable_new_stack(&st2, dir, cfg);
+	err = reftable_new_stack(&st2, dir, &opts);
 	EXPECT_ERR(err);
 	clear_dir(dir);
 	reftable_stack_destroy(st);
@@ -899,16 +827,15 @@ static int fastlog2(uint64_t sz)
 
 static void test_reftable_stack_auto_compaction(void)
 {
-	struct reftable_write_options cfg = {
+	struct reftable_write_options opts = {
 		.disable_auto_compact = 1,
 	};
 	struct reftable_stack *st = NULL;
 	char *dir = get_tmp_dir(__LINE__);
-
 	int err, i;
 	int N = 100;
 
-	err = reftable_new_stack(&st, dir, cfg);
+	err = reftable_new_stack(&st, dir, &opts);
 	EXPECT_ERR(err);
 
 	for (i = 0; i < N; i++) {
@@ -917,7 +844,7 @@ static void test_reftable_stack_auto_compaction(void)
 			.refname = name,
 			.update_index = reftable_stack_next_update_index(st),
 			.value_type = REFTABLE_REF_SYMREF,
-			.value.symref = "master",
+			.value.symref = (char *) "master",
 		};
 		snprintf(name, sizeof(name), "branch%04d", i);
 
@@ -938,20 +865,20 @@ static void test_reftable_stack_auto_compaction(void)
 
 static void test_reftable_stack_add_performs_auto_compaction(void)
 {
-	struct reftable_write_options cfg = { 0 };
+	struct reftable_write_options opts = { 0 };
 	struct reftable_stack *st = NULL;
 	struct strbuf refname = STRBUF_INIT;
 	char *dir = get_tmp_dir(__LINE__);
 	int err, i, n = 20;
 
-	err = reftable_new_stack(&st, dir, cfg);
+	err = reftable_new_stack(&st, dir, &opts);
 	EXPECT_ERR(err);
 
 	for (i = 0; i <= n; i++) {
 		struct reftable_ref_record ref = {
 			.update_index = reftable_stack_next_update_index(st),
 			.value_type = REFTABLE_REF_SYMREF,
-			.value.symref = "master",
+			.value.symref = (char *) "master",
 		};
 
 		/*
@@ -959,7 +886,7 @@ static void test_reftable_stack_add_performs_auto_compaction(void)
 		 * we can ensure that we indeed honor this setting and have
 		 * better control over when exactly auto compaction runs.
 		 */
-		st->config.disable_auto_compact = i != n;
+		st->opts.disable_auto_compact = i != n;
 
 		strbuf_reset(&refname);
 		strbuf_addf(&refname, "branch-%04d", i);
@@ -986,14 +913,13 @@ static void test_reftable_stack_add_performs_auto_compaction(void)
 
 static void test_reftable_stack_compaction_concurrent(void)
 {
-	struct reftable_write_options cfg = { 0 };
+	struct reftable_write_options opts = { 0 };
 	struct reftable_stack *st1 = NULL, *st2 = NULL;
 	char *dir = get_tmp_dir(__LINE__);
-
 	int err, i;
 	int N = 3;
 
-	err = reftable_new_stack(&st1, dir, cfg);
+	err = reftable_new_stack(&st1, dir, &opts);
 	EXPECT_ERR(err);
 
 	for (i = 0; i < N; i++) {
@@ -1002,7 +928,7 @@ static void test_reftable_stack_compaction_concurrent(void)
 			.refname = name,
 			.update_index = reftable_stack_next_update_index(st1),
 			.value_type = REFTABLE_REF_SYMREF,
-			.value.symref = "master",
+			.value.symref = (char *) "master",
 		};
 		snprintf(name, sizeof(name), "branch%04d", i);
 
@@ -1010,7 +936,7 @@ static void test_reftable_stack_compaction_concurrent(void)
 		EXPECT_ERR(err);
 	}
 
-	err = reftable_new_stack(&st2, dir, cfg);
+	err = reftable_new_stack(&st2, dir, &opts);
 	EXPECT_ERR(err);
 
 	err = reftable_stack_compact_all(st1, NULL);
@@ -1036,14 +962,13 @@ static void unclean_stack_close(struct reftable_stack *st)
 
 static void test_reftable_stack_compaction_concurrent_clean(void)
 {
-	struct reftable_write_options cfg = { 0 };
+	struct reftable_write_options opts = { 0 };
 	struct reftable_stack *st1 = NULL, *st2 = NULL, *st3 = NULL;
 	char *dir = get_tmp_dir(__LINE__);
-
 	int err, i;
 	int N = 3;
 
-	err = reftable_new_stack(&st1, dir, cfg);
+	err = reftable_new_stack(&st1, dir, &opts);
 	EXPECT_ERR(err);
 
 	for (i = 0; i < N; i++) {
@@ -1052,7 +977,7 @@ static void test_reftable_stack_compaction_concurrent_clean(void)
 			.refname = name,
 			.update_index = reftable_stack_next_update_index(st1),
 			.value_type = REFTABLE_REF_SYMREF,
-			.value.symref = "master",
+			.value.symref = (char *) "master",
 		};
 		snprintf(name, sizeof(name), "branch%04d", i);
 
@@ -1060,7 +985,7 @@ static void test_reftable_stack_compaction_concurrent_clean(void)
 		EXPECT_ERR(err);
 	}
 
-	err = reftable_new_stack(&st2, dir, cfg);
+	err = reftable_new_stack(&st2, dir, &opts);
 	EXPECT_ERR(err);
 
 	err = reftable_stack_compact_all(st1, NULL);
@@ -1069,7 +994,7 @@ static void test_reftable_stack_compaction_concurrent_clean(void)
 	unclean_stack_close(st1);
 	unclean_stack_close(st2);
 
-	err = reftable_new_stack(&st3, dir, cfg);
+	err = reftable_new_stack(&st3, dir, &opts);
 	EXPECT_ERR(err);
 
 	err = reftable_stack_clean(st3);
@@ -1086,8 +1011,6 @@ static void test_reftable_stack_compaction_concurrent_clean(void)
 int stack_test_main(int argc, const char *argv[])
 {
 	RUN_TEST(test_empty_add);
-	RUN_TEST(test_names_equal);
-	RUN_TEST(test_parse_names);
 	RUN_TEST(test_read_file);
 	RUN_TEST(test_reflog_expire);
 	RUN_TEST(test_reftable_stack_add);
@@ -1105,7 +1028,6 @@ int stack_test_main(int argc, const char *argv[])
 	RUN_TEST(test_reftable_stack_auto_compaction_fails_gracefully);
 	RUN_TEST(test_reftable_stack_update_index_check);
 	RUN_TEST(test_reftable_stack_uptodate);
-	RUN_TEST(test_reftable_stack_validate_refname);
 	RUN_TEST(test_suggest_compaction_segment);
 	RUN_TEST(test_suggest_compaction_segment_nothing);
 	return 0;

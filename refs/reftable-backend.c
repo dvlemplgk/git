@@ -1,6 +1,10 @@
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "../git-compat-util.h"
 #include "../abspath.h"
 #include "../chdir-notify.h"
+#include "../config.h"
+#include "../dir.h"
 #include "../environment.h"
 #include "../gettext.h"
 #include "../hash.h"
@@ -15,7 +19,6 @@
 #include "../reftable/reftable-record.h"
 #include "../reftable/reftable-error.h"
 #include "../reftable/reftable-iterator.h"
-#include "../reftable/reftable-merged.h"
 #include "../setup.h"
 #include "../strmap.h"
 #include "parse.h"
@@ -129,7 +132,7 @@ static struct reftable_stack *stack_for(struct reftable_ref_store *store,
 				    store->base.repo->commondir, wtname_buf.buf);
 
 			store->err = reftable_new_stack(&stack, wt_dir.buf,
-							store->write_options);
+							&store->write_options);
 			assert(store->err != REFTABLE_API_ERROR);
 			strmap_put(&store->worktree_stacks, wtname_buf.buf, stack);
 		}
@@ -172,32 +175,30 @@ static int should_write_log(struct ref_store *refs, const char *refname)
 	}
 }
 
-static void fill_reftable_log_record(struct reftable_log_record *log)
+static void fill_reftable_log_record(struct reftable_log_record *log, const struct ident_split *split)
 {
-	const char *info = git_committer_info(0);
-	struct ident_split split = {0};
+	const char *tz_begin;
 	int sign = 1;
-
-	if (split_ident_line(&split, info, strlen(info)))
-		BUG("failed splitting committer info");
 
 	reftable_log_record_release(log);
 	log->value_type = REFTABLE_LOG_UPDATE;
 	log->value.update.name =
-		xstrndup(split.name_begin, split.name_end - split.name_begin);
+		xstrndup(split->name_begin, split->name_end - split->name_begin);
 	log->value.update.email =
-		xstrndup(split.mail_begin, split.mail_end - split.mail_begin);
-	log->value.update.time = atol(split.date_begin);
-	if (*split.tz_begin == '-') {
+		xstrndup(split->mail_begin, split->mail_end - split->mail_begin);
+	log->value.update.time = atol(split->date_begin);
+
+	tz_begin = split->tz_begin;
+	if (*tz_begin == '-') {
 		sign = -1;
-		split.tz_begin++;
+		tz_begin++;
 	}
-	if (*split.tz_begin == '+') {
+	if (*tz_begin == '+') {
 		sign = 1;
-		split.tz_begin++;
+		tz_begin++;
 	}
 
-	log->value.update.tz_offset = sign * atoi(split.tz_begin);
+	log->value.update.tz_offset = sign * atoi(tz_begin);
 }
 
 static int read_ref_without_reload(struct reftable_stack *stack,
@@ -218,7 +219,8 @@ static int read_ref_without_reload(struct reftable_stack *stack,
 		strbuf_addstr(referent, ref.value.symref);
 		*type |= REF_ISSYMREF;
 	} else if (reftable_ref_record_val1(&ref)) {
-		oidread(oid, reftable_ref_record_val1(&ref));
+		oidread(oid, reftable_ref_record_val1(&ref),
+			the_repository->hash_algo);
 	} else {
 		/* We got a tombstone, which should not happen. */
 		BUG("unhandled reference value type %d", ref.value_type);
@@ -228,6 +230,34 @@ done:
 	assert(ret != REFTABLE_API_ERROR);
 	reftable_ref_record_release(&ref);
 	return ret;
+}
+
+static int reftable_be_config(const char *var, const char *value,
+			      const struct config_context *ctx,
+			      void *_opts)
+{
+	struct reftable_write_options *opts = _opts;
+
+	if (!strcmp(var, "reftable.blocksize")) {
+		unsigned long block_size = git_config_ulong(var, value, ctx->kvi);
+		if (block_size > 16777215)
+			die("reftable block size cannot exceed 16MB");
+		opts->block_size = block_size;
+	} else if (!strcmp(var, "reftable.restartinterval")) {
+		unsigned long restart_interval = git_config_ulong(var, value, ctx->kvi);
+		if (restart_interval > UINT16_MAX)
+			die("reftable block size cannot exceed %u", (unsigned)UINT16_MAX);
+		opts->restart_interval = restart_interval;
+	} else if (!strcmp(var, "reftable.indexobjects")) {
+		opts->skip_index_objects = !git_config_bool(var, value);
+	} else if (!strcmp(var, "reftable.geometricfactor")) {
+		unsigned long factor = git_config_ulong(var, value, ctx->kvi);
+		if (factor > UINT8_MAX)
+			die("reftable geometric factor cannot exceed %u", (unsigned)UINT8_MAX);
+		opts->auto_compaction_factor = factor;
+	}
+
+	return 0;
 }
 
 static struct ref_store *reftable_be_init(struct repository *repo,
@@ -245,11 +275,23 @@ static struct ref_store *reftable_be_init(struct repository *repo,
 	base_ref_store_init(&refs->base, repo, gitdir, &refs_be_reftable);
 	strmap_init(&refs->worktree_stacks);
 	refs->store_flags = store_flags;
-	refs->write_options.block_size = 4096;
+
 	refs->write_options.hash_id = repo->hash_algo->format_id;
 	refs->write_options.default_permissions = calc_shared_perm(0666 & ~mask);
 	refs->write_options.disable_auto_compact =
 		!git_env_bool("GIT_TEST_REFTABLE_AUTOCOMPACTION", 1);
+
+	git_config(reftable_be_config, &refs->write_options);
+
+	/*
+	 * It is somewhat unfortunate that we have to mirror the default block
+	 * size of the reftable library here. But given that the write options
+	 * wouldn't be updated by the library here, and given that we require
+	 * the proper block size to trim reflog message so that they fit, we
+	 * must set up a proper value here.
+	 */
+	if (!refs->write_options.block_size)
+		refs->write_options.block_size = 4096;
 
 	/*
 	 * Set up the main reftable stack that is hosted in GIT_COMMON_DIR.
@@ -265,7 +307,7 @@ static struct ref_store *reftable_be_init(struct repository *repo,
 	}
 	strbuf_addstr(&path, "/reftable");
 	refs->err = reftable_new_stack(&refs->main_stack, path.buf,
-				       refs->write_options);
+				       &refs->write_options);
 	if (refs->err)
 		goto done;
 
@@ -282,7 +324,7 @@ static struct ref_store *reftable_be_init(struct repository *repo,
 		strbuf_addf(&path, "%s/reftable", gitdir);
 
 		refs->err = reftable_new_stack(&refs->worktree_stack, path.buf,
-					       refs->write_options);
+					       &refs->write_options);
 		if (refs->err)
 			goto done;
 	}
@@ -295,12 +337,33 @@ done:
 	return &refs->base;
 }
 
-static int reftable_be_init_db(struct ref_store *ref_store,
-			       int flags UNUSED,
-			       struct strbuf *err UNUSED)
+static void reftable_be_release(struct ref_store *ref_store)
+{
+	struct reftable_ref_store *refs = reftable_be_downcast(ref_store, 0, "release");
+	struct strmap_entry *entry;
+	struct hashmap_iter iter;
+
+	if (refs->main_stack) {
+		reftable_stack_destroy(refs->main_stack);
+		refs->main_stack = NULL;
+	}
+
+	if (refs->worktree_stack) {
+		reftable_stack_destroy(refs->worktree_stack);
+		refs->worktree_stack = NULL;
+	}
+
+	strmap_for_each_entry(&refs->worktree_stacks, &iter, entry)
+		reftable_stack_destroy(entry->value);
+	strmap_clear(&refs->worktree_stacks, 0);
+}
+
+static int reftable_be_create_on_disk(struct ref_store *ref_store,
+				      int flags UNUSED,
+				      struct strbuf *err UNUSED)
 {
 	struct reftable_ref_store *refs =
-		reftable_be_downcast(ref_store, REF_STORE_WRITE, "init_db");
+		reftable_be_downcast(ref_store, REF_STORE_WRITE, "create");
 	struct strbuf sb = STRBUF_INIT;
 
 	strbuf_addf(&sb, "%s/reftable", refs->base.gitdir);
@@ -322,6 +385,56 @@ static int reftable_be_init_db(struct ref_store *ref_store,
 
 	strbuf_release(&sb);
 	return 0;
+}
+
+static int reftable_be_remove_on_disk(struct ref_store *ref_store,
+				      struct strbuf *err)
+{
+	struct reftable_ref_store *refs =
+		reftable_be_downcast(ref_store, REF_STORE_WRITE, "remove");
+	struct strbuf sb = STRBUF_INIT;
+	int ret = 0;
+
+	/*
+	 * Release the ref store such that all stacks are closed. This is
+	 * required so that the "tables.list" file is not open anymore, which
+	 * would otherwise make it impossible to remove the file on Windows.
+	 */
+	reftable_be_release(ref_store);
+
+	strbuf_addf(&sb, "%s/reftable", refs->base.gitdir);
+	if (remove_dir_recursively(&sb, 0) < 0) {
+		strbuf_addf(err, "could not delete reftables: %s",
+			    strerror(errno));
+		ret = -1;
+	}
+	strbuf_reset(&sb);
+
+	strbuf_addf(&sb, "%s/HEAD", refs->base.gitdir);
+	if (unlink(sb.buf) < 0) {
+		strbuf_addf(err, "could not delete stub HEAD: %s",
+			    strerror(errno));
+		ret = -1;
+	}
+	strbuf_reset(&sb);
+
+	strbuf_addf(&sb, "%s/refs/heads", refs->base.gitdir);
+	if (unlink(sb.buf) < 0) {
+		strbuf_addf(err, "could not delete stub heads: %s",
+			    strerror(errno));
+		ret = -1;
+	}
+	strbuf_reset(&sb);
+
+	strbuf_addf(&sb, "%s/refs", refs->base.gitdir);
+	if (rmdir(sb.buf) < 0) {
+		strbuf_addf(err, "could not delete refs directory: %s",
+			    strerror(errno));
+		ret = -1;
+	}
+
+	strbuf_release(&sb);
+	return ret;
 }
 
 struct reftable_ref_iterator {
@@ -356,8 +469,7 @@ static int reftable_ref_iterator_advance(struct ref_iterator *ref_iterator)
 		 */
 		if (!starts_with(iter->ref.refname, "refs/") &&
 		    !(iter->flags & DO_FOR_EACH_INCLUDE_ROOT_REFS &&
-		     (is_pseudoref(&iter->refs->base, iter->ref.refname) ||
-		      is_headref(&iter->refs->base, iter->ref.refname)))) {
+		      is_root_ref(iter->ref.refname))) {
 			continue;
 		}
 
@@ -374,15 +486,17 @@ static int reftable_ref_iterator_advance(struct ref_iterator *ref_iterator)
 
 		switch (iter->ref.value_type) {
 		case REFTABLE_REF_VAL1:
-			oidread(&iter->oid, iter->ref.value.val1);
+			oidread(&iter->oid, iter->ref.value.val1,
+				the_repository->hash_algo);
 			break;
 		case REFTABLE_REF_VAL2:
-			oidread(&iter->oid, iter->ref.value.val2.value);
+			oidread(&iter->oid, iter->ref.value.val2.value,
+				the_repository->hash_algo);
 			break;
 		case REFTABLE_REF_SYMREF:
 			if (!refs_resolve_ref_unsafe(&iter->refs->base, iter->ref.refname,
 						     RESOLVE_REF_READING, &iter->oid, &flags))
-				oidclr(&iter->oid);
+				oidclr(&iter->oid, the_repository->hash_algo);
 			break;
 		default:
 			BUG("unhandled reference value type %d", iter->ref.value_type);
@@ -394,7 +508,7 @@ static int reftable_ref_iterator_advance(struct ref_iterator *ref_iterator)
 		if (check_refname_format(iter->ref.refname, REFNAME_ALLOW_ONELEVEL)) {
 			if (!refname_is_safe(iter->ref.refname))
 				die(_("refname is dangerous: %s"), iter->ref.refname);
-			oidclr(&iter->oid);
+			oidclr(&iter->oid, the_repository->hash_algo);
 			flags |= REF_BAD_NAME | REF_ISBROKEN;
 		}
 
@@ -436,7 +550,8 @@ static int reftable_ref_iterator_peel(struct ref_iterator *ref_iterator,
 		(struct reftable_ref_iterator *)ref_iterator;
 
 	if (iter->ref.value_type == REFTABLE_REF_VAL2) {
-		oidread(peeled, iter->ref.value.val2.target_value);
+		oidread(peeled, iter->ref.value.val2.target_value,
+			the_repository->hash_algo);
 		return 0;
 	}
 
@@ -464,7 +579,6 @@ static struct reftable_ref_iterator *ref_iterator_for_stack(struct reftable_ref_
 							    const char *prefix,
 							    int flags)
 {
-	struct reftable_merged_table *merged_table;
 	struct reftable_ref_iterator *iter;
 	int ret;
 
@@ -484,9 +598,8 @@ static struct reftable_ref_iterator *ref_iterator_for_stack(struct reftable_ref_
 	if (ret)
 		goto done;
 
-	merged_table = reftable_stack_merged_table(stack);
-
-	ret = reftable_merged_table_seek_ref(merged_table, &iter->iter, prefix);
+	reftable_stack_init_ref_iterator(stack, &iter->iter);
+	ret = reftable_iterator_seek_ref(&iter->iter, prefix);
 	if (ret)
 		goto done;
 
@@ -579,16 +692,6 @@ static int reftable_be_read_symbolic_ref(struct ref_store *ref_store,
 
 	reftable_ref_record_release(&ref);
 	return ret;
-}
-
-/*
- * Return the refname under which update was originally requested.
- */
-static const char *original_update_refname(struct ref_update *update)
-{
-	while (update->parent_update)
-		update = update->parent_update;
-	return update->refname;
 }
 
 struct reftable_transaction_update {
@@ -829,7 +932,7 @@ static int reftable_be_transaction_prepare(struct ref_store *ref_store,
 			new_update = ref_transaction_add_update(
 					transaction, "HEAD",
 					u->flags | REF_LOG_ONLY | REF_NO_DEREF,
-					&u->new_oid, &u->old_oid, u->msg);
+					&u->new_oid, &u->old_oid, NULL, NULL, u->msg);
 			string_list_insert(&affected_refnames, new_update->refname);
 		}
 
@@ -837,7 +940,7 @@ static int reftable_be_transaction_prepare(struct ref_store *ref_store,
 					      &current_oid, &referent, &u->type);
 		if (ret < 0)
 			goto done;
-		if (ret > 0 && (!(u->flags & REF_HAVE_OLD) || is_null_oid(&u->old_oid))) {
+		if (ret > 0 && !ref_update_expects_existing_old_ref(u)) {
 			/*
 			 * The reference does not exist, and we either have no
 			 * old object ID or expect the reference to not exist.
@@ -856,7 +959,7 @@ static int reftable_be_transaction_prepare(struct ref_store *ref_store,
 			 * There is no need to write the reference deletion
 			 * when the reference in question doesn't exist.
 			 */
-			 if (u->flags & REF_HAVE_NEW && !is_null_oid(&u->new_oid)) {
+			 if ((u->flags & REF_HAVE_NEW) && !ref_update_has_null_new_value(u)) {
 				 ret = queue_transaction_update(refs, tx_data, u,
 								&current_oid, err);
 				 if (ret)
@@ -869,7 +972,7 @@ static int reftable_be_transaction_prepare(struct ref_store *ref_store,
 			/* The reference does not exist, but we expected it to. */
 			strbuf_addf(err, _("cannot lock ref '%s': "
 				    "unable to resolve reference '%s'"),
-				    original_update_refname(u), u->refname);
+				    ref_update_original_update_refname(u), u->refname);
 			ret = -1;
 			goto done;
 		}
@@ -907,8 +1010,11 @@ static int reftable_be_transaction_prepare(struct ref_store *ref_store,
 				 * intertwined with the locking in files-backend.c.
 				 */
 				new_update = ref_transaction_add_update(
-						transaction, referent.buf, new_flags,
-						&u->new_oid, &u->old_oid, u->msg);
+					transaction, referent.buf, new_flags,
+					u->new_target ? NULL : &u->new_oid,
+					u->old_target ? NULL : &u->old_oid,
+					u->new_target, u->old_target, u->msg);
+
 				new_update->parent_update = u;
 
 				/*
@@ -938,20 +1044,35 @@ static int reftable_be_transaction_prepare(struct ref_store *ref_store,
 		 * individual refs. But the error messages match what the files
 		 * backend returns, which keeps our tests happy.
 		 */
-		if (u->flags & REF_HAVE_OLD && !oideq(&current_oid, &u->old_oid)) {
+		if (u->old_target) {
+			if (!(u->type & REF_ISSYMREF)) {
+				strbuf_addf(err, _("cannot lock ref '%s': "
+					   "expected symref with target '%s': "
+					   "but is a regular ref"),
+					    ref_update_original_update_refname(u),
+					    u->old_target);
+				ret = -1;
+				goto done;
+			}
+
+			if (ref_update_check_old_target(referent.buf, u, err)) {
+				ret = -1;
+				goto done;
+			}
+		} else if ((u->flags & REF_HAVE_OLD) && !oideq(&current_oid, &u->old_oid)) {
 			if (is_null_oid(&u->old_oid))
 				strbuf_addf(err, _("cannot lock ref '%s': "
-					    "reference already exists"),
-					    original_update_refname(u));
+						   "reference already exists"),
+					    ref_update_original_update_refname(u));
 			else if (is_null_oid(&current_oid))
 				strbuf_addf(err, _("cannot lock ref '%s': "
-					    "reference is missing but expected %s"),
-					    original_update_refname(u),
+						   "reference is missing but expected %s"),
+					    ref_update_original_update_refname(u),
 					    oid_to_hex(&u->old_oid));
 			else
 				strbuf_addf(err, _("cannot lock ref '%s': "
-					    "is at %s but expected %s"),
-					    original_update_refname(u),
+						   "is at %s but expected %s"),
+					    ref_update_original_update_refname(u),
 					    oid_to_hex(&current_oid),
 					    oid_to_hex(&u->old_oid));
 			ret = -1;
@@ -1017,12 +1138,16 @@ static int transaction_update_cmp(const void *a, const void *b)
 static int write_transaction_table(struct reftable_writer *writer, void *cb_data)
 {
 	struct write_transaction_table_arg *arg = cb_data;
-	struct reftable_merged_table *mt =
-		reftable_stack_merged_table(arg->stack);
 	uint64_t ts = reftable_stack_next_update_index(arg->stack);
 	struct reftable_log_record *logs = NULL;
+	struct ident_split committer_ident = {0};
 	size_t logs_nr = 0, logs_alloc = 0, i;
+	const char *committer_info;
 	int ret = 0;
+
+	committer_info = git_committer_info(0);
+	if (split_ident_line(&committer_ident, committer_info, strlen(committer_info)))
+		BUG("failed splitting committer info");
 
 	QSORT(arg->updates, arg->updates_nr, transaction_update_cmp);
 
@@ -1043,9 +1168,13 @@ static int write_transaction_table(struct reftable_writer *writer, void *cb_data
 		 * - `core.logAllRefUpdates` tells us to create the reflog for
 		 *   the given ref.
 		 */
-		if (u->flags & REF_HAVE_NEW && !(u->type & REF_ISSYMREF) && is_null_oid(&u->new_oid)) {
+		if ((u->flags & REF_HAVE_NEW) &&
+		    !(u->type & REF_ISSYMREF) &&
+		    ref_update_has_null_new_value(u)) {
 			struct reftable_log_record log = {0};
 			struct reftable_iterator it = {0};
+
+			reftable_stack_init_log_iterator(arg->stack, &it);
 
 			/*
 			 * When deleting refs we also delete all reflog entries
@@ -1056,7 +1185,7 @@ static int write_transaction_table(struct reftable_writer *writer, void *cb_data
 			 * Unfortunately, we have no better way than to delete
 			 * all reflog entries one by one.
 			 */
-			ret = reftable_merged_table_seek_log(mt, &it, u->refname);
+			ret = reftable_iterator_seek_log(&it, u->refname);
 			while (ret == 0) {
 				struct reftable_log_record *tombstone;
 
@@ -1080,28 +1209,57 @@ static int write_transaction_table(struct reftable_writer *writer, void *cb_data
 
 			if (ret)
 				goto done;
-		} else if (u->flags & REF_HAVE_NEW &&
+		} else if (!(u->flags & REF_SKIP_CREATE_REFLOG) &&
+			   (u->flags & REF_HAVE_NEW) &&
 			   (u->flags & REF_FORCE_CREATE_REFLOG ||
 			    should_write_log(&arg->refs->base, u->refname))) {
 			struct reftable_log_record *log;
+			int create_reflog = 1;
 
-			ALLOC_GROW(logs, logs_nr + 1, logs_alloc);
-			log = &logs[logs_nr++];
-			memset(log, 0, sizeof(*log));
+			if (u->new_target) {
+				if (!refs_resolve_ref_unsafe(&arg->refs->base, u->new_target,
+							     RESOLVE_REF_READING, &u->new_oid, NULL)) {
+					/*
+					 * TODO: currently we skip creating reflogs for dangling
+					 * symref updates. It would be nice to capture this as
+					 * zero oid updates however.
+					 */
+					create_reflog = 0;
+				}
+			}
 
-			fill_reftable_log_record(log);
-			log->update_index = ts;
-			log->refname = xstrdup(u->refname);
-			memcpy(log->value.update.new_hash, u->new_oid.hash, GIT_MAX_RAWSZ);
-			memcpy(log->value.update.old_hash, tx_update->current_oid.hash, GIT_MAX_RAWSZ);
-			log->value.update.message =
-				xstrndup(u->msg, arg->refs->write_options.block_size / 2);
+			if (create_reflog) {
+				ALLOC_GROW(logs, logs_nr + 1, logs_alloc);
+				log = &logs[logs_nr++];
+				memset(log, 0, sizeof(*log));
+
+				fill_reftable_log_record(log, &committer_ident);
+				log->update_index = ts;
+				log->refname = xstrdup(u->refname);
+				memcpy(log->value.update.new_hash,
+				       u->new_oid.hash, GIT_MAX_RAWSZ);
+				memcpy(log->value.update.old_hash,
+				       tx_update->current_oid.hash, GIT_MAX_RAWSZ);
+				log->value.update.message =
+					xstrndup(u->msg, arg->refs->write_options.block_size / 2);
+			}
 		}
 
 		if (u->flags & REF_LOG_ONLY)
 			continue;
 
-		if (u->flags & REF_HAVE_NEW && is_null_oid(&u->new_oid)) {
+		if (u->new_target) {
+			struct reftable_ref_record ref = {
+				.refname = (char *)u->refname,
+				.value_type = REFTABLE_REF_SYMREF,
+				.value.symref = (char *)u->new_target,
+				.update_index = ts,
+			};
+
+			ret = reftable_writer_add_ref(writer, &ref);
+			if (ret < 0)
+				goto done;
+		} else if ((u->flags & REF_HAVE_NEW) && ref_update_has_null_new_value(u)) {
 			struct reftable_ref_record ref = {
 				.refname = (char *)u->refname,
 				.update_index = ts,
@@ -1119,7 +1277,7 @@ static int write_transaction_table(struct reftable_writer *writer, void *cb_data
 			ref.refname = (char *)u->refname;
 			ref.update_index = ts;
 
-			peel_error = peel_object(&u->new_oid, &peeled);
+			peel_error = peel_object(arg->refs->base.repo, &u->new_oid, &peeled);
 			if (!peel_error) {
 				ref.value_type = REFTABLE_REF_VAL2;
 				memcpy(ref.value.val2.target_value, peeled.hash, GIT_MAX_RAWSZ);
@@ -1227,95 +1385,11 @@ out:
 struct write_create_symref_arg {
 	struct reftable_ref_store *refs;
 	struct reftable_stack *stack;
+	struct strbuf *err;
 	const char *refname;
 	const char *target;
 	const char *logmsg;
 };
-
-static int write_create_symref_table(struct reftable_writer *writer, void *cb_data)
-{
-	struct write_create_symref_arg *create = cb_data;
-	uint64_t ts = reftable_stack_next_update_index(create->stack);
-	struct reftable_ref_record ref = {
-		.refname = (char *)create->refname,
-		.value_type = REFTABLE_REF_SYMREF,
-		.value.symref = (char *)create->target,
-		.update_index = ts,
-	};
-	struct reftable_log_record log = {0};
-	struct object_id new_oid;
-	struct object_id old_oid;
-	int ret;
-
-	reftable_writer_set_limits(writer, ts, ts);
-
-	ret = reftable_writer_add_ref(writer, &ref);
-	if (ret)
-		return ret;
-
-	/*
-	 * Note that it is important to try and resolve the reference before we
-	 * write the log entry. This is because `should_write_log()` will munge
-	 * `core.logAllRefUpdates`, which is undesirable when we create a new
-	 * repository because it would be written into the config. As HEAD will
-	 * not resolve for new repositories this ordering will ensure that this
-	 * never happens.
-	 */
-	if (!create->logmsg ||
-	    !refs_resolve_ref_unsafe(&create->refs->base, create->target,
-				     RESOLVE_REF_READING, &new_oid, NULL) ||
-	    !should_write_log(&create->refs->base, create->refname))
-		return 0;
-
-	fill_reftable_log_record(&log);
-	log.refname = xstrdup(create->refname);
-	log.update_index = ts;
-	log.value.update.message = xstrndup(create->logmsg,
-					    create->refs->write_options.block_size / 2);
-	memcpy(log.value.update.new_hash, new_oid.hash, GIT_MAX_RAWSZ);
-	if (refs_resolve_ref_unsafe(&create->refs->base, create->refname,
-				    RESOLVE_REF_READING, &old_oid, NULL))
-		memcpy(log.value.update.old_hash, old_oid.hash, GIT_MAX_RAWSZ);
-
-	ret = reftable_writer_add_log(writer, &log);
-	reftable_log_record_release(&log);
-	return ret;
-}
-
-static int reftable_be_create_symref(struct ref_store *ref_store,
-				     const char *refname,
-				     const char *target,
-				     const char *logmsg)
-{
-	struct reftable_ref_store *refs =
-		reftable_be_downcast(ref_store, REF_STORE_WRITE, "create_symref");
-	struct reftable_stack *stack = stack_for(refs, refname, &refname);
-	struct write_create_symref_arg arg = {
-		.refs = refs,
-		.stack = stack,
-		.refname = refname,
-		.target = target,
-		.logmsg = logmsg,
-	};
-	int ret;
-
-	ret = refs->err;
-	if (ret < 0)
-		goto done;
-
-	ret = reftable_stack_reload(stack);
-	if (ret)
-		goto done;
-
-	ret = reftable_stack_add(stack, &write_create_symref_table, &arg);
-
-done:
-	assert(ret != REFTABLE_API_ERROR);
-	if (ret)
-		error("unable to write symref for %s: %s", refname,
-		      reftable_error_str(ret));
-	return ret;
-}
 
 struct write_copy_arg {
 	struct reftable_ref_store *refs;
@@ -1330,14 +1404,19 @@ static int write_copy_table(struct reftable_writer *writer, void *cb_data)
 {
 	struct write_copy_arg *arg = cb_data;
 	uint64_t deletion_ts, creation_ts;
-	struct reftable_merged_table *mt = reftable_stack_merged_table(arg->stack);
 	struct reftable_ref_record old_ref = {0}, refs[2] = {0};
 	struct reftable_log_record old_log = {0}, *logs = NULL;
 	struct reftable_iterator it = {0};
 	struct string_list skip = STRING_LIST_INIT_NODUP;
+	struct ident_split committer_ident = {0};
 	struct strbuf errbuf = STRBUF_INIT;
 	size_t logs_nr = 0, logs_alloc = 0, i;
+	const char *committer_info;
 	int ret;
+
+	committer_info = git_committer_info(0);
+	if (split_ident_line(&committer_ident, committer_info, strlen(committer_info)))
+		BUG("failed splitting committer info");
 
 	if (reftable_stack_read_ref(arg->stack, arg->oldname, &old_ref)) {
 		ret = error(_("refname %s not found"), arg->oldname);
@@ -1361,7 +1440,8 @@ static int write_copy_table(struct reftable_writer *writer, void *cb_data)
 	/*
 	 * Verify that the new refname is available.
 	 */
-	string_list_insert(&skip, arg->oldname);
+	if (arg->delete_old)
+		string_list_insert(&skip, arg->oldname);
 	ret = refs_verify_refname_available(&arg->refs->base, arg->newname,
 					    NULL, &skip, &errbuf);
 	if (ret < 0) {
@@ -1387,10 +1467,10 @@ static int write_copy_table(struct reftable_writer *writer, void *cb_data)
 	 * old reference.
 	 */
 	refs[0] = old_ref;
-	refs[0].refname = (char *)arg->newname;
+	refs[0].refname = xstrdup(arg->newname);
 	refs[0].update_index = creation_ts;
 	if (arg->delete_old) {
-		refs[1].refname = (char *)arg->oldname;
+		refs[1].refname = xstrdup(arg->oldname);
 		refs[1].value_type = REFTABLE_REF_DELETION;
 		refs[1].update_index = deletion_ts;
 	}
@@ -1412,8 +1492,8 @@ static int write_copy_table(struct reftable_writer *writer, void *cb_data)
 
 		ALLOC_GROW(logs, logs_nr + 1, logs_alloc);
 		memset(&logs[logs_nr], 0, sizeof(logs[logs_nr]));
-		fill_reftable_log_record(&logs[logs_nr]);
-		logs[logs_nr].refname = (char *)arg->newname;
+		fill_reftable_log_record(&logs[logs_nr], &committer_ident);
+		logs[logs_nr].refname = xstrdup(arg->newname);
 		logs[logs_nr].update_index = deletion_ts;
 		logs[logs_nr].value.update.message =
 			xstrndup(arg->logmsg, arg->refs->write_options.block_size / 2);
@@ -1434,7 +1514,13 @@ static int write_copy_table(struct reftable_writer *writer, void *cb_data)
 		if (append_head_reflog) {
 			ALLOC_GROW(logs, logs_nr + 1, logs_alloc);
 			logs[logs_nr] = logs[logs_nr - 1];
-			logs[logs_nr].refname = "HEAD";
+			logs[logs_nr].refname = xstrdup("HEAD");
+			logs[logs_nr].value.update.name =
+				xstrdup(logs[logs_nr].value.update.name);
+			logs[logs_nr].value.update.email =
+				xstrdup(logs[logs_nr].value.update.email);
+			logs[logs_nr].value.update.message =
+				xstrdup(logs[logs_nr].value.update.message);
 			logs_nr++;
 		}
 	}
@@ -1444,8 +1530,8 @@ static int write_copy_table(struct reftable_writer *writer, void *cb_data)
 	 */
 	ALLOC_GROW(logs, logs_nr + 1, logs_alloc);
 	memset(&logs[logs_nr], 0, sizeof(logs[logs_nr]));
-	fill_reftable_log_record(&logs[logs_nr]);
-	logs[logs_nr].refname = (char *)arg->newname;
+	fill_reftable_log_record(&logs[logs_nr], &committer_ident);
+	logs[logs_nr].refname = xstrdup(arg->newname);
 	logs[logs_nr].update_index = creation_ts;
 	logs[logs_nr].value.update.message =
 		xstrndup(arg->logmsg, arg->refs->write_options.block_size / 2);
@@ -1457,7 +1543,8 @@ static int write_copy_table(struct reftable_writer *writer, void *cb_data)
 	 * copy over all log entries from the old reflog. Last but not least,
 	 * when renaming we also have to delete all the old reflog entries.
 	 */
-	ret = reftable_merged_table_seek_log(mt, &it, arg->oldname);
+	reftable_stack_init_log_iterator(arg->stack, &it);
+	ret = reftable_iterator_seek_log(&it, arg->oldname);
 	if (ret < 0)
 		goto done;
 
@@ -1477,7 +1564,7 @@ static int write_copy_table(struct reftable_writer *writer, void *cb_data)
 		 */
 		ALLOC_GROW(logs, logs_nr + 1, logs_alloc);
 		logs[logs_nr] = old_log;
-		logs[logs_nr].refname = (char *)arg->newname;
+		logs[logs_nr].refname = xstrdup(arg->newname);
 		logs_nr++;
 
 		/*
@@ -1486,7 +1573,7 @@ static int write_copy_table(struct reftable_writer *writer, void *cb_data)
 		if (arg->delete_old) {
 			ALLOC_GROW(logs, logs_nr + 1, logs_alloc);
 			memset(&logs[logs_nr], 0, sizeof(logs[logs_nr]));
-			logs[logs_nr].refname = (char *)arg->oldname;
+			logs[logs_nr].refname = xstrdup(arg->oldname);
 			logs[logs_nr].value_type = REFTABLE_LOG_DELETION;
 			logs[logs_nr].update_index = old_log.update_index;
 			logs_nr++;
@@ -1509,13 +1596,11 @@ done:
 	reftable_iterator_destroy(&it);
 	string_list_clear(&skip, 0);
 	strbuf_release(&errbuf);
-	for (i = 0; i < logs_nr; i++) {
-		if (!strcmp(logs[i].refname, "HEAD"))
-			continue;
-		logs[i].refname = NULL;
+	for (i = 0; i < logs_nr; i++)
 		reftable_log_record_release(&logs[i]);
-	}
 	free(logs);
+	for (i = 0; i < ARRAY_SIZE(refs); i++)
+		reftable_ref_record_release(&refs[i]);
 	reftable_ref_record_release(&old_ref);
 	reftable_log_record_release(&old_log);
 	return ret;
@@ -1663,7 +1748,6 @@ static struct ref_iterator_vtable reftable_reflog_iterator_vtable = {
 static struct reftable_reflog_iterator *reflog_iterator_for_stack(struct reftable_ref_store *refs,
 								  struct reftable_stack *stack)
 {
-	struct reftable_merged_table *merged_table;
 	struct reftable_reflog_iterator *iter;
 	int ret;
 
@@ -1680,9 +1764,8 @@ static struct reftable_reflog_iterator *reflog_iterator_for_stack(struct reftabl
 	if (ret < 0)
 		goto done;
 
-	merged_table = reftable_stack_merged_table(stack);
-
-	ret = reftable_merged_table_seek_log(merged_table, &iter->iter, "");
+	reftable_stack_init_log_iterator(stack, &iter->iter);
+	ret = reftable_iterator_seek_log(&iter->iter, "");
 	if (ret < 0)
 		goto done;
 
@@ -1714,8 +1797,8 @@ static int yield_log_record(struct reftable_log_record *log,
 	struct object_id old_oid, new_oid;
 	const char *full_committer;
 
-	oidread(&old_oid, log->value.update.old_hash);
-	oidread(&new_oid, log->value.update.new_hash);
+	oidread(&old_oid, log->value.update.old_hash, the_repository->hash_algo);
+	oidread(&new_oid, log->value.update.new_hash, the_repository->hash_algo);
 
 	/*
 	 * When both the old object ID and the new object ID are null
@@ -1740,7 +1823,6 @@ static int reftable_be_for_each_reflog_ent_reverse(struct ref_store *ref_store,
 	struct reftable_ref_store *refs =
 		reftable_be_downcast(ref_store, REF_STORE_READ, "for_each_reflog_ent_reverse");
 	struct reftable_stack *stack = stack_for(refs, refname, &refname);
-	struct reftable_merged_table *mt = NULL;
 	struct reftable_log_record log = {0};
 	struct reftable_iterator it = {0};
 	int ret;
@@ -1748,8 +1830,8 @@ static int reftable_be_for_each_reflog_ent_reverse(struct ref_store *ref_store,
 	if (refs->err < 0)
 		return refs->err;
 
-	mt = reftable_stack_merged_table(stack);
-	ret = reftable_merged_table_seek_log(mt, &it, refname);
+	reftable_stack_init_log_iterator(stack, &it);
+	ret = reftable_iterator_seek_log(&it, refname);
 	while (!ret) {
 		ret = reftable_iterator_next_log(&it, &log);
 		if (ret < 0)
@@ -1777,7 +1859,6 @@ static int reftable_be_for_each_reflog_ent(struct ref_store *ref_store,
 	struct reftable_ref_store *refs =
 		reftable_be_downcast(ref_store, REF_STORE_READ, "for_each_reflog_ent");
 	struct reftable_stack *stack = stack_for(refs, refname, &refname);
-	struct reftable_merged_table *mt = NULL;
 	struct reftable_log_record *logs = NULL;
 	struct reftable_iterator it = {0};
 	size_t logs_alloc = 0, logs_nr = 0, i;
@@ -1786,8 +1867,8 @@ static int reftable_be_for_each_reflog_ent(struct ref_store *ref_store,
 	if (refs->err < 0)
 		return refs->err;
 
-	mt = reftable_stack_merged_table(stack);
-	ret = reftable_merged_table_seek_log(mt, &it, refname);
+	reftable_stack_init_log_iterator(stack, &it);
+	ret = reftable_iterator_seek_log(&it, refname);
 	while (!ret) {
 		struct reftable_log_record log = {0};
 
@@ -1824,7 +1905,6 @@ static int reftable_be_reflog_exists(struct ref_store *ref_store,
 	struct reftable_ref_store *refs =
 		reftable_be_downcast(ref_store, REF_STORE_READ, "reflog_exists");
 	struct reftable_stack *stack = stack_for(refs, refname, &refname);
-	struct reftable_merged_table *mt = reftable_stack_merged_table(stack);
 	struct reftable_log_record log = {0};
 	struct reftable_iterator it = {0};
 	int ret;
@@ -1837,7 +1917,8 @@ static int reftable_be_reflog_exists(struct ref_store *ref_store,
 	if (ret < 0)
 		goto done;
 
-	ret = reftable_merged_table_seek_log(mt, &it, refname);
+	reftable_stack_init_log_iterator(stack, &it);
+	ret = reftable_iterator_seek_log(&it, refname);
 	if (ret < 0)
 		goto done;
 
@@ -1935,8 +2016,6 @@ struct write_reflog_delete_arg {
 static int write_reflog_delete_table(struct reftable_writer *writer, void *cb_data)
 {
 	struct write_reflog_delete_arg *arg = cb_data;
-	struct reftable_merged_table *mt =
-		reftable_stack_merged_table(arg->stack);
 	struct reftable_log_record log = {0}, tombstone = {0};
 	struct reftable_iterator it = {0};
 	uint64_t ts = reftable_stack_next_update_index(arg->stack);
@@ -1944,12 +2023,14 @@ static int write_reflog_delete_table(struct reftable_writer *writer, void *cb_da
 
 	reftable_writer_set_limits(writer, ts, ts);
 
+	reftable_stack_init_log_iterator(arg->stack, &it);
+
 	/*
 	 * In order to delete a table we need to delete all reflog entries one
 	 * by one. This is inefficient, but the reftable format does not have a
 	 * better marker right now.
 	 */
-	ret = reftable_merged_table_seek_log(mt, &it, arg->refname);
+	ret = reftable_iterator_seek_log(&it, arg->refname);
 	while (ret == 0) {
 		ret = reftable_iterator_next_log(&it, &log);
 		if (ret < 0)
@@ -1993,6 +2074,7 @@ static int reftable_be_delete_reflog(struct ref_store *ref_store,
 }
 
 struct reflog_expiry_arg {
+	struct reftable_ref_store *refs;
 	struct reftable_stack *stack;
 	struct reftable_log_record *records;
 	struct object_id update_oid;
@@ -2021,7 +2103,7 @@ static int write_reflog_expiry_table(struct reftable_writer *writer, void *cb_da
 		ref.refname = (char *)arg->refname;
 		ref.update_index = ts;
 
-		if (!peel_object(&arg->update_oid, &peeled)) {
+		if (!peel_object(arg->refs->base.repo, &arg->update_oid, &peeled)) {
 			ref.value_type = REFTABLE_REF_VAL2;
 			memcpy(ref.value.val2.target_value, peeled.hash, GIT_MAX_RAWSZ);
 			memcpy(ref.value.val2.value, arg->update_oid.hash, GIT_MAX_RAWSZ);
@@ -2085,7 +2167,6 @@ static int reftable_be_reflog_expire(struct ref_store *ref_store,
 	struct reftable_ref_store *refs =
 		reftable_be_downcast(ref_store, REF_STORE_WRITE, "reflog_expire");
 	struct reftable_stack *stack = stack_for(refs, refname, &refname);
-	struct reftable_merged_table *mt = reftable_stack_merged_table(stack);
 	struct reftable_log_record *logs = NULL;
 	struct reftable_log_record *rewritten = NULL;
 	struct reftable_ref_record ref_record = {0};
@@ -2104,7 +2185,9 @@ static int reftable_be_reflog_expire(struct ref_store *ref_store,
 	if (ret < 0)
 		goto done;
 
-	ret = reftable_merged_table_seek_log(mt, &it, refname);
+	reftable_stack_init_log_iterator(stack, &it);
+
+	ret = reftable_iterator_seek_log(&it, refname);
 	if (ret < 0)
 		goto done;
 
@@ -2116,7 +2199,8 @@ static int reftable_be_reflog_expire(struct ref_store *ref_store,
 	if (ret < 0)
 		goto done;
 	if (reftable_ref_record_val1(&ref_record))
-		oidread(&oid, reftable_ref_record_val1(&ref_record));
+		oidread(&oid, reftable_ref_record_val1(&ref_record),
+			the_repository->hash_algo);
 	prepare_fn(refname, &oid, policy_cb_data);
 
 	while (1) {
@@ -2131,8 +2215,10 @@ static int reftable_be_reflog_expire(struct ref_store *ref_store,
 			break;
 		}
 
-		oidread(&old_oid, log.value.update.old_hash);
-		oidread(&new_oid, log.value.update.new_hash);
+		oidread(&old_oid, log.value.update.old_hash,
+			the_repository->hash_algo);
+		oidread(&new_oid, log.value.update.new_hash,
+			the_repository->hash_algo);
 
 		/*
 		 * Skip over the reflog existence marker. We will add it back
@@ -2163,8 +2249,10 @@ static int reftable_be_reflog_expire(struct ref_store *ref_store,
 		struct object_id old_oid, new_oid;
 
 		*dest = logs[i];
-		oidread(&old_oid, logs[i].value.update.old_hash);
-		oidread(&new_oid, logs[i].value.update.new_hash);
+		oidread(&old_oid, logs[i].value.update.old_hash,
+			the_repository->hash_algo);
+		oidread(&new_oid, logs[i].value.update.new_hash,
+			the_repository->hash_algo);
 
 		if (should_prune_fn(&old_oid, &new_oid, logs[i].value.update.email,
 				    (timestamp_t)logs[i].value.update.time,
@@ -2181,8 +2269,9 @@ static int reftable_be_reflog_expire(struct ref_store *ref_store,
 
 	if (flags & EXPIRE_REFLOGS_UPDATE_REF && last_hash &&
 	    reftable_ref_record_val1(&ref_record))
-		oidread(&arg.update_oid, last_hash);
+		oidread(&arg.update_oid, last_hash, the_repository->hash_algo);
 
+	arg.refs = refs;
 	arg.records = rewritten;
 	arg.len = logs_nr;
 	arg.stack = stack,
@@ -2217,14 +2306,16 @@ done:
 struct ref_storage_be refs_be_reftable = {
 	.name = "reftable",
 	.init = reftable_be_init,
-	.init_db = reftable_be_init_db,
+	.release = reftable_be_release,
+	.create_on_disk = reftable_be_create_on_disk,
+	.remove_on_disk = reftable_be_remove_on_disk,
+
 	.transaction_prepare = reftable_be_transaction_prepare,
 	.transaction_finish = reftable_be_transaction_finish,
 	.transaction_abort = reftable_be_transaction_abort,
 	.initial_transaction_commit = reftable_be_initial_transaction_commit,
 
 	.pack_refs = reftable_be_pack_refs,
-	.create_symref = reftable_be_create_symref,
 	.rename_ref = reftable_be_rename_ref,
 	.copy_ref = reftable_be_copy_ref,
 

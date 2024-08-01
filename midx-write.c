@@ -1,3 +1,5 @@
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "git-compat-util.h"
 #include "abspath.h"
 #include "config.h"
@@ -100,6 +102,32 @@ struct write_midx_context {
 	struct string_list *to_include;
 };
 
+static int should_include_pack(const struct write_midx_context *ctx,
+			       const char *file_name)
+{
+	/*
+	 * Note that at most one of ctx->m and ctx->to_include are set,
+	 * so we are testing midx_contains_pack() and
+	 * string_list_has_string() independently (guarded by the
+	 * appropriate NULL checks).
+	 *
+	 * We could support passing to_include while reusing an existing
+	 * MIDX, but don't currently since the reuse process drags
+	 * forward all packs from an existing MIDX (without checking
+	 * whether or not they appear in the to_include list).
+	 *
+	 * If we added support for that, these next two conditional
+	 * should be performed independently (likely checking
+	 * to_include before the existing MIDX).
+	 */
+	if (ctx->m && midx_contains_pack(ctx->m, file_name))
+		return 0;
+	else if (ctx->to_include &&
+		 !string_list_has_string(ctx->to_include, file_name))
+		return 0;
+	return 1;
+}
+
 static void add_pack_to_midx(const char *full_path, size_t full_path_len,
 			     const char *file_name, void *data)
 {
@@ -108,29 +136,11 @@ static void add_pack_to_midx(const char *full_path, size_t full_path_len,
 
 	if (ends_with(file_name, ".idx")) {
 		display_progress(ctx->progress, ++ctx->pack_paths_checked);
-		/*
-		 * Note that at most one of ctx->m and ctx->to_include are set,
-		 * so we are testing midx_contains_pack() and
-		 * string_list_has_string() independently (guarded by the
-		 * appropriate NULL checks).
-		 *
-		 * We could support passing to_include while reusing an existing
-		 * MIDX, but don't currently since the reuse process drags
-		 * forward all packs from an existing MIDX (without checking
-		 * whether or not they appear in the to_include list).
-		 *
-		 * If we added support for that, these next two conditional
-		 * should be performed independently (likely checking
-		 * to_include before the existing MIDX).
-		 */
-		if (ctx->m && midx_contains_pack(ctx->m, file_name))
-			return;
-		else if (ctx->to_include &&
-			 !string_list_has_string(ctx->to_include, file_name))
+
+		if (!should_include_pack(ctx, file_name))
 			return;
 
 		ALLOC_GROW(ctx->info, ctx->nr + 1, ctx->alloc);
-
 		p = add_packed_git(full_path, full_path_len, 0);
 		if (!p) {
 			warning(_("failed to add packfile '%s'"),
@@ -299,21 +309,16 @@ static void midx_fanout_add_pack_fanout(struct midx_fanout *fanout,
  * Copy only the de-duplicated entries (selected by most-recent modified time
  * of a packfile containing the object).
  */
-static struct pack_midx_entry *get_sorted_entries(struct multi_pack_index *m,
-						  struct pack_info *info,
-						  uint32_t nr_packs,
-						  size_t *nr_objects,
-						  int preferred_pack)
+static void compute_sorted_entries(struct write_midx_context *ctx,
+				   uint32_t start_pack)
 {
 	uint32_t cur_fanout, cur_pack, cur_object;
 	size_t alloc_objects, total_objects = 0;
 	struct midx_fanout fanout = { 0 };
-	struct pack_midx_entry *deduplicated_entries = NULL;
-	uint32_t start_pack = m ? m->num_packs : 0;
 
-	for (cur_pack = start_pack; cur_pack < nr_packs; cur_pack++)
+	for (cur_pack = start_pack; cur_pack < ctx->nr; cur_pack++)
 		total_objects = st_add(total_objects,
-				       info[cur_pack].p->num_objects);
+				       ctx->info[cur_pack].p->num_objects);
 
 	/*
 	 * As we de-duplicate by fanout value, we expect the fanout
@@ -323,26 +328,26 @@ static struct pack_midx_entry *get_sorted_entries(struct multi_pack_index *m,
 	alloc_objects = fanout.alloc = total_objects > 3200 ? total_objects / 200 : 16;
 
 	ALLOC_ARRAY(fanout.entries, fanout.alloc);
-	ALLOC_ARRAY(deduplicated_entries, alloc_objects);
-	*nr_objects = 0;
+	ALLOC_ARRAY(ctx->entries, alloc_objects);
+	ctx->entries_nr = 0;
 
 	for (cur_fanout = 0; cur_fanout < 256; cur_fanout++) {
 		fanout.nr = 0;
 
-		if (m)
-			midx_fanout_add_midx_fanout(&fanout, m, cur_fanout,
-						    preferred_pack);
+		if (ctx->m)
+			midx_fanout_add_midx_fanout(&fanout, ctx->m, cur_fanout,
+						    ctx->preferred_pack_idx);
 
-		for (cur_pack = start_pack; cur_pack < nr_packs; cur_pack++) {
-			int preferred = cur_pack == preferred_pack;
+		for (cur_pack = start_pack; cur_pack < ctx->nr; cur_pack++) {
+			int preferred = cur_pack == ctx->preferred_pack_idx;
 			midx_fanout_add_pack_fanout(&fanout,
-						    info, cur_pack,
+						    ctx->info, cur_pack,
 						    preferred, cur_fanout);
 		}
 
-		if (-1 < preferred_pack && preferred_pack < start_pack)
-			midx_fanout_add_pack_fanout(&fanout, info,
-						    preferred_pack, 1,
+		if (-1 < ctx->preferred_pack_idx && ctx->preferred_pack_idx < start_pack)
+			midx_fanout_add_pack_fanout(&fanout, ctx->info,
+						    ctx->preferred_pack_idx, 1,
 						    cur_fanout);
 
 		midx_fanout_sort(&fanout);
@@ -356,17 +361,16 @@ static struct pack_midx_entry *get_sorted_entries(struct multi_pack_index *m,
 						&fanout.entries[cur_object].oid))
 				continue;
 
-			ALLOC_GROW(deduplicated_entries, st_add(*nr_objects, 1),
+			ALLOC_GROW(ctx->entries, st_add(ctx->entries_nr, 1),
 				   alloc_objects);
-			memcpy(&deduplicated_entries[*nr_objects],
+			memcpy(&ctx->entries[ctx->entries_nr],
 			       &fanout.entries[cur_object],
 			       sizeof(struct pack_midx_entry));
-			(*nr_objects)++;
+			ctx->entries_nr++;
 		}
 	}
 
 	free(fanout.entries);
-	return deduplicated_entries;
 }
 
 static int write_midx_pack_names(struct hashfile *f, void *data)
@@ -664,7 +668,7 @@ static int add_ref_to_pending(const char *refname,
 		return 0;
 	}
 
-	if (!peel_iterated_oid(oid, &peeled))
+	if (!peel_iterated_oid(the_repository, oid, &peeled))
 		oid = &peeled;
 
 	object = parse_object_or_die(oid, refname);
@@ -755,7 +759,8 @@ static struct commit **find_commits_for_midx_bitmap(uint32_t *indexed_commits_nr
 		read_refs_snapshot(refs_snapshot, &revs);
 	} else {
 		setup_revisions(0, NULL, &revs, NULL);
-		for_each_ref(add_ref_to_pending, &revs);
+		refs_for_each_ref(get_main_ref_store(the_repository),
+				  add_ref_to_pending, &revs);
 	}
 
 	/*
@@ -798,6 +803,7 @@ static int write_midx_bitmap(const char *midx_name,
 {
 	int ret, i;
 	uint16_t options = 0;
+	struct bitmap_writer writer;
 	struct pack_idx_entry **index;
 	char *bitmap_name = xstrfmt("%s-%s.bitmap", midx_name,
 					hash_to_hex(midx_hash));
@@ -819,8 +825,10 @@ static int write_midx_bitmap(const char *midx_name,
 	for (i = 0; i < pdata->nr_objects; i++)
 		index[i] = &pdata->objects[i].idx;
 
-	bitmap_writer_show_progress(flags & MIDX_PROGRESS);
-	bitmap_writer_build_type_index(pdata, index, pdata->nr_objects);
+	bitmap_writer_init(&writer, the_repository);
+	bitmap_writer_show_progress(&writer, flags & MIDX_PROGRESS);
+	bitmap_writer_build_type_index(&writer, pdata, index,
+				       pdata->nr_objects);
 
 	/*
 	 * bitmap_writer_finish expects objects in lex order, but pack_order
@@ -838,17 +846,19 @@ static int write_midx_bitmap(const char *midx_name,
 	for (i = 0; i < pdata->nr_objects; i++)
 		index[pack_order[i]] = &pdata->objects[i].idx;
 
-	bitmap_writer_select_commits(commits, commits_nr, -1);
-	ret = bitmap_writer_build(pdata);
+	bitmap_writer_select_commits(&writer, commits, commits_nr);
+	ret = bitmap_writer_build(&writer, pdata);
 	if (ret < 0)
 		goto cleanup;
 
-	bitmap_writer_set_checksum(midx_hash);
-	bitmap_writer_finish(index, pdata->nr_objects, bitmap_name, options);
+	bitmap_writer_set_checksum(&writer, midx_hash);
+	bitmap_writer_finish(&writer, index, pdata->nr_objects, bitmap_name,
+			     options);
 
 cleanup:
 	free(index);
 	free(bitmap_name);
+	bitmap_writer_free(&writer);
 
 	trace2_region_leave("midx", "write_midx_bitmap", the_repository);
 
@@ -880,6 +890,40 @@ cleanup:
 	return result;
 }
 
+static int fill_packs_from_midx(struct write_midx_context *ctx,
+				const char *preferred_pack_name, uint32_t flags)
+{
+	uint32_t i;
+
+	for (i = 0; i < ctx->m->num_packs; i++) {
+		ALLOC_GROW(ctx->info, ctx->nr + 1, ctx->alloc);
+
+		if (flags & MIDX_WRITE_REV_INDEX || preferred_pack_name) {
+			/*
+			 * If generating a reverse index, need to have
+			 * packed_git's loaded to compare their
+			 * mtimes and object count.
+			 *
+			 *
+			 * If a preferred pack is specified, need to
+			 * have packed_git's loaded to ensure the chosen
+			 * preferred pack has a non-zero object count.
+			 */
+			if (prepare_midx_pack(the_repository, ctx->m, i))
+				return error(_("could not load pack"));
+
+			if (open_pack_index(ctx->m->packs[i]))
+				die(_("could not open index for %s"),
+				    ctx->m->packs[i]->pack_name);
+		}
+
+		fill_pack_info(&ctx->info[ctx->nr++], ctx->m->packs[i],
+			       ctx->m->pack_names[i], i);
+	}
+
+	return 0;
+}
+
 static int write_midx_internal(const char *object_dir,
 			       struct string_list *packs_to_include,
 			       struct string_list *packs_to_drop,
@@ -889,7 +933,7 @@ static int write_midx_internal(const char *object_dir,
 {
 	struct strbuf midx_name = STRBUF_INIT;
 	unsigned char midx_hash[GIT_MAX_RAWSZ];
-	uint32_t i;
+	uint32_t i, start_pack;
 	struct hashfile *f = NULL;
 	struct lock_file lk;
 	struct write_midx_context ctx = { 0 };
@@ -925,31 +969,13 @@ static int write_midx_internal(const char *object_dir,
 	ctx.info = NULL;
 	ALLOC_ARRAY(ctx.info, ctx.alloc);
 
-	if (ctx.m) {
-		for (i = 0; i < ctx.m->num_packs; i++) {
-			ALLOC_GROW(ctx.info, ctx.nr + 1, ctx.alloc);
-
-			if (flags & MIDX_WRITE_REV_INDEX) {
-				/*
-				 * If generating a reverse index, need to have
-				 * packed_git's loaded to compare their
-				 * mtimes and object count.
-				 */
-				if (prepare_midx_pack(the_repository, ctx.m, i)) {
-					error(_("could not load pack"));
-					result = 1;
-					goto cleanup;
-				}
-
-				if (open_pack_index(ctx.m->packs[i]))
-					die(_("could not open index for %s"),
-					    ctx.m->packs[i]->pack_name);
-			}
-
-			fill_pack_info(&ctx.info[ctx.nr++], ctx.m->packs[i],
-				       ctx.m->pack_names[i], i);
-		}
+	if (ctx.m && fill_packs_from_midx(&ctx, preferred_pack_name,
+					  flags) < 0) {
+		result = 1;
+		goto cleanup;
 	}
+
+	start_pack = ctx.nr;
 
 	ctx.pack_paths_checked = 0;
 	if (flags & MIDX_PROGRESS)
@@ -1048,8 +1074,7 @@ static int write_midx_internal(const char *object_dir,
 		}
 	}
 
-	ctx.entries = get_sorted_entries(ctx.m, ctx.info, ctx.nr, &ctx.entries_nr,
-					 ctx.preferred_pack_idx);
+	compute_sorted_entries(&ctx, start_pack);
 
 	ctx.large_offsets_needed = 0;
 	for (i = 0; i < ctx.entries_nr; i++) {
@@ -1474,8 +1499,7 @@ int midx_repack(struct repository *r, const char *object_dir, size_t batch_size,
 	repo_config_get_bool(r, "repack.usedeltabaseoffset", &delta_base_offset);
 	repo_config_get_bool(r, "repack.usedeltaislands", &use_delta_islands);
 
-	strvec_pushl(&cmd.args, "pack-objects", "--stdin-packs", "--non-empty",
-		     NULL);
+	strvec_push(&cmd.args, "pack-objects");
 
 	strvec_pushf(&cmd.args, "%s/pack/pack", object_dir);
 
@@ -1499,15 +1523,16 @@ int midx_repack(struct repository *r, const char *object_dir, size_t batch_size,
 	}
 
 	cmd_in = xfdopen(cmd.in, "w");
-	for (i = 0; i < m->num_packs; i++) {
-		struct packed_git *p = m->packs[i];
-		if (!p)
+
+	for (i = 0; i < m->num_objects; i++) {
+		struct object_id oid;
+		uint32_t pack_int_id = nth_midxed_pack_int_id(m, i);
+
+		if (!include_pack[pack_int_id])
 			continue;
 
-		if (include_pack[i])
-			fprintf(cmd_in, "%s\n", pack_basename(p));
-		else
-			fprintf(cmd_in, "^%s\n", pack_basename(p));
+		nth_midxed_object_oid(&oid, m, i);
+		fprintf(cmd_in, "%s\n", oid_to_hex(&oid));
 	}
 	fclose(cmd_in);
 

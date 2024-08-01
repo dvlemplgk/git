@@ -1,3 +1,5 @@
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "git-compat-util.h"
 #include "gettext.h"
 #include "hex.h"
@@ -286,7 +288,8 @@ int walker_fetch(struct walker *walker, int targets, char **target,
 	ALLOC_ARRAY(oids, targets);
 
 	if (write_ref) {
-		transaction = ref_transaction_begin(&err);
+		transaction = ref_store_transaction_begin(get_main_ref_store(the_repository),
+							  &err);
 		if (!transaction) {
 			error("%s", err.buf);
 			goto done;
@@ -294,7 +297,8 @@ int walker_fetch(struct walker *walker, int targets, char **target,
 	}
 
 	if (!walker->get_recover) {
-		for_each_ref(mark_complete, NULL);
+		refs_for_each_ref(get_main_ref_store(the_repository),
+				  mark_complete, NULL);
 		commit_list_sort_by_date(&complete);
 	}
 
@@ -324,7 +328,7 @@ int walker_fetch(struct walker *walker, int targets, char **target,
 		strbuf_reset(&refname);
 		strbuf_addf(&refname, "refs/%s", write_ref[i]);
 		if (ref_transaction_update(transaction, refname.buf,
-					   oids + i, NULL, 0,
+					   oids + i, NULL, NULL, NULL, 0,
 					   msg ? msg : "fetch (unknown)",
 					   &err)) {
 			error("%s", err.buf);

@@ -9,8 +9,10 @@ workflow:
 
 test:linux:
   image: $image
+  variables:
+    CUSTOM_PATH: "/custom"
   before_script:
-    - ./ci/install-docker-dependencies.sh
+    - ./ci/install-dependencies.sh
   script:
     - useradd builder --create-home
     - chown -R builder "${CI_PROJECT_DIR}"
@@ -93,12 +95,39 @@ test:osx:
       - t/failed-test-artifacts
     when: on_failure
 
+test:fuzz-smoke-tests:
+  image: ubuntu:latest
+  variables:
+    CC: clang
+  before_script:
+    - ./ci/install-dependencies.sh
+  script:
+    - ./ci/run-build-and-minimal-fuzzers.sh
+
 static-analysis:
   image: ubuntu:22.04
   variables:
     jobname: StaticAnalysis
   before_script:
-    - ./ci/install-docker-dependencies.sh
+    - ./ci/install-dependencies.sh
   script:
     - ./ci/run-static-analysis.sh
     - ./ci/check-directional-formatting.bash
+
+check-whitespace:
+  image: ubuntu:latest
+  before_script:
+    - ./ci/install-dependencies.sh
+  script:
+    - ./ci/check-whitespace.sh "$CI_MERGE_REQUEST_TARGET_BRANCH_SHA"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+
+documentation:
+  image: ubuntu:latest
+  variables:
+    jobname: Documentation
+  before_script:
+    - ./ci/install-dependencies.sh
+  script:
+    - ./ci/test-documentation.sh

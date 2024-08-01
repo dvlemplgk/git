@@ -435,7 +435,7 @@ parse_done:
 		usage_with_options(shortlog_usage, options);
 	}
 
-	if (setup_revisions(argc, argv, &rev, NULL) != 1) {
+	if (!nongit && setup_revisions(argc, argv, &rev, NULL) != 1) {
 		error(_("unrecognized argument: %s"), argv[1]);
 		usage_with_options(shortlog_usage, options);
 	}
@@ -460,11 +460,8 @@ parse_done:
 	else
 		get_from_rev(&rev, &log);
 
-	release_revisions(&rev);
-
 	shortlog_output(&log);
-	if (log.file != stdout)
-		fclose(log.file);
+	release_revisions(&rev);
 	return 0;
 }
 

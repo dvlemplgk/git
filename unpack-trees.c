@@ -1,3 +1,5 @@
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "git-compat-util.h"
 #include "advice.h"
 #include "strvec.h"
@@ -2318,7 +2320,8 @@ static int verify_clean_subdirectory(const struct cache_entry *ce,
 
 	if (S_ISGITLINK(ce->ce_mode)) {
 		struct object_id oid;
-		int sub_head = resolve_gitlink_ref(ce->name, "HEAD", &oid);
+		int sub_head = repo_resolve_gitlink_ref(the_repository, ce->name,
+							"HEAD", &oid);
 		/*
 		 * If we are not going to update the submodule, then
 		 * we don't care.

@@ -1279,8 +1279,10 @@ static void load_tree(struct tree_entry *root)
 		e->versions[0].mode = e->versions[1].mode;
 		e->name = to_atom(c, strlen(c));
 		c += e->name->str_len + 1;
-		oidread(&e->versions[0].oid, (unsigned char *)c);
-		oidread(&e->versions[1].oid, (unsigned char *)c);
+		oidread(&e->versions[0].oid, (unsigned char *)c,
+			the_repository->hash_algo);
+		oidread(&e->versions[1].oid, (unsigned char *)c,
+			the_repository->hash_algo);
 		c += the_hash_algo->rawsz;
 	}
 	free(buf);
@@ -1386,7 +1388,7 @@ static void tree_content_replace(
 {
 	if (!S_ISDIR(mode))
 		die("Root cannot be a non-directory");
-	oidclr(&root->versions[0].oid);
+	oidclr(&root->versions[0].oid, the_repository->hash_algo);
 	oidcpy(&root->versions[1].oid, oid);
 	if (root->tree)
 		release_tree_content_recursive(root->tree);
@@ -1445,7 +1447,7 @@ static int tree_content_set(
 				if (S_ISDIR(e->versions[0].mode))
 					e->versions[0].mode |= NO_DELTA;
 
-				oidclr(&root->versions[1].oid);
+				oidclr(&root->versions[1].oid, the_repository->hash_algo);
 				return 1;
 			}
 			if (!S_ISDIR(e->versions[1].mode)) {
@@ -1455,7 +1457,7 @@ static int tree_content_set(
 			if (!e->tree)
 				load_tree(e);
 			if (tree_content_set(e, slash1 + 1, oid, mode, subtree)) {
-				oidclr(&root->versions[1].oid);
+				oidclr(&root->versions[1].oid, the_repository->hash_algo);
 				return 1;
 			}
 			return 0;
@@ -1467,7 +1469,7 @@ static int tree_content_set(
 	e = new_tree_entry();
 	e->name = to_atom(p, n);
 	e->versions[0].mode = 0;
-	oidclr(&e->versions[0].oid);
+	oidclr(&e->versions[0].oid, the_repository->hash_algo);
 	t->entries[t->entry_count++] = e;
 	if (*slash1) {
 		e->tree = new_tree_content(8);
@@ -1478,7 +1480,7 @@ static int tree_content_set(
 		e->versions[1].mode = mode;
 		oidcpy(&e->versions[1].oid, oid);
 	}
-	oidclr(&root->versions[1].oid);
+	oidclr(&root->versions[1].oid, the_repository->hash_algo);
 	return 1;
 }
 
@@ -1523,7 +1525,8 @@ static int tree_content_remove(
 			if (tree_content_remove(e, slash1 + 1, backup_leaf, 0)) {
 				for (n = 0; n < e->tree->entry_count; n++) {
 					if (e->tree->entries[n]->versions[1].mode) {
-						oidclr(&root->versions[1].oid);
+						oidclr(&root->versions[1].oid,
+						       the_repository->hash_algo);
 						return 1;
 					}
 				}
@@ -1542,8 +1545,8 @@ del_entry:
 		release_tree_content_recursive(e->tree);
 	e->tree = NULL;
 	e->versions[1].mode = 0;
-	oidclr(&e->versions[1].oid);
-	oidclr(&root->versions[1].oid);
+	oidclr(&e->versions[1].oid, the_repository->hash_algo);
+	oidclr(&root->versions[1].oid, the_repository->hash_algo);
 	return 1;
 }
 
@@ -1604,11 +1607,12 @@ static int update_branch(struct branch *b)
 
 	if (is_null_oid(&b->oid)) {
 		if (b->delete)
-			delete_ref(NULL, b->name, NULL, 0);
+			refs_delete_ref(get_main_ref_store(the_repository),
+					NULL, b->name, NULL, 0);
 		return 0;
 	}
-	if (read_ref(b->name, &old_oid))
-		oidclr(&old_oid);
+	if (refs_read_ref(get_main_ref_store(the_repository), b->name, &old_oid))
+		oidclr(&old_oid, the_repository->hash_algo);
 	if (!force_update && !is_null_oid(&old_oid)) {
 		struct commit *old_cmit, *new_cmit;
 		int ret;
@@ -1631,10 +1635,11 @@ static int update_branch(struct branch *b)
 			return -1;
 		}
 	}
-	transaction = ref_transaction_begin(&err);
+	transaction = ref_store_transaction_begin(get_main_ref_store(the_repository),
+						  &err);
 	if (!transaction ||
 	    ref_transaction_update(transaction, b->name, &b->oid, &old_oid,
-				   0, msg, &err) ||
+				   NULL, NULL, 0, msg, &err) ||
 	    ref_transaction_commit(transaction, &err)) {
 		ref_transaction_free(transaction);
 		error("%s", err.buf);
@@ -1665,7 +1670,8 @@ static void dump_tags(void)
 	struct strbuf err = STRBUF_INIT;
 	struct ref_transaction *transaction;
 
-	transaction = ref_transaction_begin(&err);
+	transaction = ref_store_transaction_begin(get_main_ref_store(the_repository),
+						  &err);
 	if (!transaction) {
 		failure |= error("%s", err.buf);
 		goto cleanup;
@@ -1675,7 +1681,8 @@ static void dump_tags(void)
 		strbuf_addf(&ref_name, "refs/tags/%s", t->name);
 
 		if (ref_transaction_update(transaction, ref_name.buf,
-					   &t->oid, NULL, 0, msg, &err)) {
+					   &t->oid, NULL, NULL, NULL,
+					   0, msg, &err)) {
 			failure |= error("%s", err.buf);
 			goto cleanup;
 		}
@@ -2354,7 +2361,9 @@ static void file_change_m(const char *p, struct branch *b)
 	parse_path_eol(&path, p, "path");
 
 	/* Git does not track empty, non-toplevel directories. */
-	if (S_ISDIR(mode) && is_empty_tree_oid(&oid) && *path.buf) {
+	if (S_ISDIR(mode) &&
+	    is_empty_tree_oid(&oid, the_repository->hash_algo) &&
+	    *path.buf) {
 		tree_content_remove(&b->branch_tree, path.buf, NULL, 0);
 		return;
 	}
@@ -2546,8 +2555,8 @@ static void note_change_n(const char *p, struct branch *b, unsigned char *old_fa
 static void file_change_deleteall(struct branch *b)
 {
 	release_tree_content_recursive(b->branch_tree.tree);
-	oidclr(&b->branch_tree.versions[0].oid);
-	oidclr(&b->branch_tree.versions[1].oid);
+	oidclr(&b->branch_tree.versions[0].oid, the_repository->hash_algo);
+	oidclr(&b->branch_tree.versions[1].oid, the_repository->hash_algo);
 	load_tree(&b->branch_tree);
 	b->num_notes = 0;
 }
@@ -2566,8 +2575,8 @@ static void parse_from_commit(struct branch *b, char *buf, unsigned long size)
 static void parse_from_existing(struct branch *b)
 {
 	if (is_null_oid(&b->oid)) {
-		oidclr(&b->branch_tree.versions[0].oid);
-		oidclr(&b->branch_tree.versions[1].oid);
+		oidclr(&b->branch_tree.versions[0].oid, the_repository->hash_algo);
+		oidclr(&b->branch_tree.versions[1].oid, the_repository->hash_algo);
 	} else {
 		unsigned long size;
 		char *buf;
@@ -2890,9 +2899,9 @@ static void parse_reset_branch(const char *arg)
 
 	b = lookup_branch(arg);
 	if (b) {
-		oidclr(&b->oid);
-		oidclr(&b->branch_tree.versions[0].oid);
-		oidclr(&b->branch_tree.versions[1].oid);
+		oidclr(&b->oid, the_repository->hash_algo);
+		oidclr(&b->branch_tree.versions[0].oid, the_repository->hash_algo);
+		oidclr(&b->branch_tree.versions[1].oid, the_repository->hash_algo);
 		if (b->branch_tree.tree) {
 			release_tree_content_recursive(b->branch_tree.tree);
 			b->branch_tree.tree = NULL;

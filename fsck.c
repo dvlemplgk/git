@@ -1,3 +1,5 @@
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "git-compat-util.h"
 #include "date.h"
 #include "dir.h"
@@ -203,7 +205,8 @@ void fsck_set_msg_types(struct fsck_options *options, const char *values)
 		if (!strcmp(buf, "skiplist")) {
 			if (equal == len)
 				die("skiplist requires a path");
-			oidset_parse_file(&options->skiplist, buf + equal + 1);
+			oidset_parse_file(&options->skiplist, buf + equal + 1,
+					  the_repository->hash_algo);
 			buf += len + 1;
 			continue;
 		}
@@ -1179,7 +1182,7 @@ int fsck_object(struct object *obj, void *data, unsigned long size,
 }
 
 int fsck_buffer(const struct object_id *oid, enum object_type type,
-		void *data, unsigned long size,
+		const void *data, unsigned long size,
 		struct fsck_options *options)
 {
 	if (type == OBJ_BLOB)
@@ -1274,13 +1277,13 @@ int git_fsck_config(const char *var, const char *value,
 	const char *msg_id;
 
 	if (strcmp(var, "fsck.skiplist") == 0) {
-		const char *path;
+		char *path;
 		struct strbuf sb = STRBUF_INIT;
 
 		if (git_config_pathname(&path, var, value))
 			return 1;
 		strbuf_addf(&sb, "skiplist=%s", path);
-		free((char *)path);
+		free(path);
 		fsck_set_msg_types(options, sb.buf);
 		strbuf_release(&sb);
 		return 0;

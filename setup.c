@@ -1,9 +1,12 @@
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "git-compat-util.h"
 #include "abspath.h"
 #include "copy.h"
 #include "environment.h"
 #include "exec-cmd.h"
 #include "gettext.h"
+#include "hex.h"
 #include "object-name.h"
 #include "refs.h"
 #include "repository.h"
@@ -16,6 +19,7 @@
 #include "quote.h"
 #include "trace2.h"
 #include "worktree.h"
+#include "exec-cmd.h"
 
 static int inside_git_dir = -1;
 static int inside_work_tree = -1;
@@ -47,7 +51,7 @@ static int abspath_part_inside_repo(char *path)
 	size_t wtlen;
 	char *path0;
 	int off;
-	const char *work_tree = get_git_work_tree();
+	const char *work_tree = precompose_string_if_needed(get_git_work_tree());
 	struct strbuf realpath = STRBUF_INIT;
 
 	if (!work_tree)
@@ -339,6 +343,58 @@ int get_common_dir_noenv(struct strbuf *sb, const char *gitdir)
 	strbuf_release(&data);
 	strbuf_release(&path);
 	return ret;
+}
+
+static int validate_headref(const char *path)
+{
+	struct stat st;
+	char buffer[256];
+	const char *refname;
+	struct object_id oid;
+	int fd;
+	ssize_t len;
+
+	if (lstat(path, &st) < 0)
+		return -1;
+
+	/* Make sure it is a "refs/.." symlink */
+	if (S_ISLNK(st.st_mode)) {
+		len = readlink(path, buffer, sizeof(buffer)-1);
+		if (len >= 5 && !memcmp("refs/", buffer, 5))
+			return 0;
+		return -1;
+	}
+
+	/*
+	 * Anything else, just open it and try to see if it is a symbolic ref.
+	 */
+	fd = open(path, O_RDONLY);
+	if (fd < 0)
+		return -1;
+	len = read_in_full(fd, buffer, sizeof(buffer)-1);
+	close(fd);
+
+	if (len < 0)
+		return -1;
+	buffer[len] = '\0';
+
+	/*
+	 * Is it a symbolic ref?
+	 */
+	if (skip_prefix(buffer, "ref:", &refname)) {
+		while (isspace(*refname))
+			refname++;
+		if (starts_with(refname, "refs/"))
+			return 0;
+	}
+
+	/*
+	 * Is this a detached HEAD?
+	 */
+	if (get_oid_hex_any(buffer, &oid) != GIT_HASH_UNKNOWN)
+		return 0;
+
+	return -1;
 }
 
 /*
@@ -1176,13 +1232,20 @@ static int safe_directory_cb(const char *key, const char *value,
 	} else if (!strcmp(value, "*")) {
 		data->is_safe = 1;
 	} else {
-		const char *interpolated = NULL;
+		char *allowed = NULL;
 
-		if (!git_config_pathname(&interpolated, key, value) &&
-		    !fspathcmp(data->path, interpolated ? interpolated : value))
-			data->is_safe = 1;
-
-		free((char *)interpolated);
+		if (!git_config_pathname(&allowed, key, value)) {
+			const char *check = allowed ? allowed : value;
+			if (ends_with(check, "/*")) {
+				size_t len = strlen(check);
+				if (!fspathncmp(check, data->path, len - 1))
+					data->is_safe = 1;
+			} else if (!fspathcmp(data->path, check)) {
+				data->is_safe = 1;
+			}
+		}
+		if (allowed != value)
+			free(allowed);
 	}
 
 	return 0;
@@ -1218,6 +1281,27 @@ static int ensure_valid_ownership(const char *gitfile,
 	git_protected_config(safe_directory_cb, &data);
 
 	return data.is_safe;
+}
+
+void die_upon_dubious_ownership(const char *gitfile, const char *worktree,
+				const char *gitdir)
+{
+	struct strbuf report = STRBUF_INIT, quoted = STRBUF_INIT;
+	const char *path;
+
+	if (ensure_valid_ownership(gitfile, worktree, gitdir, &report))
+		return;
+
+	strbuf_complete(&report, '\n');
+	path = gitfile ? gitfile : gitdir;
+	sq_quote_buf_pretty(&quoted, path);
+
+	die(_("detected dubious ownership in repository at '%s'\n"
+	      "%s"
+	      "To add an exception for this directory, call:\n"
+	      "\n"
+	      "\tgit config --global --add safe.directory %s"),
+	    path, report.buf, quoted.buf);
 }
 
 static int allowed_bare_repo_cb(const char *key, const char *value,
@@ -1781,6 +1865,57 @@ int daemonize(void)
 #endif
 }
 
+struct template_dir_cb_data {
+	char *path;
+	int initialized;
+};
+
+static int template_dir_cb(const char *key, const char *value,
+			   const struct config_context *ctx, void *d)
+{
+	struct template_dir_cb_data *data = d;
+
+	if (strcmp(key, "init.templatedir"))
+		return 0;
+
+	if (!value) {
+		data->path = NULL;
+	} else {
+		char *path = NULL;
+
+		FREE_AND_NULL(data->path);
+		if (!git_config_pathname(&path, key, value))
+			data->path = path ? path : xstrdup(value);
+	}
+
+	return 0;
+}
+
+const char *get_template_dir(const char *option_template)
+{
+	const char *template_dir = option_template;
+
+	if (!template_dir)
+		template_dir = getenv(TEMPLATE_DIR_ENVIRONMENT);
+	if (!template_dir) {
+		static struct template_dir_cb_data data;
+
+		if (!data.initialized) {
+			git_protected_config(template_dir_cb, &data);
+			data.initialized = 1;
+		}
+		template_dir = data.path;
+	}
+	if (!template_dir) {
+		static char *dir;
+
+		if (!dir)
+			dir = system_path(DEFAULT_GIT_TEMPLATE_DIR);
+		template_dir = dir;
+	}
+	return template_dir;
+}
+
 #ifdef NO_TRUSTABLE_FILEMODE
 #define TEST_FILEMODE 0
 #else
@@ -1856,8 +1991,9 @@ static void copy_templates_1(struct strbuf *path, struct strbuf *template_path,
 	}
 }
 
-static void copy_templates(const char *template_dir, const char *init_template_dir)
+static void copy_templates(const char *option_template)
 {
+	const char *template_dir = get_template_dir(option_template);
 	struct strbuf path = STRBUF_INIT;
 	struct strbuf template_path = STRBUF_INIT;
 	size_t template_len;
@@ -1866,16 +2002,8 @@ static void copy_templates(const char *template_dir, const char *init_template_d
 	DIR *dir;
 	char *to_free = NULL;
 
-	if (!template_dir)
-		template_dir = getenv(TEMPLATE_DIR_ENVIRONMENT);
-	if (!template_dir)
-		template_dir = init_template_dir;
-	if (!template_dir)
-		template_dir = to_free = system_path(DEFAULT_GIT_TEMPLATE_DIR);
-	if (!template_dir[0]) {
-		free(to_free);
+	if (!template_dir || !*template_dir)
 		return;
-	}
 
 	strbuf_addstr(&template_path, template_dir);
 	strbuf_complete(&template_path, '/');
@@ -1931,7 +2059,7 @@ static int needs_work_tree_config(const char *git_dir, const char *work_tree)
 }
 
 void initialize_repository_version(int hash_algo,
-				   unsigned int ref_storage_format,
+				   enum ref_storage_format ref_storage_format,
 				   int reinit)
 {
 	char repo_version_string[10];
@@ -1962,6 +2090,8 @@ void initialize_repository_version(int hash_algo,
 	if (ref_storage_format != REF_STORAGE_FORMAT_FILES)
 		git_config_set("extensions.refstorage",
 			       ref_storage_format_to_name(ref_storage_format));
+	else if (reinit)
+		git_config_set_gently("extensions.refstorage", NULL);
 }
 
 static int is_reinit(void)
@@ -1976,14 +2106,15 @@ static int is_reinit(void)
 	return ret;
 }
 
-void create_reference_database(unsigned int ref_storage_format,
+void create_reference_database(enum ref_storage_format ref_storage_format,
 			       const char *initial_branch, int quiet)
 {
 	struct strbuf err = STRBUF_INIT;
+	char *to_free = NULL;
 	int reinit = is_reinit();
 
 	repo_set_ref_storage_format(the_repository, ref_storage_format);
-	if (refs_init_db(get_main_ref_store(the_repository), 0, &err))
+	if (ref_store_create_on_disk(get_main_ref_store(the_repository), 0, &err))
 		die("failed to set up refs db: %s", err.buf);
 
 	/*
@@ -1994,14 +2125,15 @@ void create_reference_database(unsigned int ref_storage_format,
 		char *ref;
 
 		if (!initial_branch)
-			initial_branch = git_default_branch_name(quiet);
+			initial_branch = to_free =
+				repo_default_branch_name(the_repository, quiet);
 
 		ref = xstrfmt("refs/heads/%s", initial_branch);
 		if (check_refname_format(ref, 0) < 0)
 			die(_("invalid initial branch name: '%s'"),
 			    initial_branch);
 
-		if (create_symref("HEAD", ref, NULL) < 0)
+		if (refs_update_symref(get_main_ref_store(the_repository), "HEAD", ref, NULL) < 0)
 			exit(1);
 		free(ref);
 	}
@@ -2011,6 +2143,7 @@ void create_reference_database(unsigned int ref_storage_format,
 			initial_branch);
 
 	strbuf_release(&err);
+	free(to_free);
 }
 
 static int create_default_files(const char *template_path,
@@ -2023,7 +2156,6 @@ static int create_default_files(const char *template_path,
 	char *path;
 	int reinit;
 	int filemode;
-	const char *init_template_dir = NULL;
 	const char *work_tree = get_git_work_tree();
 
 	/*
@@ -2035,9 +2167,7 @@ static int create_default_files(const char *template_path,
 	 * values (since we've just potentially changed what's available on
 	 * disk).
 	 */
-	git_config_get_pathname("init.templatedir", &init_template_dir);
-	copy_templates(template_path, init_template_dir);
-	free((char *)init_template_dir);
+	copy_templates(template_path);
 	git_config_clear();
 	reset_shared_repository();
 	git_config(git_default_config, NULL);
@@ -2175,7 +2305,7 @@ static void validate_hash_algorithm(struct repository_format *repo_fmt, int hash
 }
 
 static void validate_ref_storage_format(struct repository_format *repo_fmt,
-					unsigned int format)
+					enum ref_storage_format format)
 {
 	const char *name = getenv("GIT_DEFAULT_REF_FORMAT");
 
@@ -2195,7 +2325,7 @@ static void validate_ref_storage_format(struct repository_format *repo_fmt,
 
 int init_db(const char *git_dir, const char *real_git_dir,
 	    const char *template_dir, int hash,
-	    unsigned int ref_storage_format,
+	    enum ref_storage_format ref_storage_format,
 	    const char *initial_branch,
 	    int init_shared_repository, unsigned int flags)
 {
@@ -2223,12 +2353,6 @@ int init_db(const char *git_dir, const char *real_git_dir,
 	}
 	startup_info->have_repository = 1;
 
-	/* Ensure `core.hidedotfiles` is processed */
-	git_config(platform_core_config, NULL);
-
-	safe_create_dir(git_dir, 0);
-
-
 	/* Check to see if the repository version is right.
 	 * Note that a newly created repository does not have
 	 * config file, so this will not fail.  What we are catching
@@ -2239,15 +2363,24 @@ int init_db(const char *git_dir, const char *real_git_dir,
 	validate_hash_algorithm(&repo_fmt, hash);
 	validate_ref_storage_format(&repo_fmt, ref_storage_format);
 
-	reinit = create_default_files(template_dir, original_git_dir,
-				      &repo_fmt, init_shared_repository);
-
 	/*
 	 * Now that we have set up both the hash algorithm and the ref storage
 	 * format we can update the repository's settings accordingly.
 	 */
 	repo_set_hash_algo(the_repository, repo_fmt.hash_algo);
 	repo_set_ref_storage_format(the_repository, repo_fmt.ref_storage_format);
+
+	/*
+	 * Ensure `core.hidedotfiles` is processed. This must happen after we
+	 * have set up the repository format such that we can evaluate
+	 * includeIf conditions correctly in the case of re-initialization.
+	 */
+	git_config(platform_core_config, NULL);
+
+	safe_create_dir(git_dir, 0);
+
+	reinit = create_default_files(template_dir, original_git_dir,
+				      &repo_fmt, init_shared_repository);
 
 	if (!(flags & INIT_DB_SKIP_REFDB))
 		create_reference_database(repo_fmt.ref_storage_format,

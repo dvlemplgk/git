@@ -33,11 +33,18 @@ struct ref_store *maybe_debug_wrap_ref_store(const char *gitdir, struct ref_stor
 	return (struct ref_store *)res;
 }
 
-static int debug_init_db(struct ref_store *refs, int flags, struct strbuf *err)
+static void debug_release(struct ref_store *refs)
 {
 	struct debug_ref_store *drefs = (struct debug_ref_store *)refs;
-	int res = drefs->refs->be->init_db(drefs->refs, flags, err);
-	trace_printf_key(&trace_refs, "init_db: %d\n", res);
+	drefs->refs->be->release(drefs->refs);
+	trace_printf_key(&trace_refs, "release\n");
+}
+
+static int debug_create_on_disk(struct ref_store *refs, int flags, struct strbuf *err)
+{
+	struct debug_ref_store *drefs = (struct debug_ref_store *)refs;
+	int res = drefs->refs->be->create_on_disk(drefs->refs, flags, err);
+	trace_printf_key(&trace_refs, "create_on_disk: %d\n", res);
 	return res;
 }
 
@@ -128,18 +135,6 @@ static int debug_pack_refs(struct ref_store *ref_store, struct pack_refs_opts *o
 	struct debug_ref_store *drefs = (struct debug_ref_store *)ref_store;
 	int res = drefs->refs->be->pack_refs(drefs->refs, opts);
 	trace_printf_key(&trace_refs, "pack_refs: %d\n", res);
-	return res;
-}
-
-static int debug_create_symref(struct ref_store *ref_store,
-			       const char *ref_name, const char *target,
-			       const char *logmsg)
-{
-	struct debug_ref_store *drefs = (struct debug_ref_store *)ref_store;
-	int res = drefs->refs->be->create_symref(drefs->refs, ref_name, target,
-						 logmsg);
-	trace_printf_key(&trace_refs, "create_symref: %s -> %s \"%s\": %d\n", ref_name,
-		target, logmsg, res);
 	return res;
 }
 
@@ -427,7 +422,8 @@ static int debug_reflog_expire(struct ref_store *ref_store, const char *refname,
 struct ref_storage_be refs_be_debug = {
 	.name = "debug",
 	.init = NULL,
-	.init_db = debug_init_db,
+	.release = debug_release,
+	.create_on_disk = debug_create_on_disk,
 
 	/*
 	 * None of these should be NULL. If the "files" backend (in
@@ -441,7 +437,6 @@ struct ref_storage_be refs_be_debug = {
 	.initial_transaction_commit = debug_initial_transaction_commit,
 
 	.pack_refs = debug_pack_refs,
-	.create_symref = debug_create_symref,
 	.rename_ref = debug_rename_ref,
 	.copy_ref = debug_copy_ref,
 

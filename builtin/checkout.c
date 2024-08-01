@@ -1,4 +1,3 @@
-#define USE_THE_INDEX_VARIABLE
 #include "builtin.h"
 #include "advice.h"
 #include "branch.h"
@@ -146,7 +145,7 @@ static int update_some(const struct object_id *oid, struct strbuf *base,
 		return READ_TREE_RECURSIVE;
 
 	len = base->len + strlen(pathname);
-	ce = make_empty_cache_entry(&the_index, len);
+	ce = make_empty_cache_entry(the_repository->index, len);
 	oidcpy(&ce->oid, oid);
 	memcpy(ce->name, base->buf, base->len);
 	memcpy(ce->name + base->len, pathname, len - base->len);
@@ -159,9 +158,9 @@ static int update_some(const struct object_id *oid, struct strbuf *base,
 	 * entry in place. Whether it is UPTODATE or not, checkout_entry will
 	 * do the right thing.
 	 */
-	pos = index_name_pos(&the_index, ce->name, ce->ce_namelen);
+	pos = index_name_pos(the_repository->index, ce->name, ce->ce_namelen);
 	if (pos >= 0) {
-		struct cache_entry *old = the_index.cache[pos];
+		struct cache_entry *old = the_repository->index->cache[pos];
 		if (ce->ce_mode == old->ce_mode &&
 		    !ce_intent_to_add(old) &&
 		    oideq(&ce->oid, &old->oid)) {
@@ -171,7 +170,7 @@ static int update_some(const struct object_id *oid, struct strbuf *base,
 		}
 	}
 
-	add_index_entry(&the_index, ce,
+	add_index_entry(the_repository->index, ce,
 			ADD_CACHE_OK_TO_ADD | ADD_CACHE_OK_TO_REPLACE);
 	return 0;
 }
@@ -190,8 +189,8 @@ static int read_tree_some(struct tree *tree, const struct pathspec *pathspec)
 
 static int skip_same_name(const struct cache_entry *ce, int pos)
 {
-	while (++pos < the_index.cache_nr &&
-	       !strcmp(the_index.cache[pos]->name, ce->name))
+	while (++pos < the_repository->index->cache_nr &&
+	       !strcmp(the_repository->index->cache[pos]->name, ce->name))
 		; /* skip */
 	return pos;
 }
@@ -199,9 +198,9 @@ static int skip_same_name(const struct cache_entry *ce, int pos)
 static int check_stage(int stage, const struct cache_entry *ce, int pos,
 		       int overlay_mode)
 {
-	while (pos < the_index.cache_nr &&
-	       !strcmp(the_index.cache[pos]->name, ce->name)) {
-		if (ce_stage(the_index.cache[pos]) == stage)
+	while (pos < the_repository->index->cache_nr &&
+	       !strcmp(the_repository->index->cache[pos]->name, ce->name)) {
+		if (ce_stage(the_repository->index->cache[pos]) == stage)
 			return 0;
 		pos++;
 	}
@@ -218,8 +217,8 @@ static int check_stages(unsigned stages, const struct cache_entry *ce, int pos)
 	unsigned seen = 0;
 	const char *name = ce->name;
 
-	while (pos < the_index.cache_nr) {
-		ce = the_index.cache[pos];
+	while (pos < the_repository->index->cache_nr) {
+		ce = the_repository->index->cache[pos];
 		if (strcmp(name, ce->name))
 			break;
 		seen |= (1 << ce_stage(ce));
@@ -235,10 +234,10 @@ static int checkout_stage(int stage, const struct cache_entry *ce, int pos,
 			  const struct checkout *state, int *nr_checkouts,
 			  int overlay_mode)
 {
-	while (pos < the_index.cache_nr &&
-	       !strcmp(the_index.cache[pos]->name, ce->name)) {
-		if (ce_stage(the_index.cache[pos]) == stage)
-			return checkout_entry(the_index.cache[pos], state,
+	while (pos < the_repository->index->cache_nr &&
+	       !strcmp(the_repository->index->cache[pos]->name, ce->name)) {
+		if (ce_stage(the_repository->index->cache[pos]) == stage)
+			return checkout_entry(the_repository->index->cache[pos], state,
 					      NULL, nr_checkouts);
 		pos++;
 	}
@@ -256,7 +255,7 @@ static int checkout_merged(int pos, const struct checkout *state,
 			   int *nr_checkouts, struct mem_pool *ce_mem_pool,
 			   int conflict_style)
 {
-	struct cache_entry *ce = the_index.cache[pos];
+	struct cache_entry *ce = the_repository->index->cache[pos];
 	const char *path = ce->name;
 	mmfile_t ancestor, ours, theirs;
 	enum ll_merge_result merge_status;
@@ -269,7 +268,7 @@ static int checkout_merged(int pos, const struct checkout *state,
 	int renormalize = 0;
 
 	memset(threeway, 0, sizeof(threeway));
-	while (pos < the_index.cache_nr) {
+	while (pos < the_repository->index->cache_nr) {
 		int stage;
 		stage = ce_stage(ce);
 		if (!stage || strcmp(path, ce->name))
@@ -278,7 +277,7 @@ static int checkout_merged(int pos, const struct checkout *state,
 		if (stage == 2)
 			mode = create_ce_mode(ce->ce_mode);
 		pos++;
-		ce = the_index.cache[pos];
+		ce = the_repository->index->cache[pos];
 	}
 	if (is_null_oid(&threeway[1]) || is_null_oid(&threeway[2]))
 		return error(_("path '%s' does not have necessary versions"), path);
@@ -356,7 +355,7 @@ static void mark_ce_for_checkout_overlay(struct cache_entry *ce,
 	 * match_pathspec() for _all_ entries when
 	 * opts->source_tree != NULL.
 	 */
-	if (ce_path_match(&the_index, ce, &opts->pathspec, ps_matched))
+	if (ce_path_match(the_repository->index, ce, &opts->pathspec, ps_matched))
 		ce->ce_flags |= CE_MATCHED;
 }
 
@@ -367,7 +366,7 @@ static void mark_ce_for_checkout_no_overlay(struct cache_entry *ce,
 	ce->ce_flags &= ~CE_MATCHED;
 	if (!opts->ignore_skipworktree && ce_skip_worktree(ce))
 		return;
-	if (ce_path_match(&the_index, ce, &opts->pathspec, ps_matched)) {
+	if (ce_path_match(the_repository->index, ce, &opts->pathspec, ps_matched)) {
 		ce->ce_flags |= CE_MATCHED;
 		if (opts->source_tree && !(ce->ce_flags & CE_UPDATE))
 			/*
@@ -391,7 +390,7 @@ static int checkout_worktree(const struct checkout_opts *opts,
 
 	state.force = 1;
 	state.refresh_cache = 1;
-	state.istate = &the_index;
+	state.istate = the_repository->index;
 
 	mem_pool_init(&ce_mem_pool, 0);
 	get_parallel_checkout_configs(&pc_workers, &pc_threshold);
@@ -404,8 +403,8 @@ static int checkout_worktree(const struct checkout_opts *opts,
 	if (pc_workers > 1)
 		init_parallel_checkout();
 
-	for (pos = 0; pos < the_index.cache_nr; pos++) {
-		struct cache_entry *ce = the_index.cache[pos];
+	for (pos = 0; pos < the_repository->index->cache_nr; pos++) {
+		struct cache_entry *ce = the_repository->index->cache[pos];
 		if (ce->ce_flags & CE_MATCHED) {
 			if (!ce_stage(ce)) {
 				errs |= checkout_entry(ce, &state,
@@ -429,7 +428,7 @@ static int checkout_worktree(const struct checkout_opts *opts,
 		errs |= run_parallel_checkout(&state, pc_workers, pc_threshold,
 					      NULL, NULL);
 	mem_pool_discard(&ce_mem_pool, should_validate_cache_entries());
-	remove_marked_cache_entries(&the_index, 1);
+	remove_marked_cache_entries(the_repository->index, 1);
 	remove_scheduled_dirs();
 	errs |= finish_delayed_checkout(&state, opts->show_progress);
 
@@ -571,7 +570,7 @@ static int checkout_paths(const struct checkout_opts *opts,
 	if (opts->source_tree)
 		read_tree_some(opts->source_tree, &opts->pathspec);
 	if (opts->merge)
-		unmerge_index(&the_index, &opts->pathspec, CE_MATCHED);
+		unmerge_index(the_repository->index, &opts->pathspec, CE_MATCHED);
 
 	ps_matched = xcalloc(opts->pathspec.nr, 1);
 
@@ -579,13 +578,13 @@ static int checkout_paths(const struct checkout_opts *opts,
 	 * Make sure all pathspecs participated in locating the paths
 	 * to be checked out.
 	 */
-	for (pos = 0; pos < the_index.cache_nr; pos++)
+	for (pos = 0; pos < the_repository->index->cache_nr; pos++)
 		if (opts->overlay_mode)
-			mark_ce_for_checkout_overlay(the_index.cache[pos],
+			mark_ce_for_checkout_overlay(the_repository->index->cache[pos],
 						     ps_matched,
 						     opts);
 		else
-			mark_ce_for_checkout_no_overlay(the_index.cache[pos],
+			mark_ce_for_checkout_no_overlay(the_repository->index->cache[pos],
 							ps_matched,
 							opts);
 
@@ -596,8 +595,8 @@ static int checkout_paths(const struct checkout_opts *opts,
 	free(ps_matched);
 
 	/* Any unmerged paths? */
-	for (pos = 0; pos < the_index.cache_nr; pos++) {
-		const struct cache_entry *ce = the_index.cache[pos];
+	for (pos = 0; pos < the_repository->index->cache_nr; pos++) {
+		const struct cache_entry *ce = the_repository->index->cache[pos];
 		if (ce->ce_flags & CE_MATCHED) {
 			if (!ce_stage(ce))
 				continue;
@@ -622,7 +621,7 @@ static int checkout_paths(const struct checkout_opts *opts,
 	if (opts->checkout_worktree)
 		errs |= checkout_worktree(opts, new_branch_info);
 	else
-		remove_marked_cache_entries(&the_index, 1);
+		remove_marked_cache_entries(the_repository->index, 1);
 
 	/*
 	 * Allow updating the index when checking out from the index.
@@ -634,7 +633,7 @@ static int checkout_paths(const struct checkout_opts *opts,
 		checkout_index = opts->checkout_index;
 
 	if (checkout_index) {
-		if (write_locked_index(&the_index, &lock_file, COMMIT_LOCK))
+		if (write_locked_index(the_repository->index, &lock_file, COMMIT_LOCK))
 			die(_("unable to write new index file"));
 	} else {
 		/*
@@ -646,7 +645,8 @@ static int checkout_paths(const struct checkout_opts *opts,
 		rollback_lock_file(&lock_file);
 	}
 
-	read_ref_full("HEAD", 0, &rev, NULL);
+	refs_read_ref_full(get_main_ref_store(the_repository), "HEAD", 0,
+			   &rev, NULL);
 	head = lookup_commit_reference_gently(the_repository, &rev, 1);
 
 	errs |= post_checkout_hook(head, head, 0);
@@ -703,8 +703,8 @@ static int reset_tree(struct tree *tree, const struct checkout_opts *o,
 	opts.merge = 1;
 	opts.fn = oneway_merge;
 	opts.verbose_update = o->show_progress;
-	opts.src_index = &the_index;
-	opts.dst_index = &the_index;
+	opts.src_index = the_repository->index;
+	opts.dst_index = the_repository->index;
 	init_checkout_metadata(&opts.meta, info->refname,
 			       info->commit ? &info->commit->object.oid : null_oid(),
 			       NULL);
@@ -756,12 +756,12 @@ static void init_topts(struct unpack_trees_options *topts, int merge,
 {
 	memset(topts, 0, sizeof(*topts));
 	topts->head_idx = -1;
-	topts->src_index = &the_index;
-	topts->dst_index = &the_index;
+	topts->src_index = the_repository->index;
+	topts->dst_index = the_repository->index;
 
 	setup_unpack_trees_porcelain(topts, "checkout");
 
-	topts->initial_checkout = is_index_unborn(&the_index);
+	topts->initial_checkout = is_index_unborn(the_repository->index);
 	topts->update = 1;
 	topts->merge = 1;
 	topts->quiet = merge && old_commit;
@@ -783,7 +783,7 @@ static int merge_working_tree(const struct checkout_opts *opts,
 	if (repo_read_index_preload(the_repository, NULL, 0) < 0)
 		return error(_("index file corrupt"));
 
-	resolve_undo_clear_index(&the_index);
+	resolve_undo_clear_index(the_repository->index);
 	if (opts->new_orphan_branch && opts->orphan_from_empty_tree) {
 		if (new_branch_info->commit)
 			BUG("'switch --orphan' should never accept a commit as starting point");
@@ -807,9 +807,9 @@ static int merge_working_tree(const struct checkout_opts *opts,
 		struct unpack_trees_options topts;
 		const struct object_id *old_commit_oid;
 
-		refresh_index(&the_index, REFRESH_QUIET, NULL, NULL, NULL);
+		refresh_index(the_repository->index, REFRESH_QUIET, NULL, NULL, NULL);
 
-		if (unmerged_index(&the_index)) {
+		if (unmerged_index(the_repository->index)) {
 			error(_("you need to resolve your current index first"));
 			return 1;
 		}
@@ -919,10 +919,10 @@ static int merge_working_tree(const struct checkout_opts *opts,
 		}
 	}
 
-	if (!cache_tree_fully_valid(the_index.cache_tree))
-		cache_tree_update(&the_index, WRITE_TREE_SILENT | WRITE_TREE_REPAIR);
+	if (!cache_tree_fully_valid(the_repository->index->cache_tree))
+		cache_tree_update(the_repository->index, WRITE_TREE_SILENT | WRITE_TREE_REPAIR);
 
-	if (write_locked_index(&the_index, &lock_file, COMMIT_LOCK))
+	if (write_locked_index(the_repository->index, &lock_file, COMMIT_LOCK))
 		die(_("unable to write new index file"));
 
 	if (!opts->discard_changes && !opts->quiet && new_branch_info->commit)
@@ -958,7 +958,8 @@ static void update_refs_for_switch(const struct checkout_opts *opts,
 				int ret;
 				struct strbuf err = STRBUF_INIT;
 
-				ret = safe_create_reflog(refname, &err);
+				ret = refs_create_reflog(get_main_ref_store(the_repository),
+							 refname, &err);
 				if (ret) {
 					fprintf(stderr, _("Can not do reflog for '%s': %s\n"),
 						opts->new_orphan_branch, err.buf);
@@ -999,8 +1000,10 @@ static void update_refs_for_switch(const struct checkout_opts *opts,
 	if (!strcmp(new_branch_info->name, "HEAD") && !new_branch_info->path && !opts->force_detach) {
 		/* Nothing to do. */
 	} else if (opts->force_detach || !new_branch_info->path) {	/* No longer on any branch. */
-		update_ref(msg.buf, "HEAD", &new_branch_info->commit->object.oid, NULL,
-			   REF_NO_DEREF, UPDATE_REFS_DIE_ON_ERR);
+		refs_update_ref(get_main_ref_store(the_repository), msg.buf,
+				"HEAD", &new_branch_info->commit->object.oid,
+				NULL,
+				REF_NO_DEREF, UPDATE_REFS_DIE_ON_ERR);
 		if (!opts->quiet) {
 			if (old_branch_info->path &&
 			    advice_enabled(ADVICE_DETACHED_HEAD) && !opts->force_detach)
@@ -1008,7 +1011,7 @@ static void update_refs_for_switch(const struct checkout_opts *opts,
 			describe_detached_head(_("HEAD is now at"), new_branch_info->commit);
 		}
 	} else if (new_branch_info->path) {	/* Switch branches. */
-		if (create_symref("HEAD", new_branch_info->path, msg.buf) < 0)
+		if (refs_update_symref(get_main_ref_store(the_repository), "HEAD", new_branch_info->path, msg.buf) < 0)
 			die(_("unable to update HEAD"));
 		if (!opts->quiet) {
 			if (old_branch_info->path && !strcmp(new_branch_info->path, old_branch_info->path)) {
@@ -1029,8 +1032,9 @@ static void update_refs_for_switch(const struct checkout_opts *opts,
 			}
 		}
 		if (old_branch_info->path && old_branch_info->name) {
-			if (!ref_exists(old_branch_info->path) && reflog_exists(old_branch_info->path))
-				delete_reflog(old_branch_info->path);
+			if (!refs_ref_exists(get_main_ref_store(the_repository), old_branch_info->path) && refs_reflog_exists(get_main_ref_store(the_repository), old_branch_info->path))
+				refs_delete_reflog(get_main_ref_store(the_repository),
+						   old_branch_info->path);
 		}
 	}
 	remove_branch_state(the_repository, !opts->quiet);
@@ -1129,7 +1133,8 @@ static void orphaned_commit_warning(struct commit *old_commit, struct commit *ne
 	object->flags &= ~UNINTERESTING;
 	add_pending_object(&revs, object, oid_to_hex(&object->oid));
 
-	for_each_ref(add_pending_uninteresting_ref, &revs);
+	refs_for_each_ref(get_main_ref_store(the_repository),
+			  add_pending_uninteresting_ref, &revs);
 	if (new_commit)
 		add_pending_oid(&revs, "HEAD",
 				&new_commit->object.oid,
@@ -1159,7 +1164,8 @@ static int switch_branches(const struct checkout_opts *opts,
 	trace2_cmd_mode("branch");
 
 	memset(&old_branch_info, 0, sizeof(old_branch_info));
-	old_branch_info.path = resolve_refdup("HEAD", 0, &rev, &flag);
+	old_branch_info.path = refs_resolve_refdup(get_main_ref_store(the_repository),
+						   "HEAD", 0, &rev, &flag);
 	if (old_branch_info.path)
 		old_branch_info.commit = lookup_commit_reference_gently(the_repository, &rev, 1);
 	if (!(flag & REF_ISSYMREF))
@@ -1247,7 +1253,7 @@ static void setup_new_branch_info_and_source_tree(
 	setup_branch_path(new_branch_info);
 
 	if (!check_refname_format(new_branch_info->path, 0) &&
-	    !read_ref(new_branch_info->path, &branch_rev))
+	    !refs_read_ref(get_main_ref_store(the_repository), new_branch_info->path, &branch_rev))
 		oidcpy(rev, &branch_rev);
 	else
 		/* not an existing branch */
@@ -1269,12 +1275,12 @@ static void setup_new_branch_info_and_source_tree(
 	}
 }
 
-static const char *parse_remote_branch(const char *arg,
-				       struct object_id *rev,
-				       int could_be_checkout_paths)
+static char *parse_remote_branch(const char *arg,
+				 struct object_id *rev,
+				 int could_be_checkout_paths)
 {
 	int num_matches = 0;
-	const char *remote = unique_tracking_name(arg, rev, &num_matches);
+	char *remote = unique_tracking_name(arg, rev, &num_matches);
 
 	if (remote && could_be_checkout_paths) {
 		die(_("'%s' could be both a local file and a tracking branch.\n"
@@ -1310,6 +1316,7 @@ static int parse_branchname_arg(int argc, const char **argv,
 	const char **new_branch = &opts->new_branch;
 	int argcount = 0;
 	const char *arg;
+	char *remote = NULL;
 	int dash_dash_pos;
 	int has_dash_dash = 0;
 	int i;
@@ -1410,8 +1417,8 @@ static int parse_branchname_arg(int argc, const char **argv,
 			recover_with_dwim = 0;
 
 		if (recover_with_dwim) {
-			const char *remote = parse_remote_branch(arg, rev,
-								 could_be_checkout_paths);
+			remote = parse_remote_branch(arg, rev,
+						     could_be_checkout_paths);
 			if (remote) {
 				*new_branch = arg;
 				arg = remote;
@@ -1453,6 +1460,7 @@ static int parse_branchname_arg(int argc, const char **argv,
 		argc--;
 	}
 
+	free(remote);
 	return argcount;
 }
 
@@ -1466,7 +1474,8 @@ static int switch_unborn_to_new_branch(const struct checkout_opts *opts)
 	if (!opts->new_branch)
 		die(_("You are on a branch yet to be born"));
 	strbuf_addf(&branch_ref, "refs/heads/%s", opts->new_branch);
-	status = create_symref("HEAD", branch_ref.buf, "checkout -b");
+	status = refs_update_symref(get_main_ref_store(the_repository),
+				    "HEAD", branch_ref.buf, "checkout -b");
 	strbuf_release(&branch_ref);
 	if (!opts->quiet)
 		fprintf(stderr, _("Switched to a new branch '%s'\n"),
@@ -1553,7 +1562,8 @@ static void die_if_switching_to_a_branch_in_use(struct checkout_opts *opts,
 
 	if (opts->ignore_other_worktrees)
 		return;
-	head_ref = resolve_refdup("HEAD", 0, NULL, &flags);
+	head_ref = refs_resolve_refdup(get_main_ref_store(the_repository),
+				       "HEAD", 0, NULL, &flags);
 	if (head_ref && (!(flags & REF_ISSYMREF) || strcmp(head_ref, full_ref)))
 		die_if_checked_out(full_ref, 1);
 	free(head_ref);
@@ -1634,7 +1644,7 @@ static int checkout_branch(struct checkout_opts *opts,
 		struct object_id rev;
 		int flag;
 
-		if (!read_ref_full("HEAD", 0, &rev, &flag) &&
+		if (!refs_read_ref_full(get_main_ref_store(the_repository), "HEAD", 0, &rev, &flag) &&
 		    (flag & REF_ISSYMREF) && is_null_oid(&rev))
 			return switch_unborn_to_new_branch(opts);
 	}

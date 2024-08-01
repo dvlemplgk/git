@@ -1,4 +1,3 @@
-#define USE_THE_INDEX_VARIABLE
 #include "builtin.h"
 #include "config.h"
 #include "environment.h"
@@ -52,6 +51,10 @@ static struct commit_names commit_names;
 /* diff-index command arguments to check if working tree is dirty. */
 static const char *diff_index_args[] = {
 	"diff-index", "--quiet", "HEAD", "--", NULL
+};
+
+static const char *update_index_args[] = {
+	"update-index", "--unmerged", "-q", "--refresh", NULL
 };
 
 struct commit_name {
@@ -201,7 +204,7 @@ static int get_name(const char *path, const struct object_id *oid,
 	}
 
 	/* Is it annotated? */
-	if (!peel_iterated_oid(oid, &peeled)) {
+	if (!peel_iterated_oid(the_repository, oid, &peeled)) {
 		is_annotated = !oideq(oid, &peeled);
 	} else {
 		oidcpy(&peeled, oid);
@@ -638,13 +641,22 @@ int cmd_describe(int argc, const char **argv, const char *prefix)
 	}
 
 	hashmap_init(&names, commit_name_neq, NULL, 0);
-	for_each_rawref(get_name, NULL);
+	refs_for_each_rawref(get_main_ref_store(the_repository), get_name,
+			     NULL);
 	if (!hashmap_get_size(&names) && !always)
 		die(_("No names found, cannot describe anything."));
 
 	if (argc == 0) {
 		if (broken) {
 			struct child_process cp = CHILD_PROCESS_INIT;
+
+			strvec_pushv(&cp.args, update_index_args);
+			cp.git_cmd = 1;
+			cp.no_stdin = 1;
+			cp.no_stdout = 1;
+			run_command(&cp);
+
+			child_process_init(&cp);
 			strvec_pushv(&cp.args, diff_index_args);
 			cp.git_cmd = 1;
 			cp.no_stdin = 1;
@@ -674,7 +686,7 @@ int cmd_describe(int argc, const char **argv, const char *prefix)
 			prepare_repo_settings(the_repository);
 			the_repository->settings.command_requires_full_index = 0;
 			repo_read_index(the_repository);
-			refresh_index(&the_index, REFRESH_QUIET|REFRESH_UNMERGED,
+			refresh_index(the_repository->index, REFRESH_QUIET|REFRESH_UNMERGED,
 				      NULL, NULL, NULL);
 			fd = repo_hold_locked_index(the_repository,
 						    &index_lock, 0);

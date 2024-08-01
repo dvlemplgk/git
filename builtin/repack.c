@@ -48,10 +48,10 @@ static const char incremental_bitmap_conflict_error[] = N_(
 );
 
 struct pack_objects_args {
-	const char *window;
-	const char *window_memory;
-	const char *depth;
-	const char *threads;
+	char *window;
+	char *window_memory;
+	char *depth;
+	char *threads;
 	unsigned long max_pack_size;
 	int no_reuse_delta;
 	int no_reuse_object;
@@ -673,7 +673,7 @@ static int midx_snapshot_ref_one(const char *refname UNUSED,
 	struct midx_snapshot_ref_data *data = _data;
 	struct object_id peeled;
 
-	if (!peel_iterated_oid(oid, &peeled))
+	if (!peel_iterated_oid(the_repository, oid, &peeled))
 		oid = &peeled;
 
 	if (oidset_insert(&data->seen, oid))
@@ -706,11 +706,14 @@ static void midx_snapshot_refs(struct tempfile *f)
 
 		data.preferred = 1;
 		for_each_string_list_item(item, preferred)
-			for_each_ref_in(item->string, midx_snapshot_ref_one, &data);
+			refs_for_each_ref_in(get_main_ref_store(the_repository),
+					     item->string,
+					     midx_snapshot_ref_one, &data);
 		data.preferred = 0;
 	}
 
-	for_each_ref(midx_snapshot_ref_one, &data);
+	refs_for_each_ref(get_main_ref_store(the_repository),
+			  midx_snapshot_ref_one, &data);
 
 	if (close_tempfile_gently(f)) {
 		int save_errno = errno;

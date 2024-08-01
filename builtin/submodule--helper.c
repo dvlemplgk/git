@@ -1,4 +1,3 @@
-#define USE_THE_INDEX_VARIABLE
 #include "builtin.h"
 #include "abspath.h"
 #include "environment.h"
@@ -207,18 +206,18 @@ static int module_list_compute(const char **argv,
 	if (repo_read_index(the_repository) < 0)
 		die(_("index file corrupt"));
 
-	for (i = 0; i < the_index.cache_nr; i++) {
-		const struct cache_entry *ce = the_index.cache[i];
+	for (i = 0; i < the_repository->index->cache_nr; i++) {
+		const struct cache_entry *ce = the_repository->index->cache[i];
 
-		if (!match_pathspec(&the_index, pathspec, ce->name, ce_namelen(ce),
+		if (!match_pathspec(the_repository->index, pathspec, ce->name, ce_namelen(ce),
 				    0, ps_matched, 1) ||
 		    !S_ISGITLINK(ce->ce_mode))
 			continue;
 
 		ALLOC_GROW(list->entries, list->nr + 1, list->alloc);
 		list->entries[list->nr++] = ce;
-		while (i + 1 < the_index.cache_nr &&
-		       !strcmp(ce->name, the_index.cache[i + 1]->name))
+		while (i + 1 < the_repository->index->cache_nr &&
+		       !strcmp(ce->name, the_repository->index->cache[i + 1]->name))
 			/*
 			 * Skip entries with the same name in different stages
 			 * to make sure an entry is returned only once.
@@ -257,11 +256,9 @@ static void module_list_active(struct module_list *list)
 
 static char *get_up_path(const char *path)
 {
-	int i;
 	struct strbuf sb = STRBUF_INIT;
 
-	for (i = count_slashes(path); i; i--)
-		strbuf_addstr(&sb, "../");
+	strbuf_addstrings(&sb, "../", count_slashes(path));
 
 	/*
 	 * Check if 'path' ends with slash or not
@@ -302,6 +299,9 @@ static void runcommand_in_submodule_cb(const struct cache_entry *list_item,
 	const struct submodule *sub;
 	struct child_process cp = CHILD_PROCESS_INIT;
 	char *displaypath;
+
+	if (validate_submodule_path(path) < 0)
+		exit(128);
 
 	displaypath = get_submodule_displaypath(path, info->prefix,
 						info->super_prefix);
@@ -376,8 +376,7 @@ static void runcommand_in_submodule_cb(const struct cache_entry *list_item,
 
 		strvec_pushl(&cpr.args, "submodule--helper", "foreach", "--recursive",
 			     NULL);
-		strvec_pushl(&cpr.args, "--super-prefix", NULL);
-		strvec_pushf(&cpr.args, "%s/", displaypath);
+		strvec_pushf(&cpr.args, "--super-prefix=%s/", displaypath);
 
 		if (info->quiet)
 			strvec_push(&cpr.args, "--quiet");
@@ -634,6 +633,9 @@ static void status_submodule(const char *path, const struct object_id *ce_oid,
 		.free_removed_argv_elements = 1,
 	};
 
+	if (validate_submodule_path(path) < 0)
+		exit(128);
+
 	if (!submodule_from_path(the_repository, null_oid(), path))
 		die(_("no submodule mapping found in .gitmodules for path '%s'"),
 		      path);
@@ -674,7 +676,8 @@ static void status_submodule(const char *path, const struct object_id *ce_oid,
 			     displaypath);
 	} else if (!(flags & OPT_CACHED)) {
 		struct object_id oid;
-		struct ref_store *refs = get_submodule_ref_store(path);
+		struct ref_store *refs = repo_get_submodule_ref_store(the_repository,
+								      path);
 
 		if (!refs) {
 			print_status(flags, '-', path, ce_oid, displaypath);
@@ -698,8 +701,7 @@ static void status_submodule(const char *path, const struct object_id *ce_oid,
 
 		strvec_pushl(&cpr.args, "submodule--helper", "status",
 			     "--recursive", NULL);
-		strvec_push(&cpr.args, "--super-prefix");
-		strvec_pushf(&cpr.args, "%s/", displaypath);
+		strvec_pushf(&cpr.args, "--super-prefix=%s/", displaypath);
 
 		if (flags & OPT_CACHED)
 			strvec_push(&cpr.args, "--cached");
@@ -898,7 +900,8 @@ static void generate_submodule_summary(struct summary_cb *info,
 
 	if (!info->cached && oideq(&p->oid_dst, null_oid())) {
 		if (S_ISGITLINK(p->mod_dst)) {
-			struct ref_store *refs = get_submodule_ref_store(p->sm_path);
+			struct ref_store *refs = repo_get_submodule_ref_store(the_repository,
+									      p->sm_path);
 
 			if (refs)
 				refs_head_ref(refs, handle_submodule_head_ref, &p->oid_dst);
@@ -907,7 +910,7 @@ static void generate_submodule_summary(struct summary_cb *info,
 			int fd = open(p->sm_path, O_RDONLY);
 
 			if (fd < 0 || fstat(fd, &st) < 0 ||
-			    index_fd(&the_index, &p->oid_dst, fd, &st, OBJ_BLOB,
+			    index_fd(the_repository->index, &p->oid_dst, fd, &st, OBJ_BLOB,
 				     p->sm_path, 0))
 				error(_("couldn't hash object from '%s'"), p->sm_path);
 		} else {
@@ -1238,6 +1241,9 @@ static void sync_submodule(const char *path, const char *prefix,
 	if (!is_submodule_active(the_repository, path))
 		return;
 
+	if (validate_submodule_path(path) < 0)
+		exit(128);
+
 	sub = submodule_from_path(the_repository, null_oid(), path);
 
 	if (sub && sub->url) {
@@ -1296,9 +1302,7 @@ static void sync_submodule(const char *path, const char *prefix,
 
 		strvec_pushl(&cpr.args, "submodule--helper", "sync",
 			     "--recursive", NULL);
-		strvec_push(&cpr.args, "--super-prefix");
-		strvec_pushf(&cpr.args, "%s/", displaypath);
-
+		strvec_pushf(&cpr.args, "--super-prefix=%s/", displaypath);
 
 		if (flags & OPT_QUIET)
 			strvec_push(&cpr.args, "--quiet");
@@ -1380,6 +1384,9 @@ static void deinit_submodule(const char *path, const char *prefix,
 	struct child_process cp_config = CHILD_PROCESS_INIT;
 	struct strbuf sb_config = STRBUF_INIT;
 	char *sub_git_dir = xstrfmt("%s/.git", path);
+
+	if (validate_submodule_path(path) < 0)
+		exit(128);
 
 	sub = submodule_from_path(the_repository, null_oid(), path);
 
@@ -1662,15 +1669,41 @@ static char *clone_submodule_sm_gitdir(const char *name)
 	return sm_gitdir;
 }
 
+static int dir_contains_only_dotgit(const char *path)
+{
+	DIR *dir = opendir(path);
+	struct dirent *e;
+	int ret = 1;
+
+	if (!dir)
+		return 0;
+
+	e = readdir_skip_dot_and_dotdot(dir);
+	if (!e)
+		ret = 0;
+	else if (strcmp(DEFAULT_GIT_DIR_ENVIRONMENT, e->d_name) ||
+		 (e = readdir_skip_dot_and_dotdot(dir))) {
+		error("unexpected item '%s' in '%s'", e->d_name, path);
+		ret = 0;
+	}
+
+	closedir(dir);
+	return ret;
+}
+
 static int clone_submodule(const struct module_clone_data *clone_data,
 			   struct string_list *reference)
 {
 	char *p;
 	char *sm_gitdir = clone_submodule_sm_gitdir(clone_data->name);
 	char *sm_alternate = NULL, *error_strategy = NULL;
+	struct stat st;
 	struct child_process cp = CHILD_PROCESS_INIT;
 	const char *clone_data_path = clone_data->path;
 	char *to_free = NULL;
+
+	if (validate_submodule_path(clone_data_path) < 0)
+		exit(128);
 
 	if (!is_absolute_path(clone_data->path))
 		clone_data_path = to_free = xstrfmt("%s/%s", get_git_work_tree(),
@@ -1681,6 +1714,10 @@ static int clone_submodule(const struct module_clone_data *clone_data,
 		      "git dir"), sm_gitdir);
 
 	if (!file_exists(sm_gitdir)) {
+		if (clone_data->require_init && !stat(clone_data_path, &st) &&
+		    !is_empty_dir(clone_data_path))
+			die(_("directory not empty: '%s'"), clone_data_path);
+
 		if (safe_create_leading_directories_const(sm_gitdir) < 0)
 			die(_("could not create directory '%s'"), sm_gitdir);
 
@@ -1725,10 +1762,18 @@ static int clone_submodule(const struct module_clone_data *clone_data,
 		if(run_command(&cp))
 			die(_("clone of '%s' into submodule path '%s' failed"),
 			    clone_data->url, clone_data_path);
+
+		if (clone_data->require_init && !stat(clone_data_path, &st) &&
+		    !dir_contains_only_dotgit(clone_data_path)) {
+			char *dot_git = xstrfmt("%s/.git", clone_data_path);
+			unlink(dot_git);
+			free(dot_git);
+			die(_("directory not empty: '%s'"), clone_data_path);
+		}
 	} else {
 		char *path;
 
-		if (clone_data->require_init && !access(clone_data_path, X_OK) &&
+		if (clone_data->require_init && !stat(clone_data_path, &st) &&
 		    !is_empty_dir(clone_data_path))
 			die(_("directory not empty: '%s'"), clone_data_path);
 		if (safe_create_leading_directories_const(clone_data_path) < 0)
@@ -1736,6 +1781,23 @@ static int clone_submodule(const struct module_clone_data *clone_data,
 		path = xstrfmt("%s/index", sm_gitdir);
 		unlink_or_warn(path);
 		free(path);
+	}
+
+	/*
+	 * We already performed this check at the beginning of this function,
+	 * before cloning the objects. This tries to detect racy behavior e.g.
+	 * in parallel clones, where another process could easily have made the
+	 * gitdir nested _after_ it was created.
+	 *
+	 * To prevent further harm coming from this unintentionally-nested
+	 * gitdir, let's disable it by deleting the `HEAD` file.
+	 */
+	if (validate_submodule_git_dir(sm_gitdir, clone_data->name) < 0) {
+		char *head = xstrfmt("%s/HEAD", sm_gitdir);
+		unlink(head);
+		free(head);
+		die(_("refusing to create/use '%s' in another submodule's "
+		      "git dir"), sm_gitdir);
 	}
 
 	connect_work_tree_and_git_dir(clone_data_path, sm_gitdir, 0);
@@ -2390,7 +2452,9 @@ static int remote_submodule_branch(const char *path, const char **branch)
 	}
 
 	if (!strcmp(*branch, ".")) {
-		const char *refname = resolve_ref_unsafe("HEAD", 0, NULL, NULL);
+		const char *refname = refs_resolve_ref_unsafe(get_main_ref_store(the_repository),
+							      "HEAD", 0, NULL,
+							      NULL);
 
 		if (!refname)
 			return die_message(_("No such ref: %s"), "HEAD");
@@ -2466,10 +2530,9 @@ static void update_data_to_args(const struct update_data *update_data,
 	enum submodule_update_type update_type = update_data->update_default;
 
 	strvec_pushl(args, "submodule--helper", "update", "--recursive", NULL);
-	if (update_data->displaypath) {
-		strvec_push(args, "--super-prefix");
-		strvec_pushf(args, "%s/", update_data->displaypath);
-	}
+	if (update_data->displaypath)
+		strvec_pushf(args, "--super-prefix=%s/",
+			     update_data->displaypath);
 	strvec_pushf(args, "--jobs=%d", update_data->max_jobs);
 	if (update_data->quiet)
 		strvec_push(args, "--quiet");
@@ -2517,6 +2580,9 @@ static int update_submodule(struct update_data *update_data)
 {
 	int ret;
 
+	if (validate_submodule_path(update_data->sm_path) < 0)
+		return -1;
+
 	ret = determine_submodule_update_strategy(the_repository,
 						  update_data->just_cloned,
 						  update_data->sm_path,
@@ -2527,7 +2593,8 @@ static int update_submodule(struct update_data *update_data)
 
 	if (update_data->just_cloned)
 		oidcpy(&update_data->suboid, null_oid());
-	else if (resolve_gitlink_ref(update_data->sm_path, "HEAD", &update_data->suboid))
+	else if (repo_resolve_gitlink_ref(the_repository, update_data->sm_path,
+					  "HEAD", &update_data->suboid))
 		return die_message(_("Unable to find current revision in submodule path '%s'"),
 				   update_data->displaypath);
 
@@ -2554,7 +2621,8 @@ static int update_submodule(struct update_data *update_data)
 						   update_data->sm_path);
 		}
 
-		if (resolve_gitlink_ref(update_data->sm_path, remote_ref, &update_data->oid))
+		if (repo_resolve_gitlink_ref(the_repository, update_data->sm_path,
+					     remote_ref, &update_data->oid))
 			return die_message(_("Unable to find %s revision in submodule path '%s'"),
 					   remote_ref, update_data->sm_path);
 
@@ -2624,11 +2692,20 @@ static int update_submodules(struct update_data *update_data)
 
 	for (i = 0; i < suc.update_clone_nr; i++) {
 		struct update_clone_data ucd = suc.update_clone[i];
-		int code;
+		int code = 128;
 
 		oidcpy(&update_data->oid, &ucd.oid);
 		update_data->just_cloned = ucd.just_cloned;
 		update_data->sm_path = ucd.sub->path;
+
+		/*
+		 * Verify that the submodule path does not contain any
+		 * symlinks; if it does, it might have been tampered with.
+		 * TODO: allow exempting it via
+		 * `safe.submodule.path` or something
+		 */
+		if (validate_submodule_path(update_data->sm_path) < 0)
+			goto fail;
 
 		code = ensure_core_worktree(update_data->sm_path);
 		if (code)
@@ -2796,7 +2873,8 @@ static int push_check(int argc, const char **argv, const char *prefix UNUSED)
 	argv++;
 	argc--;
 	/* Get the submodule's head ref and determine if it is detached */
-	head = resolve_refdup("HEAD", 0, &head_oid, NULL);
+	head = refs_resolve_refdup(get_main_ref_store(the_repository), "HEAD",
+				   0, &head_oid, NULL);
 	if (!head)
 		die(_("Failed to resolve HEAD as a valid ref."));
 	if (!strcmp(head, "HEAD"))
@@ -3243,21 +3321,21 @@ static void die_on_index_match(const char *path, int force)
 		char *ps_matched = xcalloc(ps.nr, 1);
 
 		/* TODO: audit for interaction with sparse-index. */
-		ensure_full_index(&the_index);
+		ensure_full_index(the_repository->index);
 
 		/*
 		 * Since there is only one pathspec, we just need to
 		 * check ps_matched[0] to know if a cache entry matched.
 		 */
-		for (i = 0; i < the_index.cache_nr; i++) {
-			ce_path_match(&the_index, the_index.cache[i], &ps,
+		for (i = 0; i < the_repository->index->cache_nr; i++) {
+			ce_path_match(the_repository->index, the_repository->index->cache[i], &ps,
 				      ps_matched);
 
 			if (ps_matched[0]) {
 				if (!force)
 					die(_("'%s' already exists in the index"),
 					    path);
-				if (!S_ISGITLINK(the_index.cache[i]->ce_mode))
+				if (!S_ISGITLINK(the_repository->index->cache[i]->ce_mode))
 					die(_("'%s' already exists in the index "
 					      "and is not a submodule"), path);
 				break;
@@ -3274,7 +3352,7 @@ static void die_on_repo_without_commits(const char *path)
 	strbuf_addstr(&sb, path);
 	if (is_nonbare_repository_dir(&sb)) {
 		struct object_id oid;
-		if (resolve_gitlink_ref(path, "HEAD", &oid) < 0)
+		if (repo_resolve_gitlink_ref(the_repository, path, "HEAD", &oid) < 0)
 			die(_("'%s' does not have a commit checked out"), path);
 	}
 	strbuf_release(&sb);
@@ -3355,6 +3433,9 @@ static int module_add(int argc, const char **argv, const char *prefix)
 	 */
 	normalize_path_copy(add_data.sm_path, add_data.sm_path);
 	strip_dir_trailing_slashes(add_data.sm_path);
+
+	if (validate_submodule_path(add_data.sm_path) < 0)
+		exit(128);
 
 	die_on_index_match(add_data.sm_path, force);
 	die_on_repo_without_commits(add_data.sm_path);

@@ -232,7 +232,7 @@ void git_config(config_fn_t fn, void *);
  * sets `opts.respect_includes` to `1` by default.
  */
 int config_with_options(config_fn_t fn, void *,
-			struct git_config_source *config_source,
+			const struct git_config_source *config_source,
 			struct repository *repo,
 			const struct config_options *opts);
 
@@ -262,6 +262,13 @@ ssize_t git_config_ssize_t(const char *, const char *,
 			   const struct key_value_info *);
 
 /**
+ * Identically to `git_config_double`, but for double-precision floating point
+ * values.
+ */
+double git_config_double(const char *, const char *,
+			 const struct key_value_info *);
+
+/**
  * Same as `git_config_bool`, except that integers are returned as-is, and
  * an `is_bool` flag is unset.
  */
@@ -280,13 +287,13 @@ int git_config_bool(const char *, const char *);
  * Allocates and copies the value string into the `dest` parameter; if no
  * string is given, prints an error message and returns -1.
  */
-int git_config_string(const char **, const char *, const char *);
+int git_config_string(char **, const char *, const char *);
 
 /**
  * Similar to `git_config_string`, but expands `~` or `~user` into the
  * user's home directory when found at the beginning of the path.
  */
-int git_config_pathname(const char **, const char *, const char *);
+int git_config_pathname(char **, const char *, const char *);
 
 int git_config_expiry_date(timestamp_t *, const char *, const char *);
 int git_config_color(char *, const char *, const char *);
@@ -338,7 +345,7 @@ void git_config_set_multivar(const char *, const char *, const char *, unsigned)
 int repo_config_set_multivar_gently(struct repository *, const char *, const char *, const char *, unsigned);
 int git_config_set_multivar_in_file_gently(const char *, const char *, const char *, const char *, const char *, unsigned);
 
-const char *git_config_prepare_comment_string(const char *);
+char *git_config_prepare_comment_string(const char *);
 
 /**
  * takes four parameters:
@@ -541,7 +548,7 @@ int git_configset_get_ulong(struct config_set *cs, const char *key, unsigned lon
 int git_configset_get_bool(struct config_set *cs, const char *key, int *dest);
 int git_configset_get_bool_or_int(struct config_set *cs, const char *key, int *is_bool, int *dest);
 int git_configset_get_maybe_bool(struct config_set *cs, const char *key, int *dest);
-int git_configset_get_pathname(struct config_set *cs, const char *key, const char **dest);
+int git_configset_get_pathname(struct config_set *cs, const char *key, char **dest);
 
 /* Functions for reading a repository's config */
 struct repository;
@@ -577,7 +584,7 @@ int repo_config_get_bool_or_int(struct repository *repo,
 int repo_config_get_maybe_bool(struct repository *repo,
 			       const char *key, int *dest);
 int repo_config_get_pathname(struct repository *repo,
-			     const char *key, const char **dest);
+			     const char *key, char **dest);
 
 /*
  * Functions for reading protected config. By definition, protected
@@ -687,7 +694,7 @@ int git_config_get_maybe_bool(const char *key, int *dest);
  * Similar to `git_config_get_string`, but expands `~` or `~user` into
  * the user's home directory when found at the beginning of the path.
  */
-int git_config_get_pathname(const char *key, const char **dest);
+int git_config_get_pathname(const char *key, char **dest);
 
 int git_config_get_index_threads(int *dest);
 int git_config_get_split_index(void);

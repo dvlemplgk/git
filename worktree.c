@@ -1,3 +1,5 @@
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "git-compat-util.h"
 #include "abspath.h"
 #include "environment.h"
@@ -53,6 +55,15 @@ static void add_head_info(struct worktree *wt)
 		wt->is_detached = 1;
 }
 
+static int is_current_worktree(struct worktree *wt)
+{
+	char *git_dir = absolute_pathdup(get_git_dir());
+	const char *wt_git_dir = get_worktree_git_dir(wt);
+	int is_current = !fspathcmp(git_dir, absolute_path(wt_git_dir));
+	free(git_dir);
+	return is_current;
+}
+
 /**
  * get the main worktree
  */
@@ -65,6 +76,7 @@ static struct worktree *get_main_worktree(int skip_reading_head)
 	strbuf_strip_suffix(&worktree_path, "/.git");
 
 	CALLOC_ARRAY(worktree, 1);
+	worktree->repo = the_repository;
 	worktree->path = strbuf_detach(&worktree_path, NULL);
 	/*
 	 * NEEDSWORK: If this function is called from a secondary worktree and
@@ -75,6 +87,7 @@ static struct worktree *get_main_worktree(int skip_reading_head)
 	 */
 	worktree->is_bare = (is_bare_repository_cfg == 1) ||
 		is_bare_repository();
+	worktree->is_current = is_current_worktree(worktree);
 	if (!skip_reading_head)
 		add_head_info(worktree);
 	return worktree;
@@ -98,8 +111,10 @@ struct worktree *get_linked_worktree(const char *id,
 	strbuf_strip_suffix(&worktree_path, "/.git");
 
 	CALLOC_ARRAY(worktree, 1);
+	worktree->repo = the_repository;
 	worktree->path = strbuf_detach(&worktree_path, NULL);
 	worktree->id = xstrdup(id);
+	worktree->is_current = is_current_worktree(worktree);
 	if (!skip_reading_head)
 		add_head_info(worktree);
 
@@ -107,23 +122,6 @@ done:
 	strbuf_release(&path);
 	strbuf_release(&worktree_path);
 	return worktree;
-}
-
-static void mark_current_worktree(struct worktree **worktrees)
-{
-	char *git_dir = absolute_pathdup(get_git_dir());
-	int i;
-
-	for (i = 0; worktrees[i]; i++) {
-		struct worktree *wt = worktrees[i];
-		const char *wt_git_dir = get_worktree_git_dir(wt);
-
-		if (!fspathcmp(git_dir, absolute_path(wt_git_dir))) {
-			wt->is_current = 1;
-			break;
-		}
-	}
-	free(git_dir);
 }
 
 /*
@@ -162,7 +160,6 @@ static struct worktree **get_worktrees_internal(int skip_reading_head)
 	ALLOC_GROW(list, counter + 1, alloc);
 	list[counter] = NULL;
 
-	mark_current_worktree(list);
 	return list;
 }
 

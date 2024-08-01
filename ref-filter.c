@@ -1,3 +1,5 @@
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "git-compat-util.h"
 #include "environment.h"
 #include "gettext.h"
@@ -895,7 +897,9 @@ static int head_atom_parser(struct ref_format *format UNUSED,
 {
 	if (arg)
 		return err_no_arg(err, "HEAD");
-	atom->u.head = resolve_refdup("HEAD", RESOLVE_REF_READING, NULL, NULL);
+	atom->u.head = refs_resolve_refdup(get_main_ref_store(the_repository),
+					   "HEAD", RESOLVE_REF_READING, NULL,
+					   NULL);
 	return 0;
 }
 
@@ -2135,7 +2139,9 @@ static const char *rstrip_ref_components(const char *refname, int len)
 static const char *show_ref(struct refname_atom *atom, const char *refname)
 {
 	if (atom->option == R_SHORT)
-		return shorten_unambiguous_ref(refname, warn_ambiguous_refs);
+		return refs_shorten_unambiguous_ref(get_main_ref_store(the_repository),
+						    refname,
+						    warn_ambiguous_refs);
 	else if (atom->option == R_LSTRIP)
 		return lstrip_ref_components(refname, atom->lstrip);
 	else if (atom->option == R_RSTRIP)
@@ -2338,8 +2344,10 @@ static int populate_value(struct ref_array_item *ref, struct strbuf *err)
 	CALLOC_ARRAY(ref->value, used_atom_cnt);
 
 	if (need_symref && (ref->flag & REF_ISSYMREF) && !ref->symref) {
-		ref->symref = resolve_refdup(ref->refname, RESOLVE_REF_READING,
-					     NULL, NULL);
+		ref->symref = refs_resolve_refdup(get_main_ref_store(the_repository),
+						  ref->refname,
+						  RESOLVE_REF_READING,
+						  NULL, NULL);
 		if (!ref->symref)
 			ref->symref = xstrdup("");
 	}
@@ -2514,7 +2522,7 @@ static int populate_value(struct ref_array_item *ref, struct strbuf *err)
 	 * If it is a tag object, see if we use the peeled value. If we do,
 	 * grab the peeled OID.
 	 */
-	if (need_tagged && peel_iterated_oid(&obj->oid, &oi_deref.oid))
+	if (need_tagged && peel_iterated_oid(the_repository, &obj->oid, &oi_deref.oid))
 		die("bad tag");
 
 	return get_object(ref, 1, &obj, &oi_deref, err);
@@ -2628,7 +2636,7 @@ static int for_each_fullref_in_pattern(struct ref_filter *filter,
 				       each_ref_fn cb,
 				       void *cb_data)
 {
-	if (filter->kind == FILTER_REFS_KIND_MASK) {
+	if (filter->kind & FILTER_REFS_ROOT_REFS) {
 		/* In this case, we want to print all refs including root refs. */
 		return refs_for_each_include_root_refs(get_main_ref_store(the_repository),
 						       cb, cb_data);
@@ -2640,7 +2648,8 @@ static int for_each_fullref_in_pattern(struct ref_filter *filter,
 		 * prefixes like "refs/heads/" etc. are stripped off,
 		 * so we have to look at everything:
 		 */
-		return for_each_fullref_in("", cb, cb_data);
+		return refs_for_each_fullref_in(get_main_ref_store(the_repository),
+						"", NULL, cb, cb_data);
 	}
 
 	if (filter->ignore_case) {
@@ -2649,7 +2658,8 @@ static int for_each_fullref_in_pattern(struct ref_filter *filter,
 		 * so just return everything and let the caller
 		 * sort it out.
 		 */
-		return for_each_fullref_in("", cb, cb_data);
+		return refs_for_each_fullref_in(get_main_ref_store(the_repository),
+						"", NULL, cb, cb_data);
 	}
 
 	if (!filter->name_patterns[0]) {
@@ -2756,8 +2766,10 @@ static int ref_kind_from_refname(const char *refname)
 			return ref_kind[i].kind;
 	}
 
-	if (is_pseudoref(get_main_ref_store(the_repository), refname))
+	if (is_pseudo_ref(refname))
 		return FILTER_REFS_PSEUDOREFS;
+	if (is_root_ref(refname))
+		return FILTER_REFS_ROOT_REFS;
 
 	return FILTER_REFS_OTHERS;
 }
@@ -2794,11 +2806,11 @@ static struct ref_array_item *apply_ref_filter(const char *refname, const struct
 	/*
 	 * Generally HEAD refs are printed with special description denoting a rebase,
 	 * detached state and so forth. This is useful when only printing the HEAD ref
-	 * But when it is being printed along with other pseudorefs, it makes sense to
-	 * keep the formatting consistent. So we mask the type to act like a pseudoref.
+	 * But when it is being printed along with other root refs, it makes sense to
+	 * keep the formatting consistent. So we mask the type to act like a root ref.
 	 */
-	if (filter->kind == FILTER_REFS_KIND_MASK && kind == FILTER_REFS_DETACHED_HEAD)
-		kind = FILTER_REFS_PSEUDOREFS;
+	if (filter->kind & FILTER_REFS_ROOT_REFS && kind == FILTER_REFS_DETACHED_HEAD)
+		kind = FILTER_REFS_ROOT_REFS;
 	else if (!(kind & filter->kind))
 		return NULL;
 
@@ -3060,11 +3072,17 @@ static int do_filter_refs(struct ref_filter *filter, unsigned int type, each_ref
 		 * of filter_ref_kind().
 		 */
 		if (filter->kind == FILTER_REFS_BRANCHES)
-			ret = for_each_fullref_in("refs/heads/", fn, cb_data);
+			ret = refs_for_each_fullref_in(get_main_ref_store(the_repository),
+						       "refs/heads/", NULL,
+						       fn, cb_data);
 		else if (filter->kind == FILTER_REFS_REMOTES)
-			ret = for_each_fullref_in("refs/remotes/", fn, cb_data);
+			ret = refs_for_each_fullref_in(get_main_ref_store(the_repository),
+						       "refs/remotes/", NULL,
+						       fn, cb_data);
 		else if (filter->kind == FILTER_REFS_TAGS)
-			ret = for_each_fullref_in("refs/tags/", fn, cb_data);
+			ret = refs_for_each_fullref_in(get_main_ref_store(the_repository),
+						       "refs/tags/", NULL, fn,
+						       cb_data);
 		else if (filter->kind & FILTER_REFS_REGULAR)
 			ret = for_each_fullref_in_pattern(filter, fn, cb_data);
 
@@ -3072,9 +3090,10 @@ static int do_filter_refs(struct ref_filter *filter, unsigned int type, each_ref
 		 * When printing all ref types, HEAD is already included,
 		 * so we don't want to print HEAD again.
 		 */
-		if (!ret && (filter->kind != FILTER_REFS_KIND_MASK) &&
+		if (!ret && !(filter->kind & FILTER_REFS_ROOT_REFS) &&
 		    (filter->kind & FILTER_REFS_DETACHED_HEAD))
-			head_ref(fn, cb_data);
+			refs_head_ref(get_main_ref_store(the_repository), fn,
+				      cb_data);
 	}
 
 	clear_contains_cache(&filter->internal.contains_cache);

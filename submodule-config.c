@@ -1,3 +1,5 @@
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "git-compat-util.h"
 #include "dir.h"
 #include "environment.h"
@@ -91,6 +93,8 @@ static void free_one_config(struct submodule_entry *entry)
 	free((void *) entry->config->path);
 	free((void *) entry->config->name);
 	free((void *) entry->config->branch);
+	free((void *) entry->config->url);
+	free((void *) entry->config->ignore);
 	free((void *) entry->config->update_strategy.command);
 	free(entry->config);
 }
@@ -680,7 +684,7 @@ static int gitmodule_oid_from_commit(const struct object_id *treeish_name,
 	int ret = 0;
 
 	if (is_null_oid(treeish_name)) {
-		oidclr(gitmodules_oid);
+		oidclr(gitmodules_oid, the_repository->hash_algo);
 		return 1;
 	}
 
