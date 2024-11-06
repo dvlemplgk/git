@@ -8,10 +8,12 @@
 #include "csum-file.h"
 #include "remote.h"
 #include "chunk-format.h"
+#include "object-file.h"
 #include "pack-mtimes.h"
 #include "pack-objects.h"
 #include "pack-revindex.h"
 #include "path.h"
+#include "repository.h"
 #include "strbuf.h"
 
 void reset_pack_idx_option(struct pack_idx_option *opts)
@@ -473,7 +475,7 @@ char *index_pack_lockfile(int ip_out, int *is_well_formed)
 		packname[len-1] = 0;
 		if (skip_prefix(packname, "keep\t", &name))
 			return xstrfmt("%s/pack/pack-%s.keep",
-				       get_object_directory(), name);
+				       repo_get_object_directory(the_repository), name);
 		return NULL;
 	}
 	if (is_well_formed)
@@ -527,9 +529,9 @@ static void rename_tmp_packfile(struct strbuf *name_prefix, const char *source,
 	size_t name_prefix_len = name_prefix->len;
 
 	strbuf_addstr(name_prefix, ext);
-	if (rename(source, name_prefix->buf))
-		die_errno("unable to rename temporary file to '%s'",
-			  name_prefix->buf);
+	if (finalize_object_file(source, name_prefix->buf))
+		die("unable to rename temporary file to '%s'",
+		    name_prefix->buf);
 	strbuf_setlen(name_prefix, name_prefix_len);
 }
 

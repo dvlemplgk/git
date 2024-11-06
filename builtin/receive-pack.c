@@ -1,6 +1,7 @@
+#define USE_THE_REPOSITORY_VARIABLE
 #include "builtin.h"
 #include "abspath.h"
-#include "repository.h"
+
 #include "config.h"
 #include "environment.h"
 #include "gettext.h"
@@ -300,7 +301,7 @@ static void show_ref(const char *path, const struct object_id *oid)
 	}
 }
 
-static int show_ref_cb(const char *path_full, const struct object_id *oid,
+static int show_ref_cb(const char *path_full, const char *referent UNUSED, const struct object_id *oid,
 		       int flag UNUSED, void *data)
 {
 	struct oidset *seen = data;
@@ -339,12 +340,26 @@ static void show_one_alternate_ref(const struct object_id *oid,
 static void write_head_info(void)
 {
 	static struct oidset seen = OIDSET_INIT;
+	struct strvec excludes_vector = STRVEC_INIT;
+	const char **exclude_patterns;
+
+	/*
+	 * We need access to the reference names both with and without their
+	 * namespace and thus cannot use `refs_for_each_namespaced_ref()`. We
+	 * thus have to adapt exclude patterns to carry the namespace prefix
+	 * ourselves.
+	 */
+	exclude_patterns = get_namespaced_exclude_patterns(
+		hidden_refs_to_excludes(&hidden_refs),
+		get_git_namespace(), &excludes_vector);
 
 	refs_for_each_fullref_in(get_main_ref_store(the_repository), "",
-				 hidden_refs_to_excludes(&hidden_refs),
-				 show_ref_cb, &seen);
+				 exclude_patterns, show_ref_cb, &seen);
 	for_each_alternate_ref(show_one_alternate_ref, &seen);
+
 	oidset_clear(&seen);
+	strvec_clear(&excludes_vector);
+
 	if (!sent_capabilities)
 		show_ref("capabilities^{}", null_oid());
 
@@ -792,7 +807,7 @@ static int run_and_feed_hook(const char *hook_name, feed_fn feed,
 	struct child_process proc = CHILD_PROCESS_INIT;
 	struct async muxer;
 	int code;
-	const char *hook_path = find_hook(hook_name);
+	const char *hook_path = find_hook(the_repository, hook_name);
 
 	if (!hook_path)
 		return 0;
@@ -922,7 +937,7 @@ static int run_update_hook(struct command *cmd)
 {
 	struct child_process proc = CHILD_PROCESS_INIT;
 	int code;
-	const char *hook_path = find_hook("update");
+	const char *hook_path = find_hook(the_repository, "update");
 
 	if (!hook_path)
 		return 0;
@@ -1098,7 +1113,7 @@ static int run_proc_receive_hook(struct command *commands,
 	int hook_use_push_options = 0;
 	int version = 0;
 	int code;
-	const char *hook_path = find_hook("proc-receive");
+	const char *hook_path = find_hook(the_repository, "proc-receive");
 
 	if (!hook_path) {
 		rp_error("cannot find hook 'proc-receive'");
@@ -1324,7 +1339,7 @@ static int update_shallow_ref(struct command *cmd, struct shallow_info *si)
 }
 
 /*
- * NEEDSWORK: we should consolidate various implementions of "are we
+ * NEEDSWORK: we should consolidate various implementations of "are we
  * on an unborn branch?" test into one, and make the unified one more
  * robust. !get_sha1() based check used here and elsewhere would not
  * allow us to tell an unborn branch from corrupt ref, for example.
@@ -1409,7 +1424,7 @@ static const char *push_to_checkout(unsigned char *hash,
 	strvec_pushf(env, "GIT_WORK_TREE=%s", absolute_path(work_tree));
 	strvec_pushv(&opt.env, env->v);
 	strvec_push(&opt.args, hash_to_hex(hash));
-	if (run_hooks_opt(push_to_checkout_hook, &opt))
+	if (run_hooks_opt(the_repository, push_to_checkout_hook, &opt))
 		return "push-to-checkout hook declined";
 	else
 		return NULL;
@@ -1618,7 +1633,7 @@ static void run_update_post_hook(struct command *commands)
 	struct child_process proc = CHILD_PROCESS_INIT;
 	const char *hook;
 
-	hook = find_hook("post-update");
+	hook = find_hook(the_repository, "post-update");
 	if (!hook)
 		return;
 
@@ -2480,7 +2495,10 @@ static int delete_only(struct command *commands)
 	return 1;
 }
 
-int cmd_receive_pack(int argc, const char **argv, const char *prefix)
+int cmd_receive_pack(int argc,
+		     const char **argv,
+		     const char *prefix,
+		     struct repository *repo UNUSED)
 {
 	int advertise_refs = 0;
 	struct command *commands;
