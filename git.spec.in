@@ -82,12 +82,26 @@ Requires:       git = %{version}-%{release}, tk >= 8.4
 %description gui
 Git GUI tool
 
+%package gui-lang
+Summary:        Languages for git GUI tool
+Group:          Development/Tools
+Requires:       git-gui = %{version}-%{release}
+%description gui-lang
+Git GUI tool translations
+
 %package -n gitk
 Summary:        Git revision tree visualiser ('gitk')
 Group:          Development/Tools
 Requires:       git = %{version}-%{release}, tk >= 8.4
 %description -n gitk
 Git revision tree visualiser ('gitk')
+
+%package -n gitk-lang
+Summary:        Languages for git revision tree visualiser ('gitk')
+Group:          Development/Tools
+Requires:       gitk = %{version}-%{release}, tk >= 8.4
+%description -n gitk-lang
+Git revision tree visualiser ('gitk') translations
 
 %package -n gitweb
 Summary:	Git web interface
@@ -194,18 +208,26 @@ rm -rf $RPM_BUILD_ROOT
 %{_libexecdir}/git-core/git-citool
 %{_libexecdir}/git-core/git-gui--askpass
 %{_datadir}/git-gui/
+%exclude %{_datadir}/git-gui/lib/msgs
 %{!?_without_docs: %{_mandir}/man1/git-gui.1*}
 %{!?_without_docs: %doc Documentation/git-gui.html}
 %{!?_without_docs: %{_mandir}/man1/git-citool.1*}
 %{!?_without_docs: %doc Documentation/git-citool.html}
+
+%files gui-lang
+%{_datadir}/git-gui/lib/msgs
 
 %files -n gitk
 %defattr(-,root,root)
 %doc Documentation/*gitk*.txt
 %{_bindir}/*gitk*
 %{_datadir}/gitk/
+%exclude %{_datadir}/gitk/lib/msgs
 %{!?_without_docs: %{_mandir}/man1/*gitk*.1*}
 %{!?_without_docs: %doc Documentation/*gitk*.html }
+
+%files -n gitk-lang
+%{_datadir}/gitk/lib/msgs
 
 %files -n gitweb
 %defattr(-,root,root)
