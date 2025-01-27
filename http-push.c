@@ -309,7 +309,7 @@ static void start_fetch_packed(struct transfer_request *request)
 	struct transfer_request *check_request = request_queue_head;
 	struct http_pack_request *preq;
 
-	target = find_sha1_pack(request->obj->oid.hash, repo->packs);
+	target = find_oid_pack(&request->obj->oid, repo->packs);
 	if (!target) {
 		fprintf(stderr, "Unable to fetch %s, will not be able to update server info refs\n", oid_to_hex(&request->obj->oid));
 		repo->can_update_info_refs = 0;
@@ -681,7 +681,7 @@ static int add_send_request(struct object *obj, struct remote_lock *lock)
 		get_remote_object_list(obj->oid.hash[0]);
 	if (obj->flags & (REMOTE | PUSHING))
 		return 0;
-	target = find_sha1_pack(obj->oid.hash, repo->packs);
+	target = find_oid_pack(&obj->oid, repo->packs);
 	if (target) {
 		obj->flags |= REMOTE;
 		return 0;
@@ -1338,7 +1338,6 @@ static struct object_list **process_tree(struct tree *tree,
 
 static int get_delta(struct rev_info *revs, struct remote_lock *lock)
 {
-	int i;
 	struct commit *commit;
 	struct object_list **p = &objects;
 	int count = 0;
@@ -1351,7 +1350,7 @@ static int get_delta(struct rev_info *revs, struct remote_lock *lock)
 			count += add_send_request(&commit->object, lock);
 	}
 
-	for (i = 0; i < revs->pending.nr; i++) {
+	for (size_t i = 0; i < revs->pending.nr; i++) {
 		struct object_array_entry *entry = revs->pending.objects + i;
 		struct object *obj = entry->item;
 		const char *name = entry->name;

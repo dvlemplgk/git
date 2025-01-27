@@ -1,7 +1,9 @@
 #define USE_THE_REPOSITORY_VARIABLE
+#define DISABLE_SIGN_COMPARE_WARNINGS
 
 #include "git-compat-util.h"
 #include "environment.h"
+#include "ewah/ewok.h"
 #include "gettext.h"
 #include "name-hash.h"
 #include "read-cache-ll.h"
@@ -242,7 +244,8 @@ int convert_to_sparse(struct index_state *istate, int flags)
 	cache_tree_update(istate, 0);
 
 	istate->fsmonitor_has_run_once = 0;
-	FREE_AND_NULL(istate->fsmonitor_dirty);
+	ewah_free(istate->fsmonitor_dirty);
+	istate->fsmonitor_dirty = NULL;
 	FREE_AND_NULL(istate->fsmonitor_last_update);
 
 	istate->sparse_index = INDEX_COLLAPSED;
@@ -438,7 +441,8 @@ void expand_index(struct index_state *istate, struct pattern_list *pl)
 	istate->cache_nr = full->cache_nr;
 	istate->cache_alloc = full->cache_alloc;
 	istate->fsmonitor_has_run_once = 0;
-	FREE_AND_NULL(istate->fsmonitor_dirty);
+	ewah_free(istate->fsmonitor_dirty);
+	istate->fsmonitor_dirty = NULL;
 	FREE_AND_NULL(istate->fsmonitor_last_update);
 
 	strbuf_release(&base);

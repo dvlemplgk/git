@@ -20,6 +20,11 @@ static int integer_needle_lesseq(size_t i, void *_args)
 	return args->needle <= args->haystack[i];
 }
 
+static void *realloc_stub(void *p UNUSED, size_t size UNUSED)
+{
+	return NULL;
+}
+
 int cmd_main(int argc UNUSED, const char *argv[] UNUSED)
 {
 	if_test ("binary search with binsearch works") {
@@ -72,13 +77,14 @@ int cmd_main(int argc UNUSED, const char *argv[] UNUSED)
 	if_test ("parse_names works for basic input") {
 		char in1[] = "line\n";
 		char in2[] = "a\nb\nc";
-		char **out = NULL;
-		parse_names(in1, strlen(in1), &out);
+		char **out = parse_names(in1, strlen(in1));
+		check(out != NULL);
 		check_str(out[0], "line");
 		check(!out[1]);
 		free_names(out);
 
-		parse_names(in2, strlen(in2), &out);
+		out = parse_names(in2, strlen(in2));
+		check(out != NULL);
 		check_str(out[0], "a");
 		check_str(out[1], "b");
 		check_str(out[2], "c");
@@ -88,8 +94,8 @@ int cmd_main(int argc UNUSED, const char *argv[] UNUSED)
 
 	if_test ("parse_names drops empty string") {
 		char in[] = "a\n\nb\n";
-		char **out = NULL;
-		parse_names(in, strlen(in), &out);
+		char **out = parse_names(in, strlen(in));
+		check(out != NULL);
 		check_str(out[0], "a");
 		/* simply '\n' should be dropped as empty string */
 		check_str(out[1], "b");
@@ -98,8 +104,8 @@ int cmd_main(int argc UNUSED, const char *argv[] UNUSED)
 	}
 
 	if_test ("common_prefix_size works") {
-		struct strbuf a = STRBUF_INIT;
-		struct strbuf b = STRBUF_INIT;
+		struct reftable_buf a = REFTABLE_BUF_INIT;
+		struct reftable_buf b = REFTABLE_BUF_INIT;
 		struct {
 			const char *a, *b;
 			int want;
@@ -112,14 +118,14 @@ int cmd_main(int argc UNUSED, const char *argv[] UNUSED)
 		};
 
 		for (size_t i = 0; i < ARRAY_SIZE(cases); i++) {
-			strbuf_addstr(&a, cases[i].a);
-			strbuf_addstr(&b, cases[i].b);
+			check(!reftable_buf_addstr(&a, cases[i].a));
+			check(!reftable_buf_addstr(&b, cases[i].b));
 			check_int(common_prefix_size(&a, &b), ==, cases[i].want);
-			strbuf_reset(&a);
-			strbuf_reset(&b);
+			reftable_buf_reset(&a);
+			reftable_buf_reset(&b);
 		}
-		strbuf_release(&a);
-		strbuf_release(&b);
+		reftable_buf_release(&a);
+		reftable_buf_release(&b);
 	}
 
 	if_test ("put_be24 and get_be24 work") {
@@ -138,6 +144,57 @@ int cmd_main(int argc UNUSED, const char *argv[] UNUSED)
 		put_be16(dest, in);
 		out = get_be16(dest);
 		check_int(in, ==, out);
+	}
+
+	if_test ("REFTABLE_ALLOC_GROW works") {
+		int *arr = NULL, *old_arr;
+		size_t alloc = 0, old_alloc;
+
+		check(!REFTABLE_ALLOC_GROW(arr, 1, alloc));
+		check(arr != NULL);
+		check_uint(alloc, >=, 1);
+		arr[0] = 42;
+
+		old_alloc = alloc;
+		old_arr = arr;
+		reftable_set_alloc(NULL, realloc_stub, NULL);
+		check(REFTABLE_ALLOC_GROW(arr, old_alloc + 1, alloc));
+		check(arr == old_arr);
+		check_uint(alloc, ==, old_alloc);
+
+		old_alloc = alloc;
+		reftable_set_alloc(NULL, NULL, NULL);
+		check(!REFTABLE_ALLOC_GROW(arr, old_alloc + 1, alloc));
+		check(arr != NULL);
+		check_uint(alloc, >, old_alloc);
+		arr[alloc - 1] = 42;
+
+		reftable_free(arr);
+	}
+
+	if_test ("REFTABLE_ALLOC_GROW_OR_NULL works") {
+		int *arr = NULL;
+		size_t alloc = 0, old_alloc;
+
+		REFTABLE_ALLOC_GROW_OR_NULL(arr, 1, alloc);
+		check(arr != NULL);
+		check_uint(alloc, >=, 1);
+		arr[0] = 42;
+
+		old_alloc = alloc;
+		REFTABLE_ALLOC_GROW_OR_NULL(arr, old_alloc + 1, alloc);
+		check(arr != NULL);
+		check_uint(alloc, >, old_alloc);
+		arr[alloc - 1] = 42;
+
+		old_alloc = alloc;
+		reftable_set_alloc(NULL, realloc_stub, NULL);
+		REFTABLE_ALLOC_GROW_OR_NULL(arr, old_alloc + 1, alloc);
+		check(arr == NULL);
+		check_uint(alloc, ==, 0);
+		reftable_set_alloc(NULL, NULL, NULL);
+
+		reftable_free(arr);
 	}
 
 	return test_done();

@@ -688,7 +688,6 @@ static void cleanup_dir_rename_info(struct dir_rename_info *info,
 	struct hashmap_iter iter;
 	struct strmap_entry *entry;
 	struct string_list to_remove = STRING_LIST_INIT_NODUP;
-	int i;
 
 	if (!info->setup)
 		return;
@@ -734,7 +733,7 @@ static void cleanup_dir_rename_info(struct dir_rename_info *info,
 		if (strintmap_contains(counts, UNKNOWN_DIR))
 			strintmap_remove(counts, UNKNOWN_DIR);
 	}
-	for (i = 0; i < to_remove.nr; ++i)
+	for (size_t i = 0; i < to_remove.nr; ++i)
 		strmap_remove(info->dir_rename_count,
 			      to_remove.items[i].string, 1);
 	string_list_clear(&to_remove, 0);
@@ -1388,7 +1387,7 @@ void diffcore_rename_extended(struct diff_options *options,
 	int detect_rename = options->detect_rename;
 	int minimum_score = options->rename_score;
 	struct diff_queue_struct *q = &diff_queued_diff;
-	struct diff_queue_struct outq;
+	struct diff_queue_struct outq = DIFF_QUEUE_INIT;
 	struct diff_score *mx;
 	int i, j, rename_count, skip_unmodified = 0;
 	int num_destinations, dst_cnt;
@@ -1638,7 +1637,6 @@ void diffcore_rename_extended(struct diff_options *options,
 	 * are recorded in rename_dst.  The original list is still in *q.
 	 */
 	trace2_region_enter("diff", "write back to queue", options->repo);
-	DIFF_QUEUE_CLEAR(&outq);
 	for (i = 0; i < q->nr; i++) {
 		struct diff_filepair *p = q->queue[i];
 		struct diff_filepair *pair_to_free = NULL;

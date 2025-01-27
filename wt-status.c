@@ -1,4 +1,5 @@
 #define USE_THE_REPOSITORY_VARIABLE
+#define DISABLE_SIGN_COMPARE_WARNINGS
 
 #include "git-compat-util.h"
 #include "advice.h"
@@ -717,6 +718,7 @@ static int add_file_to_list(const struct object_id *oid,
 static void wt_status_collect_changes_initial(struct wt_status *s)
 {
 	struct index_state *istate = s->repo->index;
+	struct strbuf base = STRBUF_INIT;
 	int i;
 
 	for (i = 0; i < istate->cache_nr; i++) {
@@ -735,7 +737,6 @@ static void wt_status_collect_changes_initial(struct wt_status *s)
 			 * expanding the trees to find the elements that are new in this
 			 * tree and marking them with DIFF_STATUS_ADDED.
 			 */
-			struct strbuf base = STRBUF_INIT;
 			struct pathspec ps = { 0 };
 			struct tree *tree = lookup_tree(istate->repo, &ce->oid);
 
@@ -743,9 +744,11 @@ static void wt_status_collect_changes_initial(struct wt_status *s)
 			ps.has_wildcard = 1;
 			ps.max_depth = -1;
 
+			strbuf_reset(&base);
 			strbuf_add(&base, ce->name, ce->ce_namelen);
 			read_tree_at(istate->repo, tree, &base, 0, &ps,
 				     add_file_to_list, s);
+
 			continue;
 		}
 
@@ -772,6 +775,8 @@ static void wt_status_collect_changes_initial(struct wt_status *s)
 			s->committable = 1;
 		}
 	}
+
+	strbuf_release(&base);
 }
 
 static void wt_status_collect_untracked(struct wt_status *s)

@@ -17,6 +17,7 @@ linux-gcc)
 	export GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME=main
 	;;
 linux-TEST-vars)
+	export OPENSSL_SHA1_UNSAFE=YesPlease
 	export GIT_TEST_SPLIT_INDEX=yes
 	export GIT_TEST_MERGE_ALGORITHM=recursive
 	export GIT_TEST_FULL_IN_PACK_ARRAY=true
@@ -48,12 +49,29 @@ pedantic)
 	;;
 esac
 
-group Build make
-if test -n "$run_tests"
-then
-	group "Run tests" make test ||
-	handle_failed_tests
-fi
-check_unignored_build_artifacts
+case "$jobname" in
+*-meson)
+	group "Configure" meson setup build . \
+		--warnlevel 2 --werror \
+		--wrap-mode nofallback
+	group "Build" meson compile -C build --
+	if test -n "$run_tests"
+	then
+		group "Run tests" meson test -C build --print-errorlogs --test-args="$GIT_TEST_OPTS" || (
+			./t/aggregate-results.sh "${TEST_OUTPUT_DIRECTORY:-t}/test-results"
+			handle_failed_tests
+		)
+	fi
+	;;
+*)
+	group Build make
+	if test -n "$run_tests"
+	then
+		group "Run tests" make test ||
+		handle_failed_tests
+	fi
+	;;
+esac
 
+check_unignored_build_artifacts
 save_good_tree

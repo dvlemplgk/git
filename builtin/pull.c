@@ -7,6 +7,7 @@
  */
 
 #define USE_THE_REPOSITORY_VARIABLE
+
 #include "builtin.h"
 #include "advice.h"
 #include "config.h"
@@ -218,8 +219,8 @@ static struct option pull_options[] = {
 	OPT_PASSTHRU_ARGV(0, "shallow-since", &opt_fetch, N_("time"),
 		N_("deepen history of shallow repository based on time"),
 		0),
-	OPT_PASSTHRU_ARGV(0, "shallow-exclude", &opt_fetch, N_("revision"),
-		N_("deepen history of shallow clone, excluding rev"),
+	OPT_PASSTHRU_ARGV(0, "shallow-exclude", &opt_fetch, N_("ref"),
+		N_("deepen history of shallow clone, excluding ref"),
 		0),
 	OPT_PASSTHRU_ARGV(0, "deepen", &opt_fetch, N_("n"),
 		N_("deepen history of shallow clone"),
@@ -941,11 +942,10 @@ static int get_can_ff(struct object_id *orig_head,
 static int already_up_to_date(struct object_id *orig_head,
 			      struct oid_array *merge_heads)
 {
-	int i;
 	struct commit *ours;
 
 	ours = lookup_commit_reference(the_repository, orig_head);
-	for (i = 0; i < merge_heads->nr; i++) {
+	for (size_t i = 0; i < merge_heads->nr; i++) {
 		struct commit_list *list = NULL;
 		struct commit *theirs;
 		int ok;

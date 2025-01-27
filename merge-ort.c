@@ -15,6 +15,7 @@
  */
 
 #define USE_THE_REPOSITORY_VARIABLE
+#define DISABLE_SIGN_COMPARE_WARNINGS
 
 #include "git-compat-util.h"
 #include "merge-ort.h"
@@ -3536,7 +3537,7 @@ simple_cleanup:
 	/* Free memory for renames->pairs[] and combined */
 	for (s = MERGE_SIDE1; s <= MERGE_SIDE2; s++) {
 		free(renames->pairs[s].queue);
-		DIFF_QUEUE_CLEAR(&renames->pairs[s]);
+		diff_queue_init(&renames->pairs[s]);
 	}
 	for (i = 0; i < combined.nr; i++)
 		pool_diff_free_filepair(&opt->priv->pool, combined.queue[i]);

@@ -1,4 +1,5 @@
 #define USE_THE_REPOSITORY_VARIABLE
+#define DISABLE_SIGN_COMPARE_WARNINGS
 
 #include "git-compat-util.h"
 #include "config.h"
@@ -247,7 +248,7 @@ static size_t handle_using_name_hash_icase(
 	 * technically this is a tracked file or a sparse-directory.
 	 * It should not have any entries in the untracked-cache, so
 	 * we should not need to use the case-corrected spelling to
-	 * invalidate the the untracked-cache.  So we may not need to
+	 * invalidate the untracked-cache.  So we may not need to
 	 * do this.  For now, I'm going to be conservative and always
 	 * do it; we can revisit this later.
 	 */

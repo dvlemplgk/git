@@ -1,4 +1,5 @@
 #define USE_THE_REPOSITORY_VARIABLE
+#define DISABLE_SIGN_COMPARE_WARNINGS
 
 #include "git-compat-util.h"
 #include "object-store-ll.h"
@@ -1185,7 +1186,8 @@ static void show_patch_diff(struct combine_diff_path *elem, int num_parent,
 	result_file.ptr = result;
 	result_file.size = result_size;
 
-	/* Even p_lno[cnt+1] is valid -- that is for the end line number
+	/*
+	 * Even p_lno[cnt+1] is valid -- that is for the end line number
 	 * for deletion hunk at the end.
 	 */
 	CALLOC_ARRAY(sline[0].p_lno, st_mult(st_add(cnt, 2), num_parent));
@@ -1220,7 +1222,7 @@ static void show_patch_diff(struct combine_diff_path *elem, int num_parent,
 	}
 	free(result);
 
-	for (lno = 0; lno < cnt; lno++) {
+	for (lno = 0; lno < cnt + 2; lno++) {
 		if (sline[lno].lost) {
 			struct lline *ll = sline[lno].lost;
 			while (ll) {

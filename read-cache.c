@@ -5,6 +5,7 @@
  */
 
 #define USE_THE_REPOSITORY_VARIABLE
+#define DISABLE_SIGN_COMPARE_WARNINGS
 
 #include "git-compat-util.h"
 #include "bulk-checkin.h"
@@ -3125,6 +3126,7 @@ out:
 	if (f)
 		free_hashfile(f);
 	strbuf_release(&sb);
+	free(eoie_c);
 	free(ieot);
 	return ret;
 }
