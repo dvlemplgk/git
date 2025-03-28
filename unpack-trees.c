@@ -372,7 +372,8 @@ static struct progress *get_progress(struct unpack_trees_options *o,
 			total++;
 	}
 
-	return start_delayed_progress(_("Updating files"), total);
+	return start_delayed_progress(the_repository,
+				      _("Updating files"), total);
 }
 
 static void setup_collided_checkout_detection(struct checkout *state,
@@ -1773,6 +1774,7 @@ static int clear_ce_flags(struct index_state *istate,
 	strbuf_reset(&prefix);
 	if (show_progress)
 		istate->progress = start_delayed_progress(
+					the_repository,
 					_("Updating index flags"),
 					istate->cache_nr);
 
@@ -2902,7 +2904,7 @@ int threeway_merge(const struct cache_entry * const *stages,
  * The rule is to "carry forward" what is in the index without losing
  * information across a "fast-forward", favoring a successful merge
  * over a merge failure when it makes sense.  For details of the
- * "carry forward" rule, please see <Documentation/git-read-tree.txt>.
+ * "carry forward" rule, please see <Documentation/git-read-tree.adoc>.
  *
  */
 int twoway_merge(const struct cache_entry * const *src,
