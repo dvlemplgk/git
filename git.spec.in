@@ -168,7 +168,7 @@ rm -rf $RPM_BUILD_ROOT
 %files -f bin-man-doc-files
 %defattr(-,root,root)
 %{_datadir}/git-core/
-%doc README.md COPYING Documentation/*.txt
+%doc README.md COPYING Documentation/*.adoc
 %{!?_without_docs: %doc Documentation/*.html Documentation/howto}
 %{!?_without_docs: %doc Documentation/technical}
 %{_sysconfdir}/bash_completion.d
@@ -176,13 +176,13 @@ rm -rf $RPM_BUILD_ROOT
 %files svn
 %defattr(-,root,root)
 %{_libexecdir}/git-core/*svn*
-%doc Documentation/*svn*.txt
+%doc Documentation/*svn*.adoc
 %{!?_without_docs: %{_mandir}/man1/*svn*.1*}
 %{!?_without_docs: %doc Documentation/*svn*.html }
 
 %files cvs
 %defattr(-,root,root)
-%doc Documentation/*git-cvs*.txt
+%doc Documentation/*git-cvs*.adoc
 %{_bindir}/git-cvsserver
 %{_libexecdir}/git-core/*cvs*
 %{!?_without_docs: %{_mandir}/man1/*cvs*.1*}
@@ -190,14 +190,14 @@ rm -rf $RPM_BUILD_ROOT
 
 %files arch
 %defattr(-,root,root)
-%doc Documentation/git-archimport.txt
+%doc Documentation/git-archimport.adoc
 %{_libexecdir}/git-core/git-archimport
 %{!?_without_docs: %{_mandir}/man1/git-archimport.1*}
 %{!?_without_docs: %doc Documentation/git-archimport.html }
 
 %files email
 %defattr(-,root,root)
-%doc Documentation/*email*.txt
+%doc Documentation/*email*.adoc
 %{_libexecdir}/git-core/*email*
 %{!?_without_docs: %{_mandir}/man1/*email*.1*}
 %{!?_without_docs: %doc Documentation/*email*.html }
@@ -219,7 +219,7 @@ rm -rf $RPM_BUILD_ROOT
 
 %files -n gitk
 %defattr(-,root,root)
-%doc Documentation/*gitk*.txt
+%doc Documentation/*gitk*.adoc
 %{_bindir}/*gitk*
 %{_datadir}/gitk/
 %exclude %{_datadir}/gitk/lib/msgs
@@ -231,7 +231,7 @@ rm -rf $RPM_BUILD_ROOT
 
 %files -n gitweb
 %defattr(-,root,root)
-%doc gitweb/README gitweb/INSTALL Documentation/*gitweb*.txt
+%doc gitweb/README gitweb/INSTALL Documentation/*gitweb*.adoc
 %{_datadir}/gitweb
 %{!?_without_docs: %{_mandir}/man1/*gitweb*.1*}
 %{!?_without_docs: %{_mandir}/man5/*gitweb*.5*}
