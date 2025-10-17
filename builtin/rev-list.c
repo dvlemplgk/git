@@ -14,7 +14,7 @@
 #include "object.h"
 #include "object-name.h"
 #include "object-file.h"
-#include "object-store.h"
+#include "odb.h"
 #include "pack-bitmap.h"
 #include "parse-options.h"
 #include "log-tree.h"
@@ -27,6 +27,14 @@
 #include "packfile.h"
 #include "quote.h"
 #include "strbuf.h"
+
+struct rev_list_info {
+	struct rev_info *revs;
+	int flags;
+	int show_timestamp;
+	int hdr_termination;
+	const char *header_prefix;
+};
 
 static const char rev_list_usage[] =
 "git rev-list [<options>] <commit>... [--] [<path>...]\n"
@@ -110,7 +118,8 @@ static off_t get_object_disk_usage(struct object *obj)
 	off_t size;
 	struct object_info oi = OBJECT_INFO_INIT;
 	oi.disk_sizep = &size;
-	if (oid_object_info_extended(the_repository, &obj->oid, &oi, 0) < 0)
+	if (odb_read_object_info_extended(the_repository->objects,
+					  &obj->oid, &oi, 0) < 0)
 		die(_("unable to get disk usage of %s"), oid_to_hex(&obj->oid));
 	return size;
 }
@@ -346,7 +355,8 @@ static void show_commit(struct commit *commit, void *data)
 static int finish_object(struct object *obj, const char *name, void *cb_data)
 {
 	struct rev_list_info *info = cb_data;
-	if (oid_object_info_extended(the_repository, &obj->oid, NULL, 0) < 0) {
+	if (odb_read_object_info_extended(the_repository->objects,
+					  &obj->oid, NULL, 0) < 0) {
 		finish_object__ma(obj, name);
 		return 1;
 	}
@@ -634,7 +644,7 @@ int cmd_rev_list(int argc,
 
 	show_usage_if_asked(argc, argv, rev_list_usage);
 
-	git_config(git_default_config, NULL);
+	repo_config(the_repository, git_default_config, NULL);
 	repo_init_revisions(the_repository, &revs, prefix);
 	revs.abbrev = DEFAULT_ABBREV;
 	revs.commit_format = CMIT_FMT_UNSPECIFIED;
@@ -650,17 +660,21 @@ int cmd_rev_list(int argc,
 	 *
 	 * Let "--missing" to conditionally set fetch_if_missing.
 	 */
+
 	/*
-	 * NEEDSWORK: These loops that attempt to find presence of
-	 * options without understanding that the options they are
-	 * skipping are broken (e.g., it would not know "--grep
+	 * NEEDSWORK: The next loop is utterly broken.  It tries to
+	 * notice an option is used, but without understanding if each
+	 * option takes an argument, which fundamentally would not
+	 * work.  It would not know "--grep
 	 * --exclude-promisor-objects" is not triggering
-	 * "--exclude-promisor-objects" option).  We really need
-	 * setup_revisions() to have a mechanism to allow and disallow
-	 * some sets of options for different commands (like rev-list,
-	 * replay, etc). Such a mechanism should do an early parsing
-	 * of options and be able to manage the `--missing=...` and
-	 * `--exclude-promisor-objects` options below.
+	 * "--exclude-promisor-objects" option, for example.
+	 *
+	 * We really need setup_revisions() to have a mechanism to
+	 * allow and disallow some sets of options for different
+	 * commands (like rev-list, replay, etc). Such a mechanism
+	 * should do an early parsing of options and be able to manage
+	 * the `--missing=...` and `--exclude-promisor-objects`
+	 * options below.
 	 */
 	for (i = 1; i < argc; i++) {
 		const char *arg = argv[i];

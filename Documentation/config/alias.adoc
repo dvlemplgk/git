@@ -3,7 +3,8 @@ alias.*::
 	after defining `alias.last = cat-file commit HEAD`, the invocation
 	`git last` is equivalent to `git cat-file commit HEAD`. To avoid
 	confusion and troubles with script usage, aliases that
-	hide existing Git commands are ignored. Arguments are split by
+	hide existing Git commands are ignored except for deprecated
+	commands.  Arguments are split by
 	spaces, the usual shell quoting and escaping are supported.
 	A quote pair or a backslash can be used to quote them.
 +
@@ -38,6 +39,6 @@ it will be treated as a shell command.  For example, defining
 ** A convenient way to deal with this is to write your script
    operations in an inline function that is then called with any
    arguments from the command-line.  For example `alias.cmd = "!c() {
-   echo $1 | grep $2 ; }; c" will correctly execute the prior example.
+   echo $1 | grep $2 ; }; c"` will correctly execute the prior example.
 ** Setting `GIT_TRACE=1` can help you debug the command being run for
    your alias.

@@ -9,7 +9,7 @@
 #include "hex.h"
 #include "repository.h"
 #include "object-name.h"
-#include "object-store.h"
+#include "odb.h"
 #include "utf8.h"
 #include "diff.h"
 #include "revision.h"
@@ -31,6 +31,7 @@
 #include "parse.h"
 #include "object-file.h"
 #include "object-file-convert.h"
+#include "prio-queue.h"
 
 static struct commit_extra_header *read_commit_extra_header_lines(const char *buf, size_t len, const char **);
 
@@ -374,7 +375,7 @@ const void *repo_get_commit_buffer(struct repository *r,
 	if (!ret) {
 		enum object_type type;
 		unsigned long size;
-		ret = repo_read_object_file(r, &commit->object.oid, &type, &size);
+		ret = odb_read_object(r->objects, &commit->object.oid, &type, &size);
 		if (!ret)
 			die("cannot read commit object %s",
 			    oid_to_hex(&commit->object.oid));
@@ -575,7 +576,7 @@ int repo_parse_commit_internal(struct repository *r,
 		if (commit_graph_paranoia == -1)
 			commit_graph_paranoia = git_env_bool(GIT_COMMIT_GRAPH_PARANOIA, 0);
 
-		if (commit_graph_paranoia && !has_object(r, &item->object.oid, 0)) {
+		if (commit_graph_paranoia && !odb_has_object(r->objects, &item->object.oid, 0)) {
 			unparse_commit(r, &item->object.oid);
 			return quiet_on_missing ? -1 :
 				error(_("commit %s exists in commit-graph but not in the object database"),
@@ -585,7 +586,8 @@ int repo_parse_commit_internal(struct repository *r,
 		return 0;
 	}
 
-	if (oid_object_info_extended(r, &item->object.oid, &oi, flags) < 0)
+	if (odb_read_object_info_extended(r->objects, &item->object.oid,
+					  &oi, flags) < 0)
 		return quiet_on_missing ? -1 :
 			error("Could not read %s",
 			     oid_to_hex(&item->object.oid));
@@ -738,20 +740,27 @@ void commit_list_sort_by_date(struct commit_list **list)
 	commit_list_sort(list, commit_list_compare_by_date);
 }
 
-struct commit *pop_most_recent_commit(struct commit_list **list,
+struct commit *pop_most_recent_commit(struct prio_queue *queue,
 				      unsigned int mark)
 {
-	struct commit *ret = pop_commit(list);
+	struct commit *ret = prio_queue_peek(queue);
+	int get_pending = 1;
 	struct commit_list *parents = ret->parents;
 
 	while (parents) {
 		struct commit *commit = parents->item;
 		if (!repo_parse_commit(the_repository, commit) && !(commit->object.flags & mark)) {
 			commit->object.flags |= mark;
-			commit_list_insert_by_date(commit, list);
+			if (get_pending)
+				prio_queue_replace(queue, commit);
+			else
+				prio_queue_put(queue, commit);
+			get_pending = 0;
 		}
 		parents = parents->next;
 	}
+	if (get_pending)
+		prio_queue_get(queue);
 	return ret;
 }
 
@@ -1274,8 +1283,8 @@ static void handle_signed_tag(const struct commit *parent, struct commit_extra_h
 	desc = merge_remote_util(parent);
 	if (!desc || !desc->obj)
 		return;
-	buf = repo_read_object_file(the_repository, &desc->obj->oid, &type,
-				    &size);
+	buf = odb_read_object(the_repository->objects, &desc->obj->oid,
+			      &type, &size);
 	if (!buf || type != OBJ_TAG)
 		goto free_return;
 	if (!parse_signature(buf, size, &payload, &signature))
@@ -1706,7 +1715,7 @@ int commit_tree_extended(const char *msg, size_t msg_len,
 	/* Not having i18n.commitencoding is the same as having utf-8 */
 	encoding_is_utf8 = is_encoding_utf8(git_commit_encoding);
 
-	assert_oid_type(tree, OBJ_TREE);
+	odb_assert_oid_type(the_repository->objects, tree, OBJ_TREE);
 
 	if (memchr(msg, '\0', msg_len))
 		return error("a NUL byte in commit log message not allowed.");
@@ -1796,8 +1805,8 @@ int commit_tree_extended(const char *msg, size_t msg_len,
 		compat_oid = &compat_oid_buf;
 	}
 
-	result = write_object_file_flags(buffer.buf, buffer.len, OBJ_COMMIT,
-					 ret, compat_oid, 0);
+	result = odb_write_object_ext(the_repository->objects, buffer.buf, buffer.len,
+				      OBJ_COMMIT, ret, compat_oid, 0);
 out:
 	free(parent_buf);
 	strbuf_release(&buffer);

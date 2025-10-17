@@ -84,7 +84,8 @@ const char *write_idx_file(struct repository *repo,
 	} else {
 		if (!index_name) {
 			struct strbuf tmp_file = STRBUF_INIT;
-			fd = odb_mkstemp(&tmp_file, "pack/tmp_idx_XXXXXX");
+			fd = odb_mkstemp(repo->objects, &tmp_file,
+					 "pack/tmp_idx_XXXXXX");
 			index_name = strbuf_detach(&tmp_file, NULL);
 		} else {
 			unlink(index_name);
@@ -259,7 +260,8 @@ char *write_rev_file_order(struct repository *repo,
 	if (flags & WRITE_REV) {
 		if (!rev_name) {
 			struct strbuf tmp_file = STRBUF_INIT;
-			fd = odb_mkstemp(&tmp_file, "pack/tmp_rev_XXXXXX");
+			fd = odb_mkstemp(repo->objects, &tmp_file,
+					 "pack/tmp_rev_XXXXXX");
 			path = strbuf_detach(&tmp_file, NULL);
 		} else {
 			unlink(rev_name);
@@ -342,7 +344,7 @@ static char *write_mtimes_file(struct repository *repo,
 	if (!to_pack)
 		BUG("cannot call write_mtimes_file with NULL packing_data");
 
-	fd = odb_mkstemp(&tmp_file, "pack/tmp_mtimes_XXXXXX");
+	fd = odb_mkstemp(repo->objects, &tmp_file, "pack/tmp_mtimes_XXXXXX");
 	mtimes_name = strbuf_detach(&tmp_file, NULL);
 	f = hashfd(repo->hash_algo, fd, mtimes_name);
 
@@ -531,27 +533,29 @@ struct hashfile *create_tmp_packfile(struct repository *repo,
 	struct strbuf tmpname = STRBUF_INIT;
 	int fd;
 
-	fd = odb_mkstemp(&tmpname, "pack/tmp_pack_XXXXXX");
+	fd = odb_mkstemp(repo->objects, &tmpname, "pack/tmp_pack_XXXXXX");
 	*pack_tmp_name = strbuf_detach(&tmpname, NULL);
 	return hashfd(repo->hash_algo, fd, *pack_tmp_name);
 }
 
-static void rename_tmp_packfile(struct strbuf *name_prefix, const char *source,
+static void rename_tmp_packfile(struct repository *repo,
+				struct strbuf *name_prefix, const char *source,
 				const char *ext)
 {
 	size_t name_prefix_len = name_prefix->len;
 
 	strbuf_addstr(name_prefix, ext);
-	if (finalize_object_file(source, name_prefix->buf))
+	if (finalize_object_file(repo, source, name_prefix->buf))
 		die("unable to rename temporary file to '%s'",
 		    name_prefix->buf);
 	strbuf_setlen(name_prefix, name_prefix_len);
 }
 
-void rename_tmp_packfile_idx(struct strbuf *name_buffer,
+void rename_tmp_packfile_idx(struct repository *repo,
+			     struct strbuf *name_buffer,
 			     char **idx_tmp_name)
 {
-	rename_tmp_packfile(name_buffer, *idx_tmp_name, "idx");
+	rename_tmp_packfile(repo, name_buffer, *idx_tmp_name, "idx");
 }
 
 void stage_tmp_packfiles(struct repository *repo,
@@ -584,11 +588,11 @@ void stage_tmp_packfiles(struct repository *repo,
 						    hash);
 	}
 
-	rename_tmp_packfile(name_buffer, pack_tmp_name, "pack");
+	rename_tmp_packfile(repo, name_buffer, pack_tmp_name, "pack");
 	if (rev_tmp_name)
-		rename_tmp_packfile(name_buffer, rev_tmp_name, "rev");
+		rename_tmp_packfile(repo, name_buffer, rev_tmp_name, "rev");
 	if (mtimes_tmp_name)
-		rename_tmp_packfile(name_buffer, mtimes_tmp_name, "mtimes");
+		rename_tmp_packfile(repo, name_buffer, mtimes_tmp_name, "mtimes");
 
 	free(rev_tmp_name);
 	free(mtimes_tmp_name);

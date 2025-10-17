@@ -104,6 +104,9 @@ int use_optional_locks(void);
 const char *get_git_namespace(void);
 const char *strip_namespace(const char *namespaced_ref);
 
+int git_default_config(const char *, const char *,
+		       const struct config_context *, void *);
+
 /*
  * TODO: All the below state either explicitly or implicitly relies on
  * `the_repository`. We should eventually get rid of these and make the
@@ -155,7 +158,6 @@ extern int pack_compression_level;
 extern unsigned long pack_size_limit_cfg;
 extern int max_allowed_tree_depth;
 
-extern int core_preload_index;
 extern int precomposed_unicode;
 extern int protect_hfs;
 extern int protect_ntfs;
@@ -189,8 +191,6 @@ enum object_creation_mode {
 extern enum object_creation_mode object_creation_mode;
 
 extern int grafts_keep_true_parents;
-
-extern int repository_format_precious_objects;
 
 const char *get_log_output_encoding(void);
 const char *get_commit_output_encoding(void);

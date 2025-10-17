@@ -62,7 +62,7 @@ struct repository;
 struct rev_info;
 struct string_list;
 struct saved_parents;
-struct bloom_key;
+struct bloom_keyvec;
 struct bloom_filter_settings;
 struct option;
 struct parse_opt_ctx_t;
@@ -159,8 +159,6 @@ struct rev_info {
 
 	/* topo-sort */
 	enum rev_sort_order sort_order;
-
-	unsigned int early_output;
 
 	unsigned int	ignore_missing:1,
 			ignore_missing_links:1;
@@ -360,8 +358,8 @@ struct rev_info {
 
 	/* Commit graph bloom filter fields */
 	/* The bloom filter key(s) for the pathspec */
-	struct bloom_key *bloom_keys;
-	int bloom_keys_nr;
+	struct bloom_keyvec **bloom_keyvecs;
+	int bloom_keyvecs_nr;
 
 	/*
 	 * The bloom filter settings used to generate the key.
@@ -552,11 +550,5 @@ int rewrite_parents(struct rev_info *revs,
  * history simplification is off.
  */
 struct commit_list *get_saved_parents(struct rev_info *revs, const struct commit *commit);
-
-/**
- * Global for the (undocumented) "--early-output" flag for "git log".
- */
-typedef void (*show_early_output_fn_t)(struct rev_info *, struct commit_list *);
-extern volatile show_early_output_fn_t show_early_output;
 
 #endif

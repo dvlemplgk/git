@@ -3,7 +3,7 @@
 #include "git-compat-util.h"
 #include "gettext.h"
 #include "hex.h"
-#include "object-store.h"
+#include "odb.h"
 #include "promisor-remote.h"
 #include "config.h"
 #include "trace2.h"
@@ -46,7 +46,7 @@ static int fetch_objects(struct repository *repo,
 		     "fetch", remote_name, "--no-tags",
 		     "--no-write-fetch-head", "--recurse-submodules=no",
 		     "--filter=blob:none", "--stdin", NULL);
-	if (!git_config_get_bool("promisor.quiet", &quiet) && quiet)
+	if (!repo_config_get_bool(the_repository, "promisor.quiet", &quiet) && quiet)
 		strvec_push(&child.args, "--quiet");
 	if (start_command(&child))
 		die(_("promisor-remote: unable to fork off fetch subprocess"));
@@ -245,8 +245,8 @@ static int remove_fetched_oids(struct repository *repo,
 	struct object_id *new_oids;
 
 	for (i = 0; i < oid_nr; i++)
-		if (oid_object_info_extended(repo, &old_oids[i], NULL,
-					     OBJECT_INFO_SKIP_FETCH_OBJECT)) {
+		if (odb_read_object_info_extended(repo->objects, &old_oids[i], NULL,
+						  OBJECT_INFO_SKIP_FETCH_OBJECT)) {
 			remaining[i] = 1;
 			remaining_nr++;
 		}
@@ -327,7 +327,7 @@ static void promisor_info_vecs(struct repository *repo,
 		char *url_key = xstrfmt("remote.%s.url", r->name);
 
 		/* Only add remotes with a non empty URL */
-		if (!git_config_get_string_tmp(url_key, &url) && *url) {
+		if (!repo_config_get_string_tmp(the_repository, url_key, &url) && *url) {
 			strvec_push(names, r->name);
 			strvec_push(urls, url);
 		}
@@ -343,7 +343,7 @@ char *promisor_remote_info(struct repository *repo)
 	struct strvec names = STRVEC_INIT;
 	struct strvec urls = STRVEC_INIT;
 
-	git_config_get_bool("promisor.advertise", &advertise_promisors);
+	repo_config_get_bool(the_repository, "promisor.advertise", &advertise_promisors);
 
 	if (!advertise_promisors)
 		return NULL;
@@ -433,7 +433,7 @@ static void filter_promisor_remote(struct repository *repo,
 	struct strvec names = STRVEC_INIT;
 	struct strvec urls = STRVEC_INIT;
 
-	if (!git_config_get_string_tmp("promisor.acceptfromserver", &accept_str)) {
+	if (!repo_config_get_string_tmp(the_repository, "promisor.acceptfromserver", &accept_str)) {
 		if (!*accept_str || !strcasecmp("None", accept_str))
 			accept = ACCEPT_NONE;
 		else if (!strcasecmp("KnownUrl", accept_str))

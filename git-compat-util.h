@@ -460,6 +460,8 @@ void warning_errno(const char *err, ...) __attribute__((format (printf, 1, 2)));
 
 void show_usage_if_asked(int ac, const char **av, const char *err);
 
+NORETURN void you_still_use_that(const char *command_name, const char *hint);
+
 #ifndef NO_OPENSSL
 #ifdef APPLE_COMMON_CRYPTO
 #include "compat/apple-common-crypto.h"
@@ -895,16 +897,16 @@ static inline size_t xsize_t(off_t len)
  * is done via tolower(), so it is strictly ASCII (no multi-byte characters or
  * locale-specific conversions).
  */
-static inline int skip_iprefix(const char *str, const char *prefix,
+static inline bool skip_iprefix(const char *str, const char *prefix,
 			       const char **out)
 {
 	do {
 		if (!*prefix) {
 			*out = str;
-			return 1;
+			return true;
 		}
 	} while (tolower(*str++) == tolower(*prefix++));
-	return 0;
+	return false;
 }
 
 /*
@@ -912,7 +914,7 @@ static inline int skip_iprefix(const char *str, const char *prefix,
  * comparison is done via tolower(), so it is strictly ASCII (no multi-byte
  * characters or locale-specific conversions).
  */
-static inline int skip_iprefix_mem(const char *buf, size_t len,
+static inline bool skip_iprefix_mem(const char *buf, size_t len,
 				   const char *prefix,
 				   const char **out, size_t *outlen)
 {
@@ -920,10 +922,10 @@ static inline int skip_iprefix_mem(const char *buf, size_t len,
 		if (!*prefix) {
 			*out = buf;
 			*outlen = len;
-			return 1;
+			return true;
 		}
 	} while (len-- > 0 && tolower(*buf++) == tolower(*prefix++));
-	return 0;
+	return false;
 }
 
 static inline int strtoul_ui(char const *s, int base, unsigned int *result)

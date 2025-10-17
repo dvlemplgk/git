@@ -3,9 +3,10 @@
 
 #include "git-compat-util.h"
 #include "config.h"
+#include "environment.h"
 #include "gettext.h"
 #include "parse-options.h"
-#include "object-store.h"
+#include "odb.h"
 #include "reflog.h"
 #include "refs.h"
 #include "revision.h"
@@ -81,6 +82,20 @@ int reflog_expire_config(const char *var, const char *value,
 	return 0;
 }
 
+void reflog_clear_expire_config(struct reflog_expire_options *opts)
+{
+	struct reflog_expire_entry_option *ent = opts->entries, *tmp;
+
+	while (ent) {
+		tmp = ent;
+		ent = ent->next;
+		free(tmp);
+	}
+
+	opts->entries = NULL;
+	opts->entries_tail = NULL;
+}
+
 void reflog_expire_options_set_refname(struct reflog_expire_options *cb,
 				       const char *ref)
 {
@@ -140,8 +155,8 @@ static int tree_is_complete(const struct object_id *oid)
 	if (!tree->buffer) {
 		enum object_type type;
 		unsigned long size;
-		void *data = repo_read_object_file(the_repository, oid, &type,
-						   &size);
+		void *data = odb_read_object(the_repository->objects, oid,
+					     &type, &size);
 		if (!data) {
 			tree->object.flags |= INCOMPLETE;
 			return 0;
@@ -152,7 +167,7 @@ static int tree_is_complete(const struct object_id *oid)
 	init_tree_desc(&desc, &tree->object.oid, tree->buffer, tree->size);
 	complete = 1;
 	while (tree_entry(&desc, &entry)) {
-		if (!has_object(the_repository, &entry.oid,
+		if (!odb_has_object(the_repository->objects, &entry.oid,
 				HAS_OBJECT_RECHECK_PACKED | HAS_OBJECT_FETCH_PROMISOR) ||
 		    (S_ISDIR(entry.mode) && !tree_is_complete(&entry.oid))) {
 			tree->object.flags |= INCOMPLETE;

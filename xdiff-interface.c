@@ -2,10 +2,11 @@
 #define DISABLE_SIGN_COMPARE_WARNINGS
 
 #include "git-compat-util.h"
+#include "environment.h"
 #include "gettext.h"
 #include "config.h"
 #include "hex.h"
-#include "object-store.h"
+#include "odb.h"
 #include "strbuf.h"
 #include "xdiff-interface.h"
 #include "xdiff/xtypes.h"
@@ -187,7 +188,7 @@ void read_mmblob(mmfile_t *ptr, const struct object_id *oid)
 		return;
 	}
 
-	ptr->ptr = repo_read_object_file(the_repository, oid, &type, &size);
+	ptr->ptr = odb_read_object(the_repository->objects, oid, &type, &size);
 	if (!ptr->ptr || type != OBJ_BLOB)
 		die("unable to read blob object %s", oid_to_hex(oid));
 	ptr->size = size;

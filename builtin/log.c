@@ -15,7 +15,7 @@
 #include "hex.h"
 #include "refs.h"
 #include "object-name.h"
-#include "object-store.h"
+#include "odb.h"
 #include "pager.h"
 #include "color.h"
 #include "commit.h"
@@ -113,6 +113,15 @@ struct log_config {
 	int fmt_patch_name_max;
 	char *fmt_pretty;
 	char *default_date_mode;
+
+#ifndef WITH_BREAKING_CHANGES
+	/*
+	 * Note: git_log_config() does not touch this member and that
+	 * is very deliberate.  This member is only to be used to
+	 * resurrect whatchanged that is deprecated.
+	 */
+	int i_still_use_this;
+#endif
 };
 
 static void log_config_init(struct log_config *cfg)
@@ -212,7 +221,7 @@ static void set_default_decoration_filter(struct decoration_filter *decoration_f
 	struct string_list *include = decoration_filter->include_ref_pattern;
 	const struct string_list *config_exclude;
 
-	if (!git_config_get_string_multi("log.excludeDecoration",
+	if (!repo_config_get_string_multi(the_repository, "log.excludeDecoration",
 					 &config_exclude)) {
 		struct string_list_item *item;
 		for_each_string_list_item(item, config_exclude)
@@ -226,7 +235,7 @@ static void set_default_decoration_filter(struct decoration_filter *decoration_f
 	 * since the command-line takes precedent.
 	 */
 	if (use_default_decoration_filter &&
-	    !git_config_get_string("log.initialdecorationset", &value) &&
+	    !repo_config_get_string(the_repository, "log.initialdecorationset", &value) &&
 	    !strcmp("all", value))
 		use_default_decoration_filter = 0;
 	free(value);
@@ -267,6 +276,10 @@ static void cmd_log_init_finish(int argc, const char **argv, const char *prefix,
 		OPT__QUIET(&quiet, N_("suppress diff output")),
 		OPT_BOOL(0, "source", &source, N_("show source")),
 		OPT_BOOL(0, "use-mailmap", &mailmap, N_("use mail map file")),
+#ifndef WITH_BREAKING_CHANGES
+		OPT_HIDDEN_BOOL(0, "i-still-use-this", &cfg->i_still_use_this,
+				"<use this deprecated command>"),
+#endif
 		OPT_ALIAS(0, "mailmap", "use-mailmap"),
 		OPT_CALLBACK_F(0, "clear-decorations", NULL, NULL,
 			       N_("clear all previously-defined decoration filters"),
@@ -378,129 +391,6 @@ static void cmd_log_init(int argc, const char **argv, const char *prefix,
 	cmd_log_init_finish(argc, argv, prefix, rev, opt, cfg);
 }
 
-/*
- * This gives a rough estimate for how many commits we
- * will print out in the list.
- */
-static int estimate_commit_count(struct commit_list *list)
-{
-	int n = 0;
-
-	while (list) {
-		struct commit *commit = list->item;
-		unsigned int flags = commit->object.flags;
-		list = list->next;
-		if (!(flags & (TREESAME | UNINTERESTING)))
-			n++;
-	}
-	return n;
-}
-
-static void show_early_header(struct rev_info *rev, const char *stage, int nr)
-{
-	if (rev->shown_one) {
-		rev->shown_one = 0;
-		if (rev->commit_format != CMIT_FMT_ONELINE)
-			putchar(rev->diffopt.line_termination);
-	}
-	fprintf(rev->diffopt.file, _("Final output: %d %s\n"), nr, stage);
-}
-
-static struct itimerval early_output_timer;
-
-static void log_show_early(struct rev_info *revs, struct commit_list *list)
-{
-	int i = revs->early_output;
-	int show_header = 1;
-	int no_free = revs->diffopt.no_free;
-
-	revs->diffopt.no_free = 0;
-	sort_in_topological_order(&list, revs->sort_order);
-	while (list && i) {
-		struct commit *commit = list->item;
-		switch (simplify_commit(revs, commit)) {
-		case commit_show:
-			if (show_header) {
-				int n = estimate_commit_count(list);
-				show_early_header(revs, "incomplete", n);
-				show_header = 0;
-			}
-			log_tree_commit(revs, commit);
-			i--;
-			break;
-		case commit_ignore:
-			break;
-		case commit_error:
-			revs->diffopt.no_free = no_free;
-			diff_free(&revs->diffopt);
-			return;
-		}
-		list = list->next;
-	}
-
-	/* Did we already get enough commits for the early output? */
-	if (!i) {
-		revs->diffopt.no_free = 0;
-		diff_free(&revs->diffopt);
-		return;
-	}
-
-	/*
-	 * ..if no, then repeat it twice a second until we
-	 * do.
-	 *
-	 * NOTE! We don't use "it_interval", because if the
-	 * reader isn't listening, we want our output to be
-	 * throttled by the writing, and not have the timer
-	 * trigger every second even if we're blocked on a
-	 * reader!
-	 */
-	early_output_timer.it_value.tv_sec = 0;
-	early_output_timer.it_value.tv_usec = 500000;
-	setitimer(ITIMER_REAL, &early_output_timer, NULL);
-}
-
-static void early_output(int signal UNUSED)
-{
-	show_early_output = log_show_early;
-}
-
-static void setup_early_output(void)
-{
-	struct sigaction sa;
-
-	/*
-	 * Set up the signal handler, minimally intrusively:
-	 * we only set a single volatile integer word (not
-	 * using sigatomic_t - trying to avoid unnecessary
-	 * system dependencies and headers), and using
-	 * SA_RESTART.
-	 */
-	memset(&sa, 0, sizeof(sa));
-	sa.sa_handler = early_output;
-	sigemptyset(&sa.sa_mask);
-	sa.sa_flags = SA_RESTART;
-	sigaction(SIGALRM, &sa, NULL);
-
-	/*
-	 * If we can get the whole output in less than a
-	 * tenth of a second, don't even bother doing the
-	 * early-output thing..
-	 *
-	 * This is a one-time-only trigger.
-	 */
-	early_output_timer.it_value.tv_sec = 0;
-	early_output_timer.it_value.tv_usec = 100000;
-	setitimer(ITIMER_REAL, &early_output_timer, NULL);
-}
-
-static void finish_early_output(struct rev_info *rev)
-{
-	int n = estimate_commit_count(rev->commits);
-	signal(SIGALRM, SIG_IGN);
-	show_early_header(rev, "done", n);
-}
-
 static int cmd_log_walk_no_free(struct rev_info *rev)
 {
 	struct commit *commit;
@@ -508,14 +398,8 @@ static int cmd_log_walk_no_free(struct rev_info *rev)
 	int saved_dcctc = 0;
 	int result;
 
-	if (rev->early_output)
-		setup_early_output();
-
 	if (prepare_revision_walk(rev))
 		die(_("revision walk setup failed"));
-
-	if (rev->early_output)
-		finish_early_output(rev);
 
 	/*
 	 * For --check and --exit-code, the exit code is based on CHECK_FAILED
@@ -633,6 +517,7 @@ static int git_log_config(const char *var, const char *value,
 	return git_diff_ui_config(var, value, ctx, cb);
 }
 
+#ifndef WITH_BREAKING_CHANGES
 int cmd_whatchanged(int argc,
 		    const char **argv,
 		    const char *prefix,
@@ -645,10 +530,10 @@ int cmd_whatchanged(int argc,
 
 	log_config_init(&cfg);
 	init_diff_ui_defaults();
-	git_config(git_log_config, &cfg);
+	repo_config(the_repository, git_log_config, &cfg);
 
 	repo_init_revisions(the_repository, &rev, prefix);
-	git_config(grep_config, &rev.grep_filter);
+	repo_config(the_repository, grep_config, &rev.grep_filter);
 
 	rev.diff = 1;
 	rev.simplify_history = 0;
@@ -656,6 +541,16 @@ int cmd_whatchanged(int argc,
 	opt.def = "HEAD";
 	opt.revarg_opt = REVARG_COMMITTISH;
 	cmd_log_init(argc, argv, prefix, &rev, &opt, &cfg);
+
+	if (!cfg.i_still_use_this)
+		you_still_use_that("git whatchanged",
+				   _("\n"
+				     "hint: You can replace 'git whatchanged <opts>' with:\n"
+				     "hint:\tgit log <opts> --raw --no-merges\n"
+				     "hint: Or make an alias:\n"
+				     "hint:\tgit config set --global alias.whatchanged 'log --raw --no-merges'\n"
+				     "\n"));
+
 	if (!rev.diffopt.output_format)
 		rev.diffopt.output_format = DIFF_FORMAT_RAW;
 
@@ -665,6 +560,7 @@ int cmd_whatchanged(int argc,
 	log_config_release(&cfg);
 	return ret;
 }
+#endif
 
 static void show_tagger(const char *buf, struct rev_info *rev)
 {
@@ -714,7 +610,7 @@ static int show_tag_object(const struct object_id *oid, struct rev_info *rev)
 {
 	unsigned long size;
 	enum object_type type;
-	char *buf = repo_read_object_file(the_repository, oid, &type, &size);
+	char *buf = odb_read_object(the_repository->objects, oid, &type, &size);
 	unsigned long offset = 0;
 
 	if (!buf)
@@ -771,7 +667,7 @@ int cmd_show(int argc,
 
 	log_config_init(&cfg);
 	init_diff_ui_defaults();
-	git_config(git_log_config, &cfg);
+	repo_config(the_repository, git_log_config, &cfg);
 
 	if (the_repository->gitdir) {
 		prepare_repo_settings(the_repository);
@@ -780,7 +676,7 @@ int cmd_show(int argc,
 
 	memset(&match_all, 0, sizeof(match_all));
 	repo_init_revisions(the_repository, &rev, prefix);
-	git_config(grep_config, &rev.grep_filter);
+	repo_config(the_repository, grep_config, &rev.grep_filter);
 
 	rev.diff = 1;
 	rev.always_show_header = 1;
@@ -888,11 +784,11 @@ int cmd_log_reflog(int argc,
 
 	log_config_init(&cfg);
 	init_diff_ui_defaults();
-	git_config(git_log_config, &cfg);
+	repo_config(the_repository, git_log_config, &cfg);
 
 	repo_init_revisions(the_repository, &rev, prefix);
 	init_reflog_walk(&rev.reflog_info);
-	git_config(grep_config, &rev.grep_filter);
+	repo_config(the_repository, grep_config, &rev.grep_filter);
 
 	rev.verbose_header = 1;
 	memset(&opt, 0, sizeof(opt));
@@ -933,10 +829,10 @@ int cmd_log(int argc,
 
 	log_config_init(&cfg);
 	init_diff_ui_defaults();
-	git_config(git_log_config, &cfg);
+	repo_config(the_repository, git_log_config, &cfg);
 
 	repo_init_revisions(the_repository, &rev, prefix);
-	git_config(grep_config, &rev.grep_filter);
+	repo_config(the_repository, grep_config, &rev.grep_filter);
 
 	rev.always_show_header = 1;
 	memset(&opt, 0, sizeof(opt));
@@ -2139,9 +2035,9 @@ int cmd_format_patch(int argc,
 	format_config_init(&cfg);
 	init_diff_ui_defaults();
 	init_display_notes(&cfg.notes_opt);
-	git_config(git_format_config, &cfg);
+	repo_config(the_repository, git_format_config, &cfg);
 	repo_init_revisions(the_repository, &rev, prefix);
-	git_config(grep_config, &rev.grep_filter);
+	repo_config(the_repository, grep_config, &rev.grep_filter);
 
 	rev.show_notes = cfg.show_notes;
 	memcpy(&rev.notes_opt, &cfg.notes_opt, sizeof(cfg.notes_opt));
