@@ -204,6 +204,7 @@ rm -rf $RPM_BUILD_ROOT
 %{_libexecdir}/git-core/git-gui
 %{_libexecdir}/git-core/git-citool
 %{_libexecdir}/git-core/git-gui--askpass
+%{_libexecdir}/git-core/git-gui--askyesno
 %{_datadir}/git-gui/
 %exclude %{_datadir}/git-gui/lib/msgs
 %{!?_without_docs: %{_mandir}/man1/git-gui.1*}
