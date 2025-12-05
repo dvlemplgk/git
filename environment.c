@@ -78,7 +78,6 @@ int grafts_keep_true_parents;
 int core_apply_sparse_checkout;
 int core_sparse_checkout_cone;
 int sparse_expect_files_outside_of_patterns;
-int merge_log_config = -1;
 int precomposed_unicode = -1; /* see probe_utf8_pathname_composition() */
 unsigned long pack_size_limit_cfg;
 int max_allowed_tree_depth =
@@ -122,7 +121,10 @@ int protect_ntfs = PROTECT_NTFS_DEFAULT;
  */
 const char *comment_line_str = "#";
 char *comment_line_str_to_free;
+#ifndef WITH_BREAKING_CHANGES
 int auto_comment_line_char;
+bool warn_on_auto_comment_char;
+#endif /* !WITH_BREAKING_CHANGES */
 
 /* This is set by setup_git_directory_gently() and/or git_default_config() */
 char *git_work_tree_cfg;
@@ -175,10 +177,10 @@ int have_git_dir(void)
 const char *get_git_namespace(void)
 {
 	static const char *namespace;
-
 	struct strbuf buf = STRBUF_INIT;
-	struct strbuf **components, **c;
 	const char *raw_namespace;
+	struct string_list components = STRING_LIST_INIT_DUP;
+	struct string_list_item *item;
 
 	if (namespace)
 		return namespace;
@@ -190,12 +192,17 @@ const char *get_git_namespace(void)
 	}
 
 	strbuf_addstr(&buf, raw_namespace);
-	components = strbuf_split(&buf, '/');
+
+	string_list_split(&components, buf.buf, "/", -1);
 	strbuf_reset(&buf);
-	for (c = components; *c; c++)
-		if (strcmp((*c)->buf, "/") != 0)
-			strbuf_addf(&buf, "refs/namespaces/%s", (*c)->buf);
-	strbuf_list_free(components);
+
+	for_each_string_list_item(item, &components) {
+		if (item->string[0])
+			strbuf_addf(&buf, "refs/namespaces/%s/", item->string);
+	}
+	string_list_clear(&components, 0);
+
+	strbuf_trim_trailing_dir_sep(&buf);
 	if (check_refname_format(buf.buf, 0))
 		die(_("bad git namespace path \"%s\""), raw_namespace);
 	strbuf_addch(&buf, '/');
@@ -459,16 +466,22 @@ static int git_default_core_config(const char *var, const char *value,
 
 	if (!strcmp(var, "core.commentchar") ||
 	    !strcmp(var, "core.commentstring")) {
-		if (!value)
+		if (!value) {
 			return config_error_nonbool(var);
-		else if (!strcasecmp(value, "auto"))
+#ifndef WITH_BREAKING_CHANGES
+		} else if (!strcasecmp(value, "auto")) {
 			auto_comment_line_char = 1;
-		else if (value[0]) {
+			FREE_AND_NULL(comment_line_str_to_free);
+			comment_line_str = "#";
+#endif /* !WITH_BREAKING_CHANGES */
+		} else if (value[0]) {
 			if (strchr(value, '\n'))
 				return error(_("%s cannot contain newline"), var);
 			comment_line_str = value;
 			FREE_AND_NULL(comment_line_str_to_free);
+#ifndef WITH_BREAKING_CHANGES
 			auto_comment_line_char = 0;
+#endif /* !WITH_BREAKING_CHANGES */
 		} else
 			return error(_("%s must have at least one character"), var);
 		return 0;

@@ -3,7 +3,6 @@
  */
 
 #define USE_THE_REPOSITORY_VARIABLE
-#define DISABLE_SIGN_COMPARE_WARNINGS
 
 #include "git-compat-util.h"
 #include "advice.h"
@@ -32,6 +31,7 @@
 #include "commit.h"
 #include "wildmatch.h"
 #include "ident.h"
+#include "fsck.h"
 
 /*
  * List of all available backends
@@ -323,6 +323,9 @@ int check_refname_format(const char *refname, int flags)
 int refs_fsck(struct ref_store *refs, struct fsck_options *o,
 	      struct worktree *wt)
 {
+	if (o->verbose)
+		fprintf_ln(stderr, _("Checking references consistency"));
+
 	return refs->be->fsck(refs, o, wt);
 }
 
@@ -627,10 +630,12 @@ void expand_ref_prefix(struct strvec *prefixes, const char *prefix)
 		strvec_pushf(prefixes, *p, len, prefix);
 }
 
+#ifndef WITH_BREAKING_CHANGES
 static const char default_branch_name_advice[] = N_(
 "Using '%s' as the name for the initial branch. This default branch name\n"
-"is subject to change. To configure the initial branch name to use in all\n"
-"of your new repositories, which will suppress this warning, call:\n"
+"will change to \"main\" in Git 3.0. To configure the initial branch name\n"
+"to use in all of your new repositories, which will suppress this warning,\n"
+"call:\n"
 "\n"
 "\tgit config --global init.defaultBranch <name>\n"
 "\n"
@@ -639,6 +644,15 @@ static const char default_branch_name_advice[] = N_(
 "\n"
 "\tgit branch -m <name>\n"
 );
+#else
+static const char default_branch_name_advice[] = N_(
+"Using '%s' as the name for the initial branch since Git 3.0.\n"
+"If you expected Git to create 'master', the just-created\n"
+"branch can be renamed via this command:\n"
+"\n"
+"\tgit branch -m master\n"
+);
+#endif /* WITH_BREAKING_CHANGES */
 
 char *repo_default_branch_name(struct repository *r, int quiet)
 {
@@ -649,11 +663,15 @@ char *repo_default_branch_name(struct repository *r, int quiet)
 
 	if (env && *env)
 		ret = xstrdup(env);
-	else if (repo_config_get_string(r, config_key, &ret) < 0)
+	if (!ret && repo_config_get_string(r, config_key, &ret) < 0)
 		die(_("could not retrieve `%s`"), config_display_key);
 
 	if (!ret) {
+#ifdef WITH_BREAKING_CHANGES
+		ret = xstrdup("main");
+#else
 		ret = xstrdup("master");
+#endif /* WITH_BREAKING_CHANGES */
 		if (!quiet)
 			advise_if_enabled(ADVICE_DEFAULT_BRANCH_NAME,
 					  _(default_branch_name_advice), ret);
@@ -1022,7 +1040,6 @@ int is_branch(const char *refname)
 }
 
 struct read_ref_at_cb {
-	const char *refname;
 	timestamp_t at_time;
 	int cnt;
 	int reccnt;
@@ -1052,7 +1069,8 @@ static void set_read_ref_cutoffs(struct read_ref_at_cb *cb,
 		*cb->cutoff_cnt = cb->reccnt;
 }
 
-static int read_ref_at_ent(struct object_id *ooid, struct object_id *noid,
+static int read_ref_at_ent(const char *refname,
+			   struct object_id *ooid, struct object_id *noid,
 			   const char *email UNUSED,
 			   timestamp_t timestamp, int tz,
 			   const char *message, void *cb_data)
@@ -1072,14 +1090,13 @@ static int read_ref_at_ent(struct object_id *ooid, struct object_id *noid,
 			oidcpy(cb->oid, noid);
 			if (!oideq(&cb->ooid, noid))
 				warning(_("log for ref %s has gap after %s"),
-					cb->refname, show_date(cb->date, cb->tz, DATE_MODE(RFC2822)));
+					refname, show_date(cb->date, cb->tz, DATE_MODE(RFC2822)));
 		}
 		else if (cb->date == cb->at_time)
 			oidcpy(cb->oid, noid);
 		else if (!oideq(noid, cb->oid))
 			warning(_("log for ref %s unexpectedly ended on %s"),
-				cb->refname, show_date(cb->date, cb->tz,
-						       DATE_MODE(RFC2822)));
+				refname, show_date(cb->date, cb->tz, DATE_MODE(RFC2822)));
 		cb->reccnt++;
 		oidcpy(&cb->ooid, ooid);
 		oidcpy(&cb->noid, noid);
@@ -1094,7 +1111,8 @@ static int read_ref_at_ent(struct object_id *ooid, struct object_id *noid,
 	return 0;
 }
 
-static int read_ref_at_ent_oldest(struct object_id *ooid, struct object_id *noid,
+static int read_ref_at_ent_oldest(const char *refname UNUSED,
+				  struct object_id *ooid, struct object_id *noid,
 				  const char *email UNUSED,
 				  timestamp_t timestamp, int tz,
 				  const char *message, void *cb_data)
@@ -1117,7 +1135,6 @@ int read_ref_at(struct ref_store *refs, const char *refname,
 	struct read_ref_at_cb cb;
 
 	memset(&cb, 0, sizeof(cb));
-	cb.refname = refname;
 	cb.at_time = at_time;
 	cb.cnt = cnt;
 	cb.msg = msg;
@@ -1696,8 +1713,6 @@ const char *find_descendant_ref(const char *dirname,
 				const struct string_list *extras,
 				const struct string_list *skip)
 {
-	int pos;
-
 	if (!extras)
 		return NULL;
 
@@ -1707,7 +1722,7 @@ const char *find_descendant_ref(const char *dirname,
 	 * with dirname (remember, dirname includes the trailing
 	 * slash) and is not in skip, then we have a conflict.
 	 */
-	for (pos = string_list_find_insert_index(extras, dirname, 0);
+	for (size_t pos = string_list_find_insert_index(extras, dirname, NULL);
 	     pos < extras->nr; pos++) {
 		const char *extra_refname = extras->items[pos].string;
 
@@ -1847,7 +1862,13 @@ int refs_for_each_namespaced_ref(struct ref_store *refs,
 
 int refs_for_each_rawref(struct ref_store *refs, each_ref_fn fn, void *cb_data)
 {
-	return do_for_each_ref(refs, "", NULL, fn, 0,
+	return refs_for_each_rawref_in(refs, "", fn, cb_data);
+}
+
+int refs_for_each_rawref_in(struct ref_store *refs, const char *prefix,
+			    each_ref_fn fn, void *cb_data)
+{
+	return do_for_each_ref(refs, prefix, NULL, fn, 0,
 			       DO_FOR_EACH_INCLUDE_BROKEN, cb_data);
 }
 
@@ -2284,6 +2305,11 @@ int refs_pack_refs(struct ref_store *refs, struct pack_refs_opts *opts)
 	return refs->be->pack_refs(refs, opts);
 }
 
+int refs_optimize(struct ref_store *refs, struct pack_refs_opts *opts)
+{
+	return refs->be->optimize(refs, opts);
+}
+
 int peel_iterated_oid(struct repository *r, const struct object_id *base, struct object_id *peeled)
 {
 	if (current_ref_iter &&
@@ -2385,7 +2411,7 @@ static int run_transaction_hook(struct ref_transaction *transaction,
 	struct child_process proc = CHILD_PROCESS_INIT;
 	struct strbuf buf = STRBUF_INIT;
 	const char *hook;
-	int ret = 0, i;
+	int ret = 0;
 
 	hook = find_hook(transaction->ref_store->repo, "reference-transaction");
 	if (!hook)
@@ -2402,7 +2428,7 @@ static int run_transaction_hook(struct ref_transaction *transaction,
 
 	sigchain_push(SIGPIPE, SIG_IGN);
 
-	for (i = 0; i < transaction->nr; i++) {
+	for (size_t i = 0; i < transaction->nr; i++) {
 		struct ref_update *update = transaction->updates[i];
 
 		if (update->flags & REF_LOG_ONLY)
@@ -2795,9 +2821,7 @@ void ref_transaction_for_each_queued_update(struct ref_transaction *transaction,
 					    ref_transaction_for_each_queued_update_fn cb,
 					    void *cb_data)
 {
-	int i;
-
-	for (i = 0; i < transaction->nr; i++) {
+	for (size_t i = 0; i < transaction->nr; i++) {
 		struct ref_update *update = transaction->updates[i];
 
 		cb(update->refname,
@@ -2949,6 +2973,7 @@ struct migration_data {
 	struct ref_transaction *transaction;
 	struct strbuf *errbuf;
 	struct strbuf sb, name, mail;
+	uint64_t index;
 };
 
 static int migrate_one_ref(const char *refname, const char *referent UNUSED, const struct object_id *oid,
@@ -2981,22 +3006,14 @@ done:
 	return ret;
 }
 
-struct reflog_migration_data {
-	uint64_t index;
-	const char *refname;
-	struct ref_store *old_refs;
-	struct ref_transaction *transaction;
-	struct strbuf *errbuf;
-	struct strbuf *sb, *name, *mail;
-};
-
-static int migrate_one_reflog_entry(struct object_id *old_oid,
+static int migrate_one_reflog_entry(const char *refname,
+				    struct object_id *old_oid,
 				    struct object_id *new_oid,
 				    const char *committer,
 				    timestamp_t timestamp, int tz,
 				    const char *msg, void *cb_data)
 {
-	struct reflog_migration_data *data = cb_data;
+	struct migration_data *data = cb_data;
 	struct ident_split ident;
 	const char *date;
 	int ret;
@@ -3004,17 +3021,17 @@ static int migrate_one_reflog_entry(struct object_id *old_oid,
 	if (split_ident_line(&ident, committer, strlen(committer)) < 0)
 		return -1;
 
-	strbuf_reset(data->name);
-	strbuf_add(data->name, ident.name_begin, ident.name_end - ident.name_begin);
-	strbuf_reset(data->mail);
-	strbuf_add(data->mail, ident.mail_begin, ident.mail_end - ident.mail_begin);
+	strbuf_reset(&data->name);
+	strbuf_add(&data->name, ident.name_begin, ident.name_end - ident.name_begin);
+	strbuf_reset(&data->mail);
+	strbuf_add(&data->mail, ident.mail_begin, ident.mail_end - ident.mail_begin);
 
 	date = show_date(timestamp, tz, DATE_MODE(NORMAL));
-	strbuf_reset(data->sb);
-	strbuf_addstr(data->sb, fmt_ident(data->name->buf, data->mail->buf, WANT_BLANK_IDENT, date, 0));
+	strbuf_reset(&data->sb);
+	strbuf_addstr(&data->sb, fmt_ident(data->name.buf, data->mail.buf, WANT_BLANK_IDENT, date, 0));
 
-	ret = ref_transaction_update_reflog(data->transaction, data->refname,
-					    new_oid, old_oid, data->sb->buf,
+	ret = ref_transaction_update_reflog(data->transaction, refname,
+					    new_oid, old_oid, data->sb.buf,
 					    msg, data->index++, data->errbuf);
 	return ret;
 }
@@ -3022,18 +3039,8 @@ static int migrate_one_reflog_entry(struct object_id *old_oid,
 static int migrate_one_reflog(const char *refname, void *cb_data)
 {
 	struct migration_data *migration_data = cb_data;
-	struct reflog_migration_data data = {
-		.refname = refname,
-		.old_refs = migration_data->old_refs,
-		.transaction = migration_data->transaction,
-		.errbuf = migration_data->errbuf,
-		.sb = &migration_data->sb,
-		.name = &migration_data->name,
-		.mail = &migration_data->mail,
-	};
-
 	return refs_for_each_reflog_ent(migration_data->old_refs, refname,
-					migrate_one_reflog_entry, &data);
+					migrate_one_reflog_entry, migration_data);
 }
 
 static int move_files(const char *from_path, const char *to_path, struct strbuf *errbuf)

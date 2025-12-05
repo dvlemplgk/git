@@ -671,12 +671,17 @@ static void trace2_bloom_filter_statistics_atexit(void)
 
 static int forbid_bloom_filters(struct pathspec *spec)
 {
-	if (spec->has_wildcard)
-		return 1;
-	if (spec->magic & ~PATHSPEC_LITERAL)
+	unsigned int allowed_magic =
+		PATHSPEC_FROMTOP |
+		PATHSPEC_MAXDEPTH |
+		PATHSPEC_LITERAL |
+		PATHSPEC_GLOB |
+		PATHSPEC_ATTR;
+
+	if (spec->magic & ~allowed_magic)
 		return 1;
 	for (size_t nr = 0; nr < spec->nr; nr++)
-		if (spec->items[nr].magic & ~PATHSPEC_LITERAL)
+		if (spec->items[nr].magic & ~allowed_magic)
 			return 1;
 
 	return 0;
@@ -691,23 +696,34 @@ static int convert_pathspec_to_bloom_keyvec(struct bloom_keyvec **out,
 	char *path_alloc = NULL;
 	const char *path;
 	size_t len;
-	int res = 0;
+	int res = -1;
 
+	len = pi->nowildcard_len;
+	if (len != pi->len) {
+		/*
+		 * for path like "dir/file*", nowildcard part would be
+		 * "dir/file", but only "dir" should be used for the
+		 * bloom filter.
+		 */
+		while (len > 0 && pi->match[len - 1] != '/')
+			len--;
+	}
 	/* remove single trailing slash from path, if needed */
-	if (pi->len > 0 && pi->match[pi->len - 1] == '/') {
-		path_alloc = xmemdupz(pi->match, pi->len - 1);
+	if (len > 0 && pi->match[len - 1] == '/')
+		len--;
+
+	if (!len)
+		goto cleanup;
+
+	if (len != pi->len) {
+		path_alloc = xmemdupz(pi->match, len);
 		path = path_alloc;
 	} else
 		path = pi->match;
 
-	len = strlen(path);
-	if (!len) {
-		res = -1;
-		goto cleanup;
-	}
-
 	*out = bloom_keyvec_new(path, len, settings);
 
+	res = 0;
 cleanup:
 	free(path_alloc);
 	return res;
@@ -757,9 +773,6 @@ static int check_maybe_different_in_bloom_filter(struct rev_info *revs,
 {
 	struct bloom_filter *filter;
 	int result = 0;
-
-	if (!revs->repo->objects->commit_graph)
-		return -1;
 
 	if (commit_graph_generation(commit) == GENERATION_NUMBER_INFINITY)
 		return -1;
@@ -1689,7 +1702,8 @@ static void handle_one_reflog_commit(struct object_id *oid, void *cb_data)
 	}
 }
 
-static int handle_one_reflog_ent(struct object_id *ooid, struct object_id *noid,
+static int handle_one_reflog_ent(const char *refname UNUSED,
+				 struct object_id *ooid, struct object_id *noid,
 				 const char *email UNUSED,
 				 timestamp_t timestamp UNUSED,
 				 int tz UNUSED,
@@ -2304,6 +2318,24 @@ static timestamp_t parse_age(const char *arg)
 	return num;
 }
 
+static void overwrite_argv(int *argc, const char **argv,
+			   const char **value,
+			   const struct setup_revision_opt *opt)
+{
+	/*
+	 * Detect the case when we are overwriting ourselves. The assignment
+	 * itself would be a noop either way, but this lets us avoid corner
+	 * cases around the free() and NULL operations.
+	 */
+	if (*value != argv[*argc]) {
+		if (opt && opt->free_removed_argv_elements)
+			free((char *)argv[*argc]);
+		argv[*argc] = *value;
+		*value = NULL;
+	}
+	(*argc)++;
+}
+
 static int handle_revision_opt(struct rev_info *revs, int argc, const char **argv,
 			       int *unkc, const char **unkv,
 			       const struct setup_revision_opt* opt)
@@ -2325,7 +2357,7 @@ static int handle_revision_opt(struct rev_info *revs, int argc, const char **arg
 	    starts_with(arg, "--branches=") || starts_with(arg, "--tags=") ||
 	    starts_with(arg, "--remotes=") || starts_with(arg, "--no-walk="))
 	{
-		unkv[(*unkc)++] = arg;
+		overwrite_argv(unkc, unkv, &argv[0], opt);
 		return 1;
 	}
 
@@ -2689,7 +2721,7 @@ static int handle_revision_opt(struct rev_info *revs, int argc, const char **arg
 	} else {
 		int opts = diff_opt_parse(&revs->diffopt, argv, argc, revs->prefix);
 		if (!opts)
-			unkv[(*unkc)++] = arg;
+			overwrite_argv(unkc, unkv, &argv[0], opt);
 		return opts;
 	}
 
@@ -3001,7 +3033,7 @@ int setup_revisions(int argc, const char **argv, struct rev_info *revs, struct s
 
 			if (!strcmp(arg, "--stdin")) {
 				if (revs->disable_stdin) {
-					argv[left++] = arg;
+					overwrite_argv(&left, argv, &argv[i], opt);
 					continue;
 				}
 				if (revs->read_from_stdin++)
@@ -3157,7 +3189,32 @@ int setup_revisions(int argc, const char **argv, struct rev_info *revs, struct s
 		revs->show_notes_given = 1;
 	}
 
+	if (argv) {
+		if (opt && opt->free_removed_argv_elements)
+			free((char *)argv[left]);
+		argv[left] = NULL;
+	}
+
 	return left;
+}
+
+void setup_revisions_from_strvec(struct strvec *argv, struct rev_info *revs,
+				 struct setup_revision_opt *opt)
+{
+	struct setup_revision_opt fallback_opt;
+	int ret;
+
+	if (!opt) {
+		memset(&fallback_opt, 0, sizeof(fallback_opt));
+		opt = &fallback_opt;
+	}
+	opt->free_removed_argv_elements = 1;
+
+	ret = setup_revisions(argv->nr, argv->v, revs, opt);
+
+	for (size_t i = ret; i < argv->nr; i++)
+		free((char *)argv->v[i]);
+	argv->nr = ret;
 }
 
 static void release_revisions_cmdline(struct rev_cmdline_info *cmdline)

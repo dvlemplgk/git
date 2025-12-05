@@ -2143,9 +2143,6 @@ static int stat_branch_pair(const char *branch_name, const char *base,
 	struct object_id oid;
 	struct commit *ours, *theirs;
 	struct rev_info revs;
-	struct setup_revision_opt opt = {
-		.free_removed_argv_elements = 1,
-	};
 	struct strvec argv = STRVEC_INIT;
 
 	/* Cannot stat if what we used to build on no longer exists */
@@ -2180,7 +2177,7 @@ static int stat_branch_pair(const char *branch_name, const char *base,
 	strvec_push(&argv, "--");
 
 	repo_init_revisions(the_repository, &revs, NULL);
-	setup_revisions(argv.nr, argv.v, &revs, &opt);
+	setup_revisions_from_strvec(&argv, &revs, NULL);
 	if (prepare_revision_walk(&revs))
 		die(_("revision walk setup failed"));
 
@@ -2584,7 +2581,8 @@ struct check_and_collect_until_cb_data {
 };
 
 /* Get the timestamp of the latest entry. */
-static int peek_reflog(struct object_id *o_oid UNUSED,
+static int peek_reflog(const char *refname UNUSED,
+		       struct object_id *o_oid UNUSED,
 		       struct object_id *n_oid UNUSED,
 		       const char *ident UNUSED,
 		       timestamp_t timestamp, int tz UNUSED,
@@ -2595,7 +2593,8 @@ static int peek_reflog(struct object_id *o_oid UNUSED,
 	return 1;
 }
 
-static int check_and_collect_until(struct object_id *o_oid UNUSED,
+static int check_and_collect_until(const char *refname UNUSED,
+				   struct object_id *o_oid UNUSED,
 				   struct object_id *n_oid,
 				   const char *ident UNUSED,
 				   timestamp_t timestamp, int tz UNUSED,

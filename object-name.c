@@ -213,9 +213,11 @@ static void find_short_packed_object(struct disambiguate_state *ds)
 			unique_in_midx(m, ds);
 	}
 
-	for (p = get_packed_git(ds->repo); p && !ds->ambiguous;
-	     p = p->next)
+	repo_for_each_pack(ds->repo, p) {
+		if (ds->ambiguous)
+			break;
 		unique_in_pack(p, ds);
+	}
 }
 
 static int finish_object_disambiguation(struct disambiguate_state *ds,
@@ -596,7 +598,7 @@ static enum get_oid_result get_short_oid(struct repository *r,
 	 * or migrated from loose to packed.
 	 */
 	if (status == MISSING_OBJECT) {
-		reprepare_packed_git(r);
+		odb_reprepare(r->objects);
 		find_short_object_filename(&ds);
 		find_short_packed_object(&ds);
 		status = finish_object_disambiguation(&ds, oid);
@@ -703,7 +705,7 @@ static int extend_abbrev_len(const struct object_id *oid,
 	while (mad->hex[i] && mad->hex[i] == get_hex_char_from_oid(oid, i))
 		i++;
 
-	if (i < GIT_MAX_RAWSZ && i >= mad->cur_len)
+	if (mad->hex[i] && i >= mad->cur_len)
 		mad->cur_len = i + 1;
 
 	return 0;
@@ -805,7 +807,7 @@ static void find_abbrev_len_packed(struct min_abbrev_data *mad)
 			find_abbrev_len_for_midx(m, mad);
 	}
 
-	for (p = get_packed_git(mad->repo); p; p = p->next)
+	repo_for_each_pack(mad->repo, p)
 		find_abbrev_len_for_pack(p, mad);
 }
 
@@ -1524,7 +1526,8 @@ struct grab_nth_branch_switch_cbdata {
 	struct strbuf *sb;
 };
 
-static int grab_nth_branch_switch(struct object_id *ooid UNUSED,
+static int grab_nth_branch_switch(const char *refname UNUSED,
+				  struct object_id *ooid UNUSED,
 				  struct object_id *noid UNUSED,
 				  const char *email UNUSED,
 				  timestamp_t timestamp UNUSED,
@@ -1856,55 +1859,35 @@ int repo_get_oid_committish(struct repository *r,
 			    const char *name,
 			    struct object_id *oid)
 {
-	struct object_context unused;
-	int ret = get_oid_with_context(r, name, GET_OID_COMMITTISH,
-				       oid, &unused);
-	object_context_release(&unused);
-	return ret;
+	return repo_get_oid_with_flags(r, name, oid, GET_OID_COMMITTISH);
 }
 
 int repo_get_oid_treeish(struct repository *r,
 			 const char *name,
 			 struct object_id *oid)
 {
-	struct object_context unused;
-	int ret = get_oid_with_context(r, name, GET_OID_TREEISH,
-				       oid, &unused);
-	object_context_release(&unused);
-	return ret;
+	return repo_get_oid_with_flags(r, name, oid, GET_OID_TREEISH);
 }
 
 int repo_get_oid_commit(struct repository *r,
 			const char *name,
 			struct object_id *oid)
 {
-	struct object_context unused;
-	int ret = get_oid_with_context(r, name, GET_OID_COMMIT,
-				       oid, &unused);
-	object_context_release(&unused);
-	return ret;
+	return repo_get_oid_with_flags(r, name, oid, GET_OID_COMMIT);
 }
 
 int repo_get_oid_tree(struct repository *r,
 		      const char *name,
 		      struct object_id *oid)
 {
-	struct object_context unused;
-	int ret = get_oid_with_context(r, name, GET_OID_TREE,
-				       oid, &unused);
-	object_context_release(&unused);
-	return ret;
+	return repo_get_oid_with_flags(r, name, oid, GET_OID_TREE);
 }
 
 int repo_get_oid_blob(struct repository *r,
 		      const char *name,
 		      struct object_id *oid)
 {
-	struct object_context unused;
-	int ret = get_oid_with_context(r, name, GET_OID_BLOB,
-				       oid, &unused);
-	object_context_release(&unused);
-	return ret;
+	return repo_get_oid_with_flags(r, name, oid, GET_OID_BLOB);
 }
 
 /* Must be called only when object_name:filename doesn't exist. */

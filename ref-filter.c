@@ -435,7 +435,7 @@ static int remote_ref_atom_parser(struct ref_format *format UNUSED,
 	}
 
 	atom->u.remote_ref.nobracket = 0;
-	string_list_split(&params, arg, ',', -1);
+	string_list_split(&params, arg, ",", -1);
 
 	for (i = 0; i < params.nr; i++) {
 		const char *s = params.items[i].string;
@@ -831,7 +831,7 @@ static int align_atom_parser(struct ref_format *format UNUSED,
 
 	align->position = ALIGN_LEFT;
 
-	string_list_split(&params, arg, ',', -1);
+	string_list_split(&params, arg, ",", -1);
 	for (i = 0; i < params.nr; i++) {
 		const char *s = params.items[i].string;
 		int position;
@@ -2664,7 +2664,7 @@ static int match_name_as_path(const char **pattern, const char *refname,
 /* Return 1 if the refname matches one of the patterns, otherwise 0. */
 static int filter_pattern_match(struct ref_filter *filter, const char *refname)
 {
-	if (!*filter->name_patterns)
+	if (!filter->name_patterns || !*filter->name_patterns)
 		return 1; /* No pattern always matches */
 	if (filter->match_as_path)
 		return match_name_as_path(filter->name_patterns, refname,
@@ -2751,7 +2751,7 @@ static int for_each_fullref_in_pattern(struct ref_filter *filter,
 		return for_each_fullref_with_seek(filter, cb, cb_data, 0);
 	}
 
-	if (!filter->name_patterns[0]) {
+	if (!filter->name_patterns || !filter->name_patterns[0]) {
 		/* no patterns; we have to look at everything */
 		return for_each_fullref_with_seek(filter, cb, cb_data, 0);
 	}
@@ -2833,7 +2833,7 @@ struct ref_array_item *ref_array_push(struct ref_array *array,
 	return ref;
 }
 
-static int ref_kind_from_refname(const char *refname)
+int ref_kind_from_refname(const char *refname)
 {
 	unsigned int i;
 

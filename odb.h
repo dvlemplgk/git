@@ -3,7 +3,6 @@
 
 #include "hashmap.h"
 #include "object.h"
-#include "list.h"
 #include "oidset.h"
 #include "oidmap.h"
 #include "string-list.h"
@@ -64,6 +63,14 @@ struct odb_source {
 	struct multi_pack_index *midx;
 
 	/*
+	 * Figure out whether this is the local source of the owning
+	 * repository, which would typically be its ".git/objects" directory.
+	 * This local object directory is usually where objects would be
+	 * written to.
+	 */
+	bool local;
+
+	/*
 	 * This is a temporary object store created by the tmp_objdir
 	 * facility. Disable ref updates since the objects in the store
 	 * might be discarded on rollback.
@@ -83,7 +90,9 @@ struct odb_source {
 };
 
 struct packed_git;
+struct packfile_store;
 struct cached_object_entry;
+struct odb_transaction;
 
 /*
  * The object database encapsulates access to objects in a repository. It
@@ -93,6 +102,13 @@ struct cached_object_entry;
 struct object_database {
 	/* Repository that owns this database. */
 	struct repository *repo;
+
+	/*
+	 * State of current current object database transaction. Only one
+	 * transaction may be pending at a time. Is NULL when no transaction is
+	 * configured.
+	 */
+	struct odb_transaction *transaction;
 
 	/*
 	 * Set of all object directories; the main directory is first (and
@@ -123,20 +139,8 @@ struct object_database {
 	struct commit_graph *commit_graph;
 	unsigned commit_graph_attempted : 1; /* if loading has been attempted */
 
-	/*
-	 * private data
-	 *
-	 * should only be accessed directly by packfile.c
-	 */
-
-	struct packed_git *packed_git;
-	/* A most-recently-used ordered version of the packed_git list. */
-	struct list_head packed_git_mru;
-
-	struct {
-		struct packed_git **packs;
-		unsigned flags;
-	} kept_pack_cache;
+	/* Should only be accessed directly by packfile.c and midx.c. */
+	struct packfile_store *packfiles;
 
 	/*
 	 * This is meant to hold a *small* number of objects that you would
@@ -148,24 +152,12 @@ struct object_database {
 	size_t cached_object_nr, cached_object_alloc;
 
 	/*
-	 * A map of packfiles to packed_git structs for tracking which
-	 * packs have been loaded already.
-	 */
-	struct hashmap pack_map;
-
-	/*
 	 * A fast, rough count of the number of objects in the repository.
 	 * These two fields are not meant for direct access. Use
 	 * repo_approximate_object_count() instead.
 	 */
 	unsigned long approximate_object_count;
 	unsigned approximate_object_count_valid : 1;
-
-	/*
-	 * Whether packed_git has already been populated with this repository's
-	 * packs.
-	 */
-	unsigned packed_git_initialized : 1;
 
 	/*
 	 * Submodule source paths that will be added as additional sources to
@@ -178,10 +170,32 @@ struct object_database *odb_new(struct repository *repo);
 void odb_clear(struct object_database *o);
 
 /*
- * Find source by its object directory path. Dies in case the source couldn't
- * be found.
+ * Clear caches, reload alternates and then reload object sources so that new
+ * objects may become accessible.
+ */
+void odb_reprepare(struct object_database *o);
+
+/*
+ * Starts an ODB transaction. Subsequent objects are written to the transaction
+ * and not committed until odb_transaction_commit() is invoked on the
+ * transaction. If the ODB already has a pending transaction, NULL is returned.
+ */
+struct odb_transaction *odb_transaction_begin(struct object_database *odb);
+
+/*
+ * Commits an ODB transaction making the written objects visible. If the
+ * specified transaction is NULL, the function is a no-op.
+ */
+void odb_transaction_commit(struct odb_transaction *transaction);
+
+/*
+ * Find source by its object directory path. Returns a `NULL` pointer in case
+ * the source could not be found.
  */
 struct odb_source *odb_find_source(struct object_database *odb, const char *obj_dir);
+
+/* Same as `odb_find_source()`, but dies in case the source doesn't exist. */
+struct odb_source *odb_find_source_or_die(struct object_database *odb, const char *obj_dir);
 
 /*
  * Replace the current writable object directory with the specified temporary
@@ -257,8 +271,8 @@ void odb_add_to_alternates_file(struct object_database *odb,
  * recursive alternates it points to), but do not modify the on-disk alternates
  * file.
  */
-void odb_add_to_alternates_memory(struct object_database *odb,
-				  const char *dir);
+struct odb_source *odb_add_to_alternates_memory(struct object_database *odb,
+						const char *dir);
 
 /*
  * Read an object from the database. Returns the object data and assigns object

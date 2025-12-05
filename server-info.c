@@ -292,7 +292,7 @@ static void init_pack_info(struct repository *r, const char *infofile, int force
 	int i;
 	size_t alloc = 0;
 
-	for (p = get_all_packs(r); p; p = p->next) {
+	repo_for_each_pack(r, p) {
 		/* we ignore things on alternate path since they are
 		 * not available to the pullers in general.
 		 */

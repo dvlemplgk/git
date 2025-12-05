@@ -139,23 +139,21 @@ static void read_info_alternates(struct object_database *odb,
 				 const char *relative_base,
 				 int depth);
 
-static int link_alt_odb_entry(struct object_database *odb,
-			      const struct strbuf *entry,
-			      const char *relative_base,
-			      int depth,
-			      const char *normalized_objdir)
+static struct odb_source *link_alt_odb_entry(struct object_database *odb,
+					     const char *dir,
+					     const char *relative_base,
+					     int depth)
 {
-	struct odb_source *alternate;
+	struct odb_source *alternate = NULL;
 	struct strbuf pathbuf = STRBUF_INIT;
 	struct strbuf tmp = STRBUF_INIT;
 	khiter_t pos;
-	int ret = -1;
 
-	if (!is_absolute_path(entry->buf) && relative_base) {
+	if (!is_absolute_path(dir) && relative_base) {
 		strbuf_realpath(&pathbuf, relative_base, 1);
 		strbuf_addch(&pathbuf, '/');
 	}
-	strbuf_addbuf(&pathbuf, entry);
+	strbuf_addstr(&pathbuf, dir);
 
 	if (!strbuf_realpath(&tmp, pathbuf.buf, 0)) {
 		error(_("unable to normalize alternate object path: %s"),
@@ -171,11 +169,15 @@ static int link_alt_odb_entry(struct object_database *odb,
 	while (pathbuf.len && pathbuf.buf[pathbuf.len - 1] == '/')
 		strbuf_setlen(&pathbuf, pathbuf.len - 1);
 
-	if (!alt_odb_usable(odb, &pathbuf, normalized_objdir, &pos))
+	strbuf_reset(&tmp);
+	strbuf_realpath(&tmp, odb->sources->path, 1);
+
+	if (!alt_odb_usable(odb, &pathbuf, tmp.buf, &pos))
 		goto error;
 
 	CALLOC_ARRAY(alternate, 1);
 	alternate->odb = odb;
+	alternate->local = false;
 	/* pathbuf.buf is already in r->objects->source_by_path */
 	alternate->path = strbuf_detach(&pathbuf, NULL);
 
@@ -188,11 +190,11 @@ static int link_alt_odb_entry(struct object_database *odb,
 
 	/* recursively add alternates */
 	read_info_alternates(odb, alternate->path, depth + 1);
-	ret = 0;
+
  error:
 	strbuf_release(&tmp);
 	strbuf_release(&pathbuf);
-	return ret;
+	return alternate;
 }
 
 static const char *parse_alt_odb_entry(const char *string,
@@ -227,8 +229,7 @@ static const char *parse_alt_odb_entry(const char *string,
 static void link_alt_odb_entries(struct object_database *odb, const char *alt,
 				 int sep, const char *relative_base, int depth)
 {
-	struct strbuf objdirbuf = STRBUF_INIT;
-	struct strbuf entry = STRBUF_INIT;
+	struct strbuf dir = STRBUF_INIT;
 
 	if (!alt || !*alt)
 		return;
@@ -239,17 +240,13 @@ static void link_alt_odb_entries(struct object_database *odb, const char *alt,
 		return;
 	}
 
-	strbuf_realpath(&objdirbuf, odb->sources->path, 1);
-
 	while (*alt) {
-		alt = parse_alt_odb_entry(alt, sep, &entry);
-		if (!entry.len)
+		alt = parse_alt_odb_entry(alt, sep, &dir);
+		if (!dir.len)
 			continue;
-		link_alt_odb_entry(odb, &entry,
-				   relative_base, depth, objdirbuf.buf);
+		link_alt_odb_entry(odb, dir.buf, relative_base, depth);
 	}
-	strbuf_release(&entry);
-	strbuf_release(&objdirbuf);
+	strbuf_release(&dir);
 }
 
 static void read_info_alternates(struct object_database *odb,
@@ -272,7 +269,7 @@ static void read_info_alternates(struct object_database *odb,
 }
 
 void odb_add_to_alternates_file(struct object_database *odb,
-				const char *reference)
+				const char *dir)
 {
 	struct lock_file lock = LOCK_INIT;
 	char *alts = repo_git_path(odb->repo, "objects/info/alternates");
@@ -289,7 +286,7 @@ void odb_add_to_alternates_file(struct object_database *odb,
 		struct strbuf line = STRBUF_INIT;
 
 		while (strbuf_getline(&line, in) != EOF) {
-			if (!strcmp(reference, line.buf)) {
+			if (!strcmp(dir, line.buf)) {
 				found = 1;
 				break;
 			}
@@ -305,27 +302,24 @@ void odb_add_to_alternates_file(struct object_database *odb,
 	if (found) {
 		rollback_lock_file(&lock);
 	} else {
-		fprintf_or_die(out, "%s\n", reference);
+		fprintf_or_die(out, "%s\n", dir);
 		if (commit_lock_file(&lock))
 			die_errno(_("unable to move new alternates file into place"));
 		if (odb->loaded_alternates)
-			link_alt_odb_entries(odb, reference,
-					     '\n', NULL, 0);
+			link_alt_odb_entries(odb, dir, '\n', NULL, 0);
 	}
 	free(alts);
 }
 
-void odb_add_to_alternates_memory(struct object_database *odb,
-				  const char *reference)
+struct odb_source *odb_add_to_alternates_memory(struct object_database *odb,
+						const char *dir)
 {
 	/*
 	 * Make sure alternates are initialized, or else our entry may be
 	 * overwritten when they are.
 	 */
 	odb_prepare_alternates(odb);
-
-	link_alt_odb_entries(odb, reference,
-			     '\n', NULL, 0);
+	return link_alt_odb_entry(odb, dir, NULL, 0);
 }
 
 struct odb_source *odb_set_temporary_primary_source(struct object_database *odb,
@@ -463,6 +457,12 @@ struct odb_source *odb_find_source(struct object_database *odb, const char *obj_
 	free(obj_dir_real);
 	strbuf_release(&odb_path_real);
 
+	return source;
+}
+
+struct odb_source *odb_find_source_or_die(struct object_database *odb, const char *obj_dir)
+{
+	struct odb_source *source = odb_find_source(odb, obj_dir);
 	if (!source)
 		die(_("could not find object directory matching %s"), obj_dir);
 	return source;
@@ -694,7 +694,7 @@ static int do_oid_object_info_extended(struct object_database *odb,
 
 		/* Not a loose object; someone else may have just packed it. */
 		if (!(flags & OBJECT_INFO_QUICK)) {
-			reprepare_packed_git(odb->repo);
+			odb_reprepare(odb->repo->objects);
 			if (find_pack_entry(odb->repo, real, &e))
 				break;
 		}
@@ -996,8 +996,7 @@ struct object_database *odb_new(struct repository *repo)
 
 	memset(o, 0, sizeof(*o));
 	o->repo = repo;
-	INIT_LIST_HEAD(&o->packed_git_mru);
-	hashmap_init(&o->pack_map, pack_map_entry_cmp, NULL, 0);
+	o->packfiles = packfile_store_new(o);
 	pthread_mutex_init(&o->replace_mutex, NULL);
 	string_list_init_dup(&o->submodule_source_paths);
 	return o;
@@ -1035,19 +1034,44 @@ void odb_clear(struct object_database *o)
 		free((char *) o->cached_objects[i].value.buf);
 	FREE_AND_NULL(o->cached_objects);
 
-	INIT_LIST_HEAD(&o->packed_git_mru);
 	close_object_store(o);
+	packfile_store_free(o->packfiles);
+	o->packfiles = NULL;
+
+	string_list_clear(&o->submodule_source_paths, 0);
+}
+
+void odb_reprepare(struct object_database *o)
+{
+	struct odb_source *source;
+
+	obj_read_lock();
 
 	/*
-	 * `close_object_store()` only closes the packfiles, but doesn't free
-	 * them. We thus have to do this manually.
+	 * Reprepare alt odbs, in case the alternates file was modified
+	 * during the course of this process. This only _adds_ odbs to
+	 * the linked list, so existing odbs will continue to exist for
+	 * the lifetime of the process.
 	 */
-	for (struct packed_git *p = o->packed_git, *next; p; p = next) {
-		next = p->next;
-		free(p);
-	}
-	o->packed_git = NULL;
+	o->loaded_alternates = 0;
+	odb_prepare_alternates(o);
 
-	hashmap_clear(&o->pack_map);
-	string_list_clear(&o->submodule_source_paths, 0);
+	for (source = o->sources; source; source = source->next)
+		odb_clear_loose_cache(source);
+
+	o->approximate_object_count_valid = 0;
+
+	packfile_store_reprepare(o->packfiles);
+
+	obj_read_unlock();
+}
+
+struct odb_transaction *odb_transaction_begin(struct object_database *odb)
+{
+	return object_file_transaction_begin(odb->sources);
+}
+
+void odb_transaction_commit(struct odb_transaction *transaction)
+{
+	object_file_transaction_commit(transaction);
 }

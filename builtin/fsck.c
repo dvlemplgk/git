@@ -503,13 +503,12 @@ static void fsck_handle_reflog_oid(const char *refname, struct object_id *oid,
 	}
 }
 
-static int fsck_handle_reflog_ent(struct object_id *ooid, struct object_id *noid,
+static int fsck_handle_reflog_ent(const char *refname,
+				  struct object_id *ooid, struct object_id *noid,
 				  const char *email UNUSED,
 				  timestamp_t timestamp, int tz UNUSED,
-				  const char *message UNUSED, void *cb_data)
+				  const char *message UNUSED, void *cb_data UNUSED)
 {
-	const char *refname = cb_data;
-
 	if (verbose)
 		fprintf_ln(stderr, _("Checking reflog %s->%s"),
 			   oid_to_hex(ooid), oid_to_hex(noid));
@@ -526,7 +525,7 @@ static int fsck_handle_reflog(const char *logname, void *cb_data)
 	strbuf_worktree_ref(cb_data, &refname, logname);
 	refs_for_each_reflog_ent(get_main_ref_store(the_repository),
 				 refname.buf, fsck_handle_reflog_ent,
-				 refname.buf);
+				 NULL);
 	strbuf_release(&refname);
 	return 0;
 }
@@ -869,18 +868,19 @@ static int mark_packed_for_connectivity(const struct object_id *oid,
 static int check_pack_rev_indexes(struct repository *r, int show_progress)
 {
 	struct progress *progress = NULL;
+	struct packed_git *p;
 	uint32_t pack_count = 0;
 	int res = 0;
 
 	if (show_progress) {
-		for (struct packed_git *p = get_all_packs(r); p; p = p->next)
+		repo_for_each_pack(r, p)
 			pack_count++;
 		progress = start_delayed_progress(the_repository,
 						  "Verifying reverse pack-indexes", pack_count);
 		pack_count = 0;
 	}
 
-	for (struct packed_git *p = get_all_packs(r); p; p = p->next) {
+	repo_for_each_pack(r, p) {
 		int load_error = load_pack_revindex_from_disk(p);
 
 		if (load_error < 0) {
@@ -1010,8 +1010,7 @@ int cmd_fsck(int argc,
 			struct progress *progress = NULL;
 
 			if (show_progress) {
-				for (p = get_all_packs(the_repository); p;
-				     p = p->next) {
+				repo_for_each_pack(the_repository, p) {
 					if (open_pack_index(p))
 						continue;
 					total += p->num_objects;
@@ -1020,8 +1019,8 @@ int cmd_fsck(int argc,
 				progress = start_progress(the_repository,
 							  _("Checking objects"), total);
 			}
-			for (p = get_all_packs(the_repository); p;
-			     p = p->next) {
+
+			repo_for_each_pack(the_repository, p) {
 				/* verify gives error messages itself */
 				if (verify_pack(the_repository,
 						p, fsck_obj_buffer,

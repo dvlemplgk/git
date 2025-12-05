@@ -146,6 +146,11 @@ static const char * const git_stash_import_usage[] = {
 static const char ref_stash[] = "refs/stash";
 static struct strbuf stash_index_path = STRBUF_INIT;
 
+static int show_stat = 1;
+static int show_patch;
+static int show_include_untracked;
+static int use_index;
+
 /*
  * w_commit is set to the commit containing the working tree
  * b_commit is set to the base commit
@@ -717,7 +722,7 @@ static int apply_stash(int argc, const char **argv, const char *prefix,
 {
 	int ret = -1;
 	int quiet = 0;
-	int index = 0;
+	int index = use_index;
 	struct stash_info info = STASH_INFO_INIT;
 	struct option options[] = {
 		OPT__QUIET(&quiet, N_("be quiet, only report errors")),
@@ -738,7 +743,8 @@ cleanup:
 	return ret;
 }
 
-static int reject_reflog_ent(struct object_id *ooid UNUSED,
+static int reject_reflog_ent(const char *refname UNUSED,
+			     struct object_id *ooid UNUSED,
 			     struct object_id *noid UNUSED,
 			     const char *email UNUSED,
 			     timestamp_t timestamp UNUSED,
@@ -814,7 +820,7 @@ static int pop_stash(int argc, const char **argv, const char *prefix,
 		     struct repository *repo UNUSED)
 {
 	int ret = -1;
-	int index = 0;
+	int index = use_index;
 	int quiet = 0;
 	struct stash_info info = STASH_INFO_INIT;
 	struct option options[] = {
@@ -904,10 +910,6 @@ static int list_stash(int argc, const char **argv, const char *prefix,
 	return run_command(&cp);
 }
 
-static int show_stat = 1;
-static int show_patch;
-static int show_include_untracked;
-
 static int git_stash_config(const char *var, const char *value,
 			    const struct config_context *ctx, void *cb)
 {
@@ -921,6 +923,10 @@ static int git_stash_config(const char *var, const char *value,
 	}
 	if (!strcmp(var, "stash.showincludeuntracked")) {
 		show_include_untracked = git_config_bool(var, value);
+		return 0;
+	}
+	if (!strcmp(var, "stash.index")) {
+		use_index = git_config_bool(var, value);
 		return 0;
 	}
 	return git_diff_basic_config(var, value, ctx, cb);
@@ -1014,8 +1020,8 @@ static int show_stash(int argc, const char **argv, const char *prefix,
 		}
 	}
 
-	argc = setup_revisions(revision_args.nr, revision_args.v, &rev, NULL);
-	if (argc > 1)
+	setup_revisions_from_strvec(&revision_args, &rev, NULL);
+	if (revision_args.nr > 1)
 		goto usage;
 	if (!rev.diffopt.output_format) {
 		rev.diffopt.output_format = DIFF_FORMAT_PATCH;
@@ -1088,7 +1094,6 @@ static int store_stash(int argc, const char **argv, const char *prefix,
 	int quiet = 0;
 	const char *stash_msg = NULL;
 	struct object_id obj;
-	struct object_context dummy = {0};
 	struct option options[] = {
 		OPT__QUIET(&quiet, N_("be quiet")),
 		OPT_STRING('m', "message", &stash_msg, "message",
@@ -1108,9 +1113,8 @@ static int store_stash(int argc, const char **argv, const char *prefix,
 		return -1;
 	}
 
-	if (get_oid_with_context(the_repository,
-				 argv[0], quiet ? GET_OID_QUIETLY : 0, &obj,
-				 &dummy)) {
+	if (repo_get_oid_with_flags(the_repository, argv[0], &obj,
+				    quiet ? GET_OID_QUIETLY : 0)) {
 		if (!quiet)
 			fprintf_ln(stderr, _("Cannot update %s with %s"),
 					     ref_stash, argv[0]);
@@ -1121,7 +1125,6 @@ static int store_stash(int argc, const char **argv, const char *prefix,
 	ret = do_store_stash(&obj, stash_msg, quiet);
 
 out:
-	object_context_release(&dummy);
 	return ret;
 }
 
@@ -2210,7 +2213,8 @@ struct stash_entry_data {
 	size_t count;
 };
 
-static int collect_stash_entries(struct object_id *old_oid UNUSED,
+static int collect_stash_entries(const char *refname UNUSED,
+				 struct object_id *old_oid UNUSED,
 				 struct object_id *new_oid,
 				 const char *committer UNUSED,
 				 timestamp_t timestamp UNUSED,
@@ -2236,7 +2240,6 @@ static int do_export_stash(struct repository *r,
 			   const char **argv)
 {
 	struct object_id base;
-	struct object_context unused;
 	struct commit *prev;
 	struct commit_list *items = NULL, **iter = &items, *cur;
 	int res = 0;
@@ -2270,9 +2273,9 @@ static int do_export_stash(struct repository *r,
 			struct commit *stash;
 
 			if (parse_stash_revision(&revision, argv[i], 1) ||
-			    get_oid_with_context(r, revision.buf,
-						 GET_OID_QUIETLY | GET_OID_GENTLY,
-						 &oid, &unused)) {
+			    repo_get_oid_with_flags(r, revision.buf, &oid,
+						    GET_OID_QUIETLY |
+						    GET_OID_GENTLY)) {
 				res = error(_("unable to find stash entry %s"), argv[i]);
 				goto out;
 			}

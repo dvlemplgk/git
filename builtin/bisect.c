@@ -27,13 +27,14 @@ static GIT_PATH_FUNC(git_path_bisect_first_parent, "BISECT_FIRST_PARENT")
 static GIT_PATH_FUNC(git_path_bisect_run, "BISECT_RUN")
 
 #define BUILTIN_GIT_BISECT_START_USAGE \
-	N_("git bisect start [--term-(new|bad)=<term> --term-(old|good)=<term>]" \
-	   "    [--no-checkout] [--first-parent] [<bad> [<good>...]] [--]" \
-	   "    [<pathspec>...]")
-#define BUILTIN_GIT_BISECT_STATE_USAGE \
-	N_("git bisect (good|bad) [<rev>...]")
+	N_("git bisect start [--term-(bad|new)=<term-new> --term-(good|old)=<term-old>]\n" \
+	   "                 [--no-checkout] [--first-parent] [<bad> [<good>...]] [--] [<pathspec>...]")
+#define BUILTIN_GIT_BISECT_BAD_USAGE \
+	N_("git bisect (bad|new|<term-new>) [<rev>]")
+#define BUILTIN_GIT_BISECT_GOOD_USAGE \
+	N_("git bisect (good|old|<term-old>) [<rev>...]")
 #define BUILTIN_GIT_BISECT_TERMS_USAGE \
-	"git bisect terms [--term-good | --term-bad]"
+	"git bisect terms [--term-(good|old) | --term-(bad|new)]"
 #define BUILTIN_GIT_BISECT_SKIP_USAGE \
 	N_("git bisect skip [(<rev>|<range>)...]")
 #define BUILTIN_GIT_BISECT_NEXT_USAGE \
@@ -41,17 +42,20 @@ static GIT_PATH_FUNC(git_path_bisect_run, "BISECT_RUN")
 #define BUILTIN_GIT_BISECT_RESET_USAGE \
 	N_("git bisect reset [<commit>]")
 #define BUILTIN_GIT_BISECT_VISUALIZE_USAGE \
-	"git bisect visualize"
+	"git bisect (visualize|view)"
 #define BUILTIN_GIT_BISECT_REPLAY_USAGE \
 	N_("git bisect replay <logfile>")
 #define BUILTIN_GIT_BISECT_LOG_USAGE \
 	"git bisect log"
 #define BUILTIN_GIT_BISECT_RUN_USAGE \
 	N_("git bisect run <cmd> [<arg>...]")
+#define BUILTIN_GIT_BISECT_HELP_USAGE \
+	"git bisect help"
 
 static const char * const git_bisect_usage[] = {
 	BUILTIN_GIT_BISECT_START_USAGE,
-	BUILTIN_GIT_BISECT_STATE_USAGE,
+	BUILTIN_GIT_BISECT_BAD_USAGE,
+	BUILTIN_GIT_BISECT_GOOD_USAGE,
 	BUILTIN_GIT_BISECT_TERMS_USAGE,
 	BUILTIN_GIT_BISECT_SKIP_USAGE,
 	BUILTIN_GIT_BISECT_NEXT_USAGE,
@@ -60,6 +64,7 @@ static const char * const git_bisect_usage[] = {
 	BUILTIN_GIT_BISECT_REPLAY_USAGE,
 	BUILTIN_GIT_BISECT_LOG_USAGE,
 	BUILTIN_GIT_BISECT_RUN_USAGE,
+	BUILTIN_GIT_BISECT_HELP_USAGE,
 	NULL
 };
 
@@ -1453,9 +1458,13 @@ int cmd_bisect(int argc,
 		if (!argc)
 			usage_msg_opt(_("need a command"), git_bisect_usage, options);
 
+		if (!strcmp(argv[0], "help"))
+			usage_with_options(git_bisect_usage, options);
+
 		set_terms(&terms, "bad", "good");
 		get_terms(&terms);
-		if (check_and_set_terms(&terms, argv[0]))
+		if (check_and_set_terms(&terms, argv[0]) ||
+		    !one_of(argv[0], terms.term_good, terms.term_bad, NULL))
 			usage_msg_optf(_("unknown command: '%s'"), git_bisect_usage,
 				       options, argv[0]);
 		res = bisect_state(&terms, argc, argv);

@@ -129,7 +129,7 @@ int cmd_count_objects(int argc,
 		struct strbuf pack_buf = STRBUF_INIT;
 		struct strbuf garbage_buf = STRBUF_INIT;
 
-		for (p = get_all_packs(the_repository); p; p = p->next) {
+		repo_for_each_pack(the_repository, p) {
 			if (!p->pack_local)
 				continue;
 			if (open_pack_index(p))

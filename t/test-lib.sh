@@ -127,10 +127,17 @@ then
 	export GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS
 fi
 
-# Explicitly set the default branch name for testing, to avoid the
-# transitory "git init" warning under --verbose.
-: ${GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME:=master}
+# Explicitly set the default branch name for testing, to squelch hints
+# from "git init" during the transition period.  Should be removed
+# after we decide to remove ADVICE_DEFAULT_BRANCH_NAME
+if test -z "$WITH_BREAKING_CHANGES"
+then
+	: ${GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME:=master}
+else
+	: ${GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME:=main}
+fi
 export GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME
+
 
 ################################################################
 # It appears that people try to run tests without building...
@@ -1916,6 +1923,19 @@ test_lazy_prereq DEFAULT_HASH_ALGORITHM '
 
 test_lazy_prereq DEFAULT_REPO_FORMAT '
 	test_have_prereq SHA1,REFFILES
+'
+# BROKEN_OBJECTS is a test whether we can write deliberately broken objects and
+# expect them to work.  When running using SHA-256 mode with SHA-1
+# compatibility, we cannot write such objects because there's no SHA-1
+# compatibility value for a nonexistent object.
+test_lazy_prereq BROKEN_OBJECTS '
+	! test_have_prereq COMPAT_HASH
+'
+
+# COMPAT_HASH is a test if we're operating in a repository with SHA-256 with
+# SHA-1 compatibility.
+test_lazy_prereq COMPAT_HASH '
+	test -n "$test_repo_compat_hash_algo"
 '
 
 # Ensure that no test accidentally triggers a Git command

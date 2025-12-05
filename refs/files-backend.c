@@ -20,7 +20,6 @@
 #include "../dir-iterator.h"
 #include "../lockfile.h"
 #include "../object.h"
-#include "../object-file.h"
 #include "../path.h"
 #include "../dir.h"
 #include "../chdir-notify.h"
@@ -1528,6 +1527,15 @@ static int files_pack_refs(struct ref_store *ref_store,
 	return 0;
 }
 
+static int files_optimize(struct ref_store *ref_store, struct pack_refs_opts *opts)
+{
+	/*
+	 * For the "files" backend, "optimizing" is the same as "packing".
+	 * So, we just call the existing worker function for packing.
+	 */
+	return files_pack_refs(ref_store, opts);
+}
+
 /*
  * People using contrib's git-new-workdir have .git/logs/refs ->
  * /some/other/path/.git/logs/refs, and that may live on another device.
@@ -2105,20 +2113,35 @@ static int commit_ref_update(struct files_ref_store *refs,
 	return 0;
 }
 
-#ifdef NO_SYMLINK_HEAD
+#if defined(NO_SYMLINK_HEAD) || defined(WITH_BREAKING_CHANGES)
 #define create_ref_symlink(a, b) (-1)
 #else
 static int create_ref_symlink(struct ref_lock *lock, const char *target)
 {
+	static int warn_once = 1;
+	char *ref_path;
 	int ret = -1;
 
-	char *ref_path = get_locked_file_path(&lock->lk);
+	ref_path = get_locked_file_path(&lock->lk);
 	unlink(ref_path);
 	ret = symlink(target, ref_path);
 	free(ref_path);
 
 	if (ret)
 		fprintf(stderr, "no symlink - falling back to symbolic ref\n");
+
+	if (warn_once)
+		warning(_("'core.preferSymlinkRefs=true' is nominated for removal.\n"
+			  "hint: The use of symbolic links for symbolic refs is deprecated\n"
+			  "hint: and will be removed in Git 3.0. The configuration that\n"
+			  "hint: tells Git to use them is thus going away. You can unset\n"
+			  "hint: it with:\n"
+			  "hint:\n"
+			  "hint:\tgit config unset core.preferSymlinkRefs\n"
+			  "hint:\n"
+			  "hint: Git will then use the textual symref format instead."));
+	warn_once = 0;
+
 	return ret;
 }
 #endif
@@ -2170,7 +2193,9 @@ static int files_delete_reflog(struct ref_store *ref_store,
 	return ret;
 }
 
-static int show_one_reflog_ent(struct files_ref_store *refs, struct strbuf *sb,
+static int show_one_reflog_ent(struct files_ref_store *refs,
+			       const char *refname,
+			       struct strbuf *sb,
 			       each_reflog_ent_fn fn, void *cb_data)
 {
 	struct object_id ooid, noid;
@@ -2197,7 +2222,7 @@ static int show_one_reflog_ent(struct files_ref_store *refs, struct strbuf *sb,
 		message += 6;
 	else
 		message += 7;
-	return fn(&ooid, &noid, p, timestamp, tz, message, cb_data);
+	return fn(refname, &ooid, &noid, p, timestamp, tz, message, cb_data);
 }
 
 static char *find_beginning_of_line(char *bob, char *scan)
@@ -2281,7 +2306,7 @@ static int files_for_each_reflog_ent_reverse(struct ref_store *ref_store,
 				strbuf_splice(&sb, 0, 0, bp + 1, endp - (bp + 1));
 				scanp = bp;
 				endp = bp + 1;
-				ret = show_one_reflog_ent(refs, &sb, fn, cb_data);
+				ret = show_one_reflog_ent(refs, refname, &sb, fn, cb_data);
 				strbuf_reset(&sb);
 				if (ret)
 					break;
@@ -2293,7 +2318,7 @@ static int files_for_each_reflog_ent_reverse(struct ref_store *ref_store,
 				 * Process it, and we can end the loop.
 				 */
 				strbuf_splice(&sb, 0, 0, buf, endp - buf);
-				ret = show_one_reflog_ent(refs, &sb, fn, cb_data);
+				ret = show_one_reflog_ent(refs, refname, &sb, fn, cb_data);
 				strbuf_reset(&sb);
 				break;
 			}
@@ -2343,7 +2368,7 @@ static int files_for_each_reflog_ent(struct ref_store *ref_store,
 		return -1;
 
 	while (!ret && !strbuf_getwholeline(&sb, logfp, '\n'))
-		ret = show_one_reflog_ent(refs, &sb, fn, cb_data);
+		ret = show_one_reflog_ent(refs, refname, &sb, fn, cb_data);
 	fclose(logfp);
 	strbuf_release(&sb);
 	return ret;
@@ -2568,12 +2593,36 @@ static enum ref_transaction_error split_symref_update(struct ref_update *update,
  */
 static enum ref_transaction_error check_old_oid(struct ref_update *update,
 						struct object_id *oid,
+						struct strbuf *referent,
 						struct strbuf *err)
 {
 	if (update->flags & REF_LOG_ONLY ||
-	    !(update->flags & REF_HAVE_OLD) ||
-	    oideq(oid, &update->old_oid))
+	    !(update->flags & REF_HAVE_OLD))
 		return 0;
+
+	if (oideq(oid, &update->old_oid)) {
+		/*
+		 * Normally matching the expected old oid is enough. Either we
+		 * found the ref at the expected state, or we are creating and
+		 * expect the null oid (and likewise found nothing).
+		 *
+		 * But there is one exception for the null oid: if we found a
+		 * symref pointing to nothing we'll also get the null oid. In
+		 * regular recursive mode, that's good (we'll write to what the
+		 * symref points to, which doesn't exist). But in no-deref
+		 * mode, it means we'll clobber the symref, even though the
+		 * caller asked for this to be a creation event. So flag
+		 * that case to preserve the dangling symref.
+		 */
+		if ((update->flags & REF_NO_DEREF) && referent->len &&
+		    is_null_oid(oid)) {
+			strbuf_addf(err, "cannot lock ref '%s': "
+				    "dangling symref already exists",
+				    ref_update_original_update_refname(update));
+			return REF_TRANSACTION_ERROR_CREATE_EXISTS;
+		}
+		return 0;
+	}
 
 	if (is_null_oid(&update->old_oid)) {
 		strbuf_addf(err, "cannot lock ref '%s': "
@@ -2713,7 +2762,8 @@ static enum ref_transaction_error lock_ref_for_update(struct files_ref_store *re
 			if (update->old_target)
 				ret = ref_update_check_old_target(referent.buf, update, err);
 			else
-				ret = check_old_oid(update, &lock->old_oid, err);
+				ret = check_old_oid(update, &lock->old_oid,
+						    &referent, err);
 			if (ret)
 				goto out;
 		} else {
@@ -2745,7 +2795,8 @@ static enum ref_transaction_error lock_ref_for_update(struct files_ref_store *re
 			ret = REF_TRANSACTION_ERROR_EXPECTED_SYMREF;
 			goto out;
 		} else {
-			ret = check_old_oid(update, &lock->old_oid, err);
+			ret = check_old_oid(update, &lock->old_oid,
+					    &referent, err);
 			if  (ret) {
 				goto out;
 			}
@@ -3073,7 +3124,7 @@ static int parse_and_write_reflog(struct files_ref_store *refs,
 		if (!(update->flags & REF_HAVE_OLD) ||
 		    !(update->flags & REF_HAVE_NEW) ||
 		    !(update->flags & REF_LOG_ONLY)) {
-			strbuf_addf(err, _("trying to write reflog for '%s'"
+			strbuf_addf(err, _("trying to write reflog for '%s' "
 					   "with incomplete values"), update->refname);
 			return REF_TRANSACTION_ERROR_GENERIC;
 		}
@@ -3420,7 +3471,8 @@ struct expire_reflog_cb {
 		     dry_run:1;
 };
 
-static int expire_reflog_ent(struct object_id *ooid, struct object_id *noid,
+static int expire_reflog_ent(const char *refname UNUSED,
+			     struct object_id *ooid, struct object_id *noid,
 			     const char *email, timestamp_t timestamp, int tz,
 			     const char *message, void *cb_data)
 {
@@ -3938,8 +3990,6 @@ static int files_fsck_refs(struct ref_store *ref_store,
 		NULL,
 	};
 
-	if (o->verbose)
-		fprintf_ln(stderr, _("Checking references consistency"));
 	return files_fsck_refs_dir(ref_store, o, "refs", wt, fsck_refs_fn);
 }
 
@@ -3966,6 +4016,7 @@ struct ref_storage_be refs_be_files = {
 	.transaction_abort = files_transaction_abort,
 
 	.pack_refs = files_pack_refs,
+	.optimize = files_optimize,
 	.rename_ref = files_rename_ref,
 	.copy_ref = files_copy_ref,
 

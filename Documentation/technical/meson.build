@@ -13,6 +13,7 @@ articles = [
   'commit-graph.adoc',
   'directory-rename-detection.adoc',
   'hash-function-transition.adoc',
+  'large-object-promisors.adoc',
   'long-running-process-protocol.adoc',
   'multi-pack-index.adoc',
   'packfile-uri.adoc',
@@ -46,22 +47,22 @@ api_index = custom_target(
   output: 'api-index.adoc',
 )
 
-custom_target(
+doc_targets += custom_target(
   command: asciidoc_html_options,
   input: api_index,
   output: 'api-index.html',
   depends: documentation_deps,
   install: true,
-  install_dir: get_option('datadir') / 'doc/git-doc/technical',
+  install_dir: htmldir / 'technical',
 )
 
 foreach article : api_docs + articles
-  custom_target(
+  doc_targets += custom_target(
     command: asciidoc_html_options,
     input: article,
     output: fs.stem(article) + '.html',
     depends: documentation_deps,
     install: true,
-    install_dir: get_option('datadir') / 'doc/git-doc/technical',
+    install_dir: htmldir / 'technical',
   )
 endforeach

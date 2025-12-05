@@ -3,9 +3,9 @@
 
 struct strbuf;
 
-#define GPG_VERIFY_VERBOSE		1
-#define GPG_VERIFY_RAW			2
-#define GPG_VERIFY_OMIT_STATUS	4
+#define GPG_VERIFY_VERBOSE	(1<<0)
+#define GPG_VERIFY_RAW		(1<<1)
+#define GPG_VERIFY_OMIT_STATUS	(1<<2)
 
 enum signature_trust_level {
 	TRUST_UNDEFINED,
@@ -103,5 +103,20 @@ int check_signature(struct signature_check *sigc,
 		    const char *signature, size_t slen);
 void print_signature_buffer(const struct signature_check *sigc,
 			    unsigned flags);
+
+/* Modes for --signed-tags=<mode> and --signed-commits=<mode> options. */
+enum sign_mode {
+	SIGN_ABORT,
+	SIGN_WARN_VERBATIM,
+	SIGN_VERBATIM,
+	SIGN_WARN_STRIP,
+	SIGN_STRIP,
+};
+
+/*
+ * Return 0 if `arg` can be parsed into an `enum sign_mode`. Return -1
+ * otherwise.
+ */
+int parse_sign_mode(const char *arg, enum sign_mode *mode);
 
 #endif

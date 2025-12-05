@@ -1,7 +1,6 @@
 #include "git-compat-util.h"
 #include "hex.h"
 #include "refs-internal.h"
-#include "string-list.h"
 #include "trace.h"
 
 static struct trace_key trace_refs = TRACE_KEY_INIT(REFS);
@@ -45,6 +44,14 @@ static int debug_create_on_disk(struct ref_store *refs, int flags, struct strbuf
 	struct debug_ref_store *drefs = (struct debug_ref_store *)refs;
 	int res = drefs->refs->be->create_on_disk(drefs->refs, flags, err);
 	trace_printf_key(&trace_refs, "create_on_disk: %d\n", res);
+	return res;
+}
+
+static int debug_remove_on_disk(struct ref_store *refs, struct strbuf *err)
+{
+	struct debug_ref_store *drefs = (struct debug_ref_store *)refs;
+	int res = drefs->refs->be->remove_on_disk(drefs->refs, err);
+	trace_printf_key(&trace_refs, "remove_on_disk: %d\n", res);
 	return res;
 }
 
@@ -277,7 +284,8 @@ struct debug_reflog {
 	void *cb_data;
 };
 
-static int debug_print_reflog_ent(struct object_id *old_oid,
+static int debug_print_reflog_ent(const char *refname,
+				  struct object_id *old_oid,
 				  struct object_id *new_oid,
 				  const char *committer, timestamp_t timestamp,
 				  int tz, const char *msg, void *cb_data)
@@ -292,7 +300,7 @@ static int debug_print_reflog_ent(struct object_id *old_oid,
 	if (new_oid)
 		oid_to_hex_r(n, new_oid);
 
-	ret = dbg->fn(old_oid, new_oid, committer, timestamp, tz, msg,
+	ret = dbg->fn(refname, old_oid, new_oid, committer, timestamp, tz, msg,
 		      dbg->cb_data);
 	trace_printf_key(&trace_refs,
 			 "reflog_ent %s (ret %d): %s -> %s, %s %ld \"%.*s\"\n",
@@ -432,6 +440,7 @@ struct ref_storage_be refs_be_debug = {
 	.init = NULL,
 	.release = debug_release,
 	.create_on_disk = debug_create_on_disk,
+	.remove_on_disk = debug_remove_on_disk,
 
 	/*
 	 * None of these should be NULL. If the "files" backend (in

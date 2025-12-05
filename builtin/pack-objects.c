@@ -1741,19 +1741,19 @@ static int want_object_in_pack_mtime(const struct object_id *oid,
 		struct multi_pack_index *m = get_multi_pack_index(source);
 		struct pack_entry e;
 
-		if (m && fill_midx_entry(the_repository, oid, &e, m)) {
+		if (m && fill_midx_entry(m, oid, &e)) {
 			want = want_object_in_pack_one(e.p, oid, exclude, found_pack, found_offset, found_mtime);
 			if (want != -1)
 				return want;
 		}
 	}
 
-	list_for_each(pos, get_packed_git_mru(the_repository)) {
+	list_for_each(pos, packfile_store_get_packs_mru(the_repository->objects->packfiles)) {
 		struct packed_git *p = list_entry(pos, struct packed_git, mru);
 		want = want_object_in_pack_one(p, oid, exclude, found_pack, found_offset, found_mtime);
 		if (!exclude && want > 0)
 			list_move(&p->mru,
-				  get_packed_git_mru(the_repository));
+				  packfile_store_get_packs_mru(the_repository->objects->packfiles));
 		if (want != -1)
 			return want;
 	}
@@ -3835,7 +3835,6 @@ static void read_packs_list_from_stdin(struct rev_info *revs)
 	struct string_list include_packs = STRING_LIST_INIT_DUP;
 	struct string_list exclude_packs = STRING_LIST_INIT_DUP;
 	struct string_list_item *item = NULL;
-
 	struct packed_git *p;
 
 	while (strbuf_getline(&buf, stdin) != EOF) {
@@ -3855,7 +3854,7 @@ static void read_packs_list_from_stdin(struct rev_info *revs)
 	string_list_sort(&exclude_packs);
 	string_list_remove_duplicates(&exclude_packs, 0);
 
-	for (p = get_all_packs(the_repository); p; p = p->next) {
+	repo_for_each_pack(the_repository, p) {
 		const char *pack_name = pack_basename(p);
 
 		if ((item = string_list_lookup(&include_packs, pack_name)))
@@ -4105,7 +4104,7 @@ static void enumerate_and_traverse_cruft_objects(struct string_list *fresh_packs
 	 * Re-mark only the fresh packs as kept so that objects in
 	 * unknown packs do not halt the reachability traversal early.
 	 */
-	for (p = get_all_packs(the_repository); p; p = p->next)
+	repo_for_each_pack(the_repository, p)
 		p->pack_keep_in_core = 0;
 	mark_pack_kept_in_core(fresh_packs, 1);
 
@@ -4142,7 +4141,7 @@ static void read_cruft_objects(void)
 	string_list_sort(&discard_packs);
 	string_list_sort(&fresh_packs);
 
-	for (p = get_all_packs(the_repository); p; p = p->next) {
+	repo_for_each_pack(the_repository, p) {
 		const char *pack_name = pack_basename(p);
 		struct string_list_item *item;
 
@@ -4390,11 +4389,12 @@ static void add_unreachable_loose_objects(struct rev_info *revs)
 
 static int has_sha1_pack_kept_or_nonlocal(const struct object_id *oid)
 {
+	struct packfile_store *packs = the_repository->objects->packfiles;
 	static struct packed_git *last_found = (void *)1;
 	struct packed_git *p;
 
 	p = (last_found != (void *)1) ? last_found :
-					get_all_packs(the_repository);
+					packfile_store_get_packs(packs);
 
 	while (p) {
 		if ((!p->pack_local || p->pack_keep ||
@@ -4404,7 +4404,7 @@ static int has_sha1_pack_kept_or_nonlocal(const struct object_id *oid)
 			return 1;
 		}
 		if (p == last_found)
-			p = get_all_packs(the_repository);
+			p = packfile_store_get_packs(packs);
 		else
 			p = p->next;
 		if (p == last_found)
@@ -4441,7 +4441,7 @@ static void loosen_unused_packed_objects(void)
 	uint32_t loosened_objects_nr = 0;
 	struct object_id oid;
 
-	for (p = get_all_packs(the_repository); p; p = p->next) {
+	repo_for_each_pack(the_repository, p) {
 		if (!p->pack_local || p->pack_keep || p->pack_keep_in_core)
 			continue;
 
@@ -4650,7 +4650,7 @@ static void get_object_list_path_walk(struct rev_info *revs)
 		die(_("failed to pack objects via path-walk"));
 }
 
-static void get_object_list(struct rev_info *revs, int ac, const char **av)
+static void get_object_list(struct rev_info *revs, struct strvec *argv)
 {
 	struct setup_revision_opt s_r_opt = {
 		.allow_exclude_promisor_objects = 1,
@@ -4660,7 +4660,7 @@ static void get_object_list(struct rev_info *revs, int ac, const char **av)
 	int save_warning;
 
 	save_commit_buffer = 0;
-	setup_revisions(ac, av, revs, &s_r_opt);
+	setup_revisions_from_strvec(argv, revs, &s_r_opt);
 
 	/* make sure shallows are read */
 	is_repository_shallow(the_repository);
@@ -4747,7 +4747,7 @@ static void add_extra_kept_packs(const struct string_list *names)
 	if (!names->nr)
 		return;
 
-	for (p = get_all_packs(the_repository); p; p = p->next) {
+	repo_for_each_pack(the_repository, p) {
 		const char *name = basename(p->pack_name);
 		int i;
 
@@ -5186,7 +5186,8 @@ int cmd_pack_objects(int argc,
 	add_extra_kept_packs(&keep_pack_list);
 	if (ignore_packed_keep_on_disk) {
 		struct packed_git *p;
-		for (p = get_all_packs(the_repository); p; p = p->next)
+
+		repo_for_each_pack(the_repository, p)
 			if (p->pack_local && p->pack_keep)
 				break;
 		if (!p) /* no keep-able packs found */
@@ -5199,7 +5200,8 @@ int cmd_pack_objects(int argc,
 		 * it also covers non-local objects
 		 */
 		struct packed_git *p;
-		for (p = get_all_packs(the_repository); p; p = p->next) {
+
+		repo_for_each_pack(the_repository, p) {
 			if (!p->pack_local) {
 				have_non_local_packs = 1;
 				break;
@@ -5229,7 +5231,7 @@ int cmd_pack_objects(int argc,
 			revs.include_check = is_not_in_promisor_pack;
 			revs.include_check_obj = is_not_in_promisor_pack_obj;
 		}
-		get_object_list(&revs, rp.nr, rp.v);
+		get_object_list(&revs, &rp);
 		release_revisions(&revs);
 	}
 	cleanup_preferred_base();

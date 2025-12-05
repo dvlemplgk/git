@@ -299,8 +299,7 @@ static int do_interactive_rebase(struct rebase_options *opts, unsigned flags)
 			     oid_to_hex(&opts->restrict_revision->object.oid));
 
 	ret = sequencer_make_script(the_repository, &todo_list.buf,
-				    make_script_args.nr, make_script_args.v,
-				    flags);
+				    &make_script_args, flags);
 	if (ret) {
 		error(_("could not generate todo list"));
 		goto cleanup;
@@ -1242,6 +1241,9 @@ int cmd_rebase(int argc,
 					 builtin_rebase_usage,
 					 builtin_rebase_options);
 
+#ifndef WITH_BREAKING_CHANGES
+	warn_on_auto_comment_char = true;
+#endif /* !WITH_BREAKING_CHANGES */
 	prepare_repo_settings(the_repository);
 	the_repository->settings.command_requires_full_index = 0;
 
