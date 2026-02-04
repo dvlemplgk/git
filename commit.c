@@ -1315,7 +1315,8 @@ free_return:
 	free(buf);
 }
 
-int check_commit_signature(const struct commit *commit, struct signature_check *sigc)
+int verify_commit_buffer(const char *buffer, size_t size,
+			 struct signature_check *sigc)
 {
 	struct strbuf payload = STRBUF_INIT;
 	struct strbuf signature = STRBUF_INIT;
@@ -1323,7 +1324,8 @@ int check_commit_signature(const struct commit *commit, struct signature_check *
 
 	sigc->result = 'N';
 
-	if (parse_signed_commit(commit, &payload, &signature, the_hash_algo) <= 0)
+	if (parse_buffer_signed_by_header(buffer, size, &payload,
+					  &signature, the_hash_algo) <= 0)
 		goto out;
 
 	sigc->payload_type = SIGNATURE_PAYLOAD_COMMIT;
@@ -1333,6 +1335,17 @@ int check_commit_signature(const struct commit *commit, struct signature_check *
  out:
 	strbuf_release(&payload);
 	strbuf_release(&signature);
+
+	return ret;
+}
+
+int check_commit_signature(const struct commit *commit, struct signature_check *sigc)
+{
+	unsigned long size;
+	const char *buffer = repo_get_commit_buffer(the_repository, commit, &size);
+	int ret = verify_commit_buffer(buffer, size, sigc);
+
+	repo_unuse_commit_buffer(the_repository, commit, buffer);
 
 	return ret;
 }
@@ -1967,4 +1980,32 @@ int run_commit_hook(int editor_is_used, const char *index_file,
 
 	opt.invoked_hook = invoked_hook;
 	return run_hooks_opt(the_repository, name, &opt);
+}
+
+void commit_stack_init(struct commit_stack *stack)
+{
+	stack->items = NULL;
+	stack->nr = stack->alloc = 0;
+}
+
+void commit_stack_grow(struct commit_stack *stack, size_t extra)
+{
+	ALLOC_GROW(stack->items, st_add(stack->nr, extra), stack->alloc);
+}
+
+void commit_stack_push(struct commit_stack *stack, struct commit *commit)
+{
+	commit_stack_grow(stack, 1);
+	stack->items[stack->nr++] = commit;
+}
+
+struct commit *commit_stack_pop(struct commit_stack *stack)
+{
+	return stack->nr ? stack->items[--stack->nr] : NULL;
+}
+
+void commit_stack_clear(struct commit_stack *stack)
+{
+	free(stack->items);
+	commit_stack_init(stack);
 }

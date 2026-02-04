@@ -331,9 +331,9 @@ struct diff_options {
 
 	int ita_invisible_in_index;
 /* white-space error highlighting */
-#define WSEH_NEW (1<<12)
-#define WSEH_CONTEXT (1<<13)
-#define WSEH_OLD (1<<14)
+#define WSEH_NEW        (1<<16)
+#define WSEH_CONTEXT    (1<<17)
+#define WSEH_OLD        (1<<18)
 	unsigned ws_error_highlight;
 	const char *prefix;
 	int prefix_length;
@@ -571,6 +571,11 @@ void diff_change(struct diff_options *,
 		 int old_oid_valid, int new_oid_valid,
 		 const char *fullpath,
 		 unsigned dirty_submodule1, unsigned dirty_submodule2);
+
+void diff_same(struct diff_options *,
+	       unsigned mode,
+	       const struct object_id *oid,
+	       const char *fullpath);
 
 struct diff_filepair *diff_unmerge(struct diff_options *, const char *path);
 

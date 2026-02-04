@@ -332,6 +332,9 @@ int cmd_repack(int argc,
 		    !(pack_everything & PACK_CRUFT))
 			strvec_push(&cmd.args, "--pack-loose-unreachable");
 	} else if (geometry.split_factor) {
+		pack_geometry_repack_promisors(repo, &po_args, &geometry,
+					       &names, packtmp);
+
 		if (midx_must_contain_cruft)
 			strvec_push(&cmd.args, "--stdin-packs");
 		else
@@ -488,7 +491,7 @@ int cmd_repack(int argc,
 
 	string_list_sort(&names);
 
-	close_object_store(repo->objects);
+	odb_close(repo->objects);
 
 	/*
 	 * Ok we have prepared all new packfiles.

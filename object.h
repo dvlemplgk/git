@@ -80,7 +80,6 @@ void object_array_init(struct object_array *array);
  * list-objects-filter.c:                                      21
  * bloom.c:                                                    2122
  * builtin/fsck.c:           0--3
- * builtin/gc.c:             0
  * builtin/index-pack.c:                                     2021
  * reflog.c:                           10--12
  * builtin/show-branch.c:    0-------------------------------------------26
@@ -288,6 +287,17 @@ enum peel_status {
 	PEEL_BROKEN = -4
 };
 
+enum peel_object_flags {
+	/*
+	 * Always verify the object type of the tagged object, even in the case
+	 * where the looked-up object already has an object type. This can be
+	 * useful when the tagged object type may be invalid. One such case is
+	 * when looking up objects via tags, where we blindly trust the object
+	 * type declared by the tag.
+	 */
+	PEEL_OBJECT_VERIFY_TAGGED_OBJECT_TYPE = (1 << 0),
+};
+
 /*
  * Peel the named object; i.e., if the object is a tag, resolve the
  * tag recursively until a non-tag is found.  If successful, store the
@@ -296,7 +306,9 @@ enum peel_status {
  * and leave oid unchanged.
  */
 enum peel_status peel_object(struct repository *r,
-			     const struct object_id *name, struct object_id *oid);
+			     const struct object_id *name,
+			     struct object_id *oid,
+			     unsigned flags);
 
 struct object_list *object_list_insert(struct object *item,
 				       struct object_list **list_p);

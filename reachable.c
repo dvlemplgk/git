@@ -83,18 +83,17 @@ static void add_rebase_files(struct rev_info *revs)
 	free_worktrees(worktrees);
 }
 
-static int add_one_ref(const char *path, const char *referent UNUSED, const struct object_id *oid,
-		       int flag, void *cb_data)
+static int add_one_ref(const struct reference *ref, void *cb_data)
 {
 	struct rev_info *revs = (struct rev_info *)cb_data;
 	struct object *object;
 
-	if ((flag & REF_ISSYMREF) && (flag & REF_ISBROKEN)) {
-		warning("symbolic ref is dangling: %s", path);
+	if ((ref->flags & REF_ISSYMREF) && (ref->flags & REF_ISBROKEN)) {
+		warning("symbolic ref is dangling: %s", ref->name);
 		return 0;
 	}
 
-	object = parse_object_or_die(the_repository, oid, path);
+	object = parse_object_or_die(the_repository, ref->oid, ref->name);
 	add_pending_object(revs, object, "");
 
 	return 0;
@@ -243,7 +242,7 @@ static int want_recent_object(struct recent_data *data,
 			      const struct object_id *oid)
 {
 	if (data->ignore_in_core_kept_packs &&
-	    has_object_kept_pack(data->revs->repo, oid, IN_CORE_KEEP_PACKS))
+	    has_object_kept_pack(data->revs->repo, oid, KEPT_PACK_IN_CORE))
 		return 0;
 	return 1;
 }

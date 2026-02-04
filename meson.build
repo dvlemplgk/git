@@ -397,6 +397,7 @@ libgit_sources = [
   'object-name.c',
   'object.c',
   'odb.c',
+  'odb/streaming.c',
   'oid-array.c',
   'oidmap.c',
   'oidset.c',
@@ -490,7 +491,6 @@ libgit_sources = [
   'stable-qsort.c',
   'statinfo.c',
   'strbuf.c',
-  'streaming.c',
   'string-list.c',
   'strmap.c',
   'strvec.c',
@@ -1064,7 +1064,7 @@ if iconv.found()
     }
   '''
 
-  if compiler.run(iconv_omits_bom_source,
+  if meson.can_run_host_binaries() and compiler.run(iconv_omits_bom_source,
     dependencies: iconv,
     name: 'iconv omits BOM',
   ).returncode() != 0
@@ -1401,7 +1401,7 @@ checkfuncs = {
   'strlcpy' : ['strlcpy.c'],
   'strtoull' : [],
   'setenv' : ['setenv.c'],
-  'mkdtemp' : ['mkdtemp.c'],
+  'mkdtemp' : [],
   'initgroups' : [],
   'strtoumax' : ['strtoumax.c', 'strtoimax.c'],
   'pread' : ['pread.c'],
@@ -1411,12 +1411,18 @@ if host_machine.system() == 'windows'
   libgit_c_args += '-DUSE_WIN32_MMAP'
 else
   checkfuncs += {
-    'mmap' : ['mmap.c'],
     # provided by compat/mingw.c.
     'unsetenv' : ['unsetenv.c'],
     # provided by compat/mingw.c.
     'getpagesize' : [],
   }
+
+  if get_option('b_sanitize').contains('address')
+    libgit_c_args += '-DNO_MMAP'
+    libgit_sources += 'compat/mmap.c'
+  else
+    checkfuncs += { 'mmap': ['mmap.c'] }
+  endif
 endif
 
 foreach func, impls : checkfuncs
@@ -1486,7 +1492,7 @@ if not has_bsd_sysctl
   endif
 endif
 
-if not meson.is_cross_build() and compiler.run('''
+if meson.can_run_host_binaries() and compiler.run('''
   #include <stdio.h>
 
   int main(int argc, const char **argv)

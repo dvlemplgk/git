@@ -593,16 +593,12 @@ static void print_status(unsigned int flags, char state, const char *path,
 	printf("\n");
 }
 
-static int handle_submodule_head_ref(const char *refname UNUSED,
-				     const char *referent UNUSED,
-				     const struct object_id *oid,
-				     int flags UNUSED,
-				     void *cb_data)
+static int handle_submodule_head_ref(const struct reference *ref, void *cb_data)
 {
 	struct object_id *output = cb_data;
 
-	if (oid)
-		oidcpy(output, oid);
+	if (ref->oid)
+		oidcpy(output, ref->oid);
 
 	return 0;
 }
@@ -1907,6 +1903,13 @@ static int determine_submodule_update_strategy(struct repository *r,
 	const char *val;
 	int ret;
 
+	/*
+	 * NEEDSWORK: audit and ensure that update_submodule() has right
+	 * to assume that submodule_from_path() above will always succeed.
+	 */
+	if (!sub)
+		BUG("update_submodule assumes a submodule exists at path (%s)",
+		    path);
 	key = xstrfmt("submodule.%s.update", sub->name);
 
 	if (update) {
@@ -3531,14 +3534,15 @@ static int module_add(int argc, const char **argv, const char *prefix,
 		}
 	}
 
-	if(!add_data.sm_name)
+	if (!add_data.sm_name)
 		add_data.sm_name = add_data.sm_path;
 
 	existing = submodule_from_name(the_repository,
 					null_oid(the_hash_algo),
 					add_data.sm_name);
 
-	if (existing && strcmp(existing->path, add_data.sm_path)) {
+	if (existing && existing->path &&
+	    strcmp(existing->path, add_data.sm_path)) {
 		if (!force) {
 			die(_("submodule name '%s' already used for path '%s'"),
 			    add_data.sm_name, existing->path);

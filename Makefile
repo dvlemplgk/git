@@ -95,10 +95,20 @@ include shared.mak
 # and LDFLAGS appropriately.
 #
 # Define NO_DARWIN_PORTS if you are building on Darwin/Mac OS X,
-# have DarwinPorts installed in /opt/local, but don't want GIT to
+# have DarwinPorts (which is an old name for MacPorts) installed
+# in /opt/local, but don't want GIT to
 # link against any libraries installed there.  If defined you may
 # specify your own (or DarwinPort's) include directories and
 # library directories by defining CFLAGS and LDFLAGS appropriately.
+#
+# Define NO_HOMEBREW if you don't want to use gettext, libiconv and
+# msgfmt installed by Homebrew.
+#
+# Define HOMEBREW_PREFIX if you have Homebrew installed in a non-default
+# location on macOS or on Linux and want to use it.
+#
+# Define USE_HOMEBREW_LIBICONV to link against libiconv installed by
+# Homebrew, if present.
 #
 # Define NO_APPLE_COMMON_CRYPTO if you are building on Darwin/Mac OS X
 # and do not want to use Apple's CommonCrypto library.  This allows you
@@ -982,7 +992,7 @@ SANITIZE_LEAK =
 SANITIZE_ADDRESS =
 
 # For the 'coccicheck' target
-SPATCH_INCLUDE_FLAGS = --all-includes
+SPATCH_INCLUDE_FLAGS = --all-includes $(addprefix -I ,compat ewah refs sha256 trace2 win32 xdiff)
 SPATCH_FLAGS =
 SPATCH_TEST_FLAGS =
 
@@ -1202,6 +1212,7 @@ LIB_OBJS += object-file.o
 LIB_OBJS += object-name.o
 LIB_OBJS += object.o
 LIB_OBJS += odb.o
+LIB_OBJS += odb/streaming.o
 LIB_OBJS += oid-array.o
 LIB_OBJS += oidmap.o
 LIB_OBJS += oidset.o
@@ -1295,7 +1306,6 @@ LIB_OBJS += split-index.o
 LIB_OBJS += stable-qsort.o
 LIB_OBJS += statinfo.o
 LIB_OBJS += strbuf.o
-LIB_OBJS += streaming.o
 LIB_OBJS += string-list.o
 LIB_OBJS += strmap.o
 LIB_OBJS += strvec.o
@@ -1526,6 +1536,7 @@ CLAR_TEST_SUITES += u-string-list
 CLAR_TEST_SUITES += u-strvec
 CLAR_TEST_SUITES += u-trailer
 CLAR_TEST_SUITES += u-urlmatch-normalization
+CLAR_TEST_SUITES += u-utf8-width
 CLAR_TEST_PROG = $(UNIT_TEST_BIN)/unit-tests$(X)
 CLAR_TEST_OBJS = $(patsubst %,$(UNIT_TEST_DIR)/%.o,$(CLAR_TEST_SUITES))
 CLAR_TEST_OBJS += $(UNIT_TEST_DIR)/clar/clar.o
@@ -1588,6 +1599,7 @@ SANITIZE_LEAK = YesCompiledWithIt
 endif
 ifneq ($(filter address,$(SANITIZERS)),)
 NO_REGEX = NeededForASAN
+NO_MMAP = NeededForASAN
 SANITIZE_ADDRESS = YesCompiledWithIt
 endif
 endif
@@ -1676,11 +1688,21 @@ ifeq ($(uname_S),Darwin)
 			BASIC_CFLAGS += -I/sw/include
 			BASIC_LDFLAGS += -L/sw/lib
                 endif
+                ifeq ($(shell test -d /opt/sw/lib && echo y),y)
+			BASIC_CFLAGS += -I/opt/sw/include
+			BASIC_LDFLAGS += -L/opt/sw/lib
+			ifeq ($(shell test -e /opt/sw/lib/libiconv.dylib && echo y),y)
+				HAS_GOOD_LIBICONV = Yes
+			endif
+                endif
         endif
         ifndef NO_DARWIN_PORTS
                 ifeq ($(shell test -d /opt/local/lib && echo y),y)
 			BASIC_CFLAGS += -I/opt/local/include
 			BASIC_LDFLAGS += -L/opt/local/lib
+			ifeq ($(shell test -e /opt/local/lib/libiconv.dylib && echo y),y)
+				HAS_GOOD_LIBICONV = Yes
+			endif
                 endif
         endif
         ifndef NO_APPLE_COMMON_CRYPTO
@@ -1689,6 +1711,24 @@ ifeq ($(uname_S),Darwin)
 		COMPAT_CFLAGS += -DAPPLE_COMMON_CRYPTO
         endif
 	PTHREAD_LIBS =
+endif
+
+ifndef NO_HOMEBREW
+ifdef HOMEBREW_PREFIX
+ifeq ($(shell test -d $(HOMEBREW_PREFIX)/opt/gettext && echo y),y)
+	BASIC_CFLAGS += -I$(HOMEBREW_PREFIX)/opt/gettext/include
+	BASIC_LDFLAGS += -L$(HOMEBREW_PREFIX)/opt/gettext/lib
+endif
+ifeq ($(shell test -x $(HOMEBREW_PREFIX)/opt/gettext/msgfmt && echo y),y)
+	MSGFMT = $(HOMEBREW_PREFIX)/opt/gettext/msgfmt
+endif
+ifdef USE_HOMEBREW_LIBICONV
+ifeq ($(shell test -d $(HOMEBREW_PREFIX)/opt/libiconv && echo y),y)
+	ICONVDIR ?= $(HOMEBREW_PREFIX)/opt/libiconv
+	HAS_GOOD_LIBICONV = Yes
+endif
+endif
+endif
 endif
 
 ifdef NO_LIBGEN_H
@@ -1831,6 +1871,11 @@ ifndef NO_ICONV
                 endif
 		EXTLIBS += $(ICONV_LINK) -liconv
         endif
+        ifdef NEEDS_GOOD_LIBICONV
+        ifndef HAS_GOOD_LIBICONV
+                BASIC_CFLAGS += -DICONV_RESTART_RESET
+        endif
+        endif
 endif
 ifdef ICONV_OMITS_BOM
 	BASIC_CFLAGS += -DICONV_OMITS_BOM
@@ -1918,7 +1963,6 @@ ifdef NO_SETENV
 endif
 ifdef NO_MKDTEMP
 	COMPAT_CFLAGS += -DNO_MKDTEMP
-	COMPAT_OBJS += compat/mkdtemp.o
 endif
 ifdef MKDIR_WO_TRAILING_SLASH
 	COMPAT_CFLAGS += -DMKDIR_WO_TRAILING_SLASH
@@ -2566,7 +2610,7 @@ please_set_SHELL_PATH_to_a_more_modern_shell:
 
 shell_compatibility_test: please_set_SHELL_PATH_to_a_more_modern_shell
 
-strip: $(PROGRAMS) git$X
+strip: $(PROGRAMS) git$X scalar$X
 	$(STRIP) $(STRIP_OPTS) $^
 
 ### Target-specific flags and dependencies
@@ -3522,7 +3566,7 @@ else
 COCCICHECK_PATCH_MUST_BE_EMPTY_FILES = $(COCCICHECK_PATCHES_INTREE)
 endif
 coccicheck: $(COCCICHECK_PATCH_MUST_BE_EMPTY_FILES)
-	! grep -q ^ $(COCCICHECK_PATCH_MUST_BE_EMPTY_FILES) /dev/null
+	! grep ^ $(COCCICHECK_PATCH_MUST_BE_EMPTY_FILES) /dev/null
 
 # See contrib/coccinelle/README
 coccicheck-pending: coccicheck-test

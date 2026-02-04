@@ -16,6 +16,7 @@
 #include "run-command.h"
 #include "string-list.h"
 #include "url.h"
+#include "setup.h"
 #include "strvec.h"
 #include "packfile.h"
 #include "odb.h"
@@ -143,8 +144,10 @@ static NORETURN void not_found(struct strbuf *hdr, const char *err, ...)
 	end_headers(hdr);
 
 	va_start(params, err);
-	if (err && *err)
+	if (err && *err) {
 		vfprintf(stderr, err, params);
+		putc('\n', stderr);
+	}
 	va_end(params);
 	exit(0);
 }
@@ -159,8 +162,10 @@ static NORETURN void forbidden(struct strbuf *hdr, const char *err, ...)
 	end_headers(hdr);
 
 	va_start(params, err);
-	if (err && *err)
+	if (err && *err) {
 		vfprintf(stderr, err, params);
+		putc('\n', stderr);
+	}
 	va_end(params);
 	exit(0);
 }
@@ -513,18 +518,17 @@ static void run_service(const char **argv, int buffer_input)
 		exit(1);
 }
 
-static int show_text_ref(const char *name, const char *referent UNUSED, const struct object_id *oid,
-			 int flag UNUSED, void *cb_data)
+static int show_text_ref(const struct reference *ref, void *cb_data)
 {
-	const char *name_nons = strip_namespace(name);
+	const char *name_nons = strip_namespace(ref->name);
 	struct strbuf *buf = cb_data;
-	struct object *o = parse_object(the_repository, oid);
+	struct object *o = parse_object(the_repository, ref->oid);
 	if (!o)
 		return 0;
 
-	strbuf_addf(buf, "%s\t%s\n", oid_to_hex(oid), name_nons);
+	strbuf_addf(buf, "%s\t%s\n", oid_to_hex(ref->oid), name_nons);
 	if (o->type == OBJ_TAG) {
-		o = deref_tag(the_repository, o, name, 0);
+		o = deref_tag(the_repository, o, ref->name, 0);
 		if (!o)
 			return 0;
 		strbuf_addf(buf, "%s\t%s^{}\n", oid_to_hex(&o->oid),
@@ -569,21 +573,20 @@ static void get_info_refs(struct strbuf *hdr, char *arg UNUSED)
 	strbuf_release(&buf);
 }
 
-static int show_head_ref(const char *refname, const char *referent UNUSED, const struct object_id *oid,
-			 int flag, void *cb_data)
+static int show_head_ref(const struct reference *ref, void *cb_data)
 {
 	struct strbuf *buf = cb_data;
 
-	if (flag & REF_ISSYMREF) {
+	if (ref->flags & REF_ISSYMREF) {
 		const char *target = refs_resolve_ref_unsafe(get_main_ref_store(the_repository),
-							     refname,
+							     ref->name,
 							     RESOLVE_REF_READING,
 							     NULL, NULL);
 
 		if (target)
 			strbuf_addf(buf, "ref: %s\n", strip_namespace(target));
 	} else {
-		strbuf_addf(buf, "%s\n", oid_to_hex(oid));
+		strbuf_addf(buf, "%s\n", oid_to_hex(ref->oid));
 	}
 
 	return 0;

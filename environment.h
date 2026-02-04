@@ -106,6 +106,8 @@ const char *strip_namespace(const char *namespaced_ref);
 
 int git_default_config(const char *, const char *,
 		       const struct config_context *, void *);
+int git_default_core_config(const char *var, const char *value,
+			    const struct config_context *ctx, void *cb);
 
 /*
  * TODO: All the below state either explicitly or implicitly relies on
@@ -156,7 +158,6 @@ extern char *git_attributes_file;
 extern int zlib_compression_level;
 extern int pack_compression_level;
 extern unsigned long pack_size_limit_cfg;
-extern int max_allowed_tree_depth;
 
 extern int precomposed_unicode;
 extern int protect_hfs;

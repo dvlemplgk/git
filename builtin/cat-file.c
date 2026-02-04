@@ -18,13 +18,13 @@
 #include "list-objects-filter-options.h"
 #include "parse-options.h"
 #include "userdiff.h"
-#include "streaming.h"
 #include "oid-array.h"
 #include "packfile.h"
 #include "pack-bitmap.h"
 #include "object-file.h"
 #include "object-name.h"
 #include "odb.h"
+#include "odb/streaming.h"
 #include "replace-object.h"
 #include "promisor-remote.h"
 #include "mailmap.h"
@@ -95,7 +95,7 @@ static int filter_object(const char *path, unsigned mode,
 
 static int stream_blob(const struct object_id *oid)
 {
-	if (stream_blob_to_fd(1, oid, NULL, 0))
+	if (odb_stream_blob_to_fd(the_repository->objects, 1, oid, NULL, 0))
 		die("unable to stream %s to stdout", oid_to_hex(oid));
 	return 0;
 }
@@ -487,8 +487,7 @@ static void batch_object_write(const char *obj_name,
 			data->info.sizep = &data->size;
 
 		if (pack)
-			ret = packed_object_info(the_repository, pack,
-						 offset, &data->info);
+			ret = packed_object_info(pack, offset, &data->info);
 		else
 			ret = odb_read_object_info_extended(the_repository->objects,
 							    &data->oid, &data->info,
@@ -846,12 +845,14 @@ static void batch_each_object(struct batch_options *opt,
 		.callback = callback,
 		.payload = _payload,
 	};
-	struct bitmap_index *bitmap = prepare_bitmap_git(the_repository);
+	struct bitmap_index *bitmap = NULL;
 
 	for_each_loose_object(the_repository->objects, batch_one_object_loose, &payload, 0);
 
-	if (bitmap && !for_each_bitmapped_object(bitmap, &opt->objects_filter,
-						 batch_one_object_bitmapped, &payload)) {
+	if (opt->objects_filter.choice != LOFC_DISABLED &&
+	    (bitmap = prepare_bitmap_git(the_repository)) &&
+	    !for_each_bitmapped_object(bitmap, &opt->objects_filter,
+				       batch_one_object_bitmapped, &payload)) {
 		struct packed_git *pack;
 
 		repo_for_each_pack(the_repository, pack) {

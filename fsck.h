@@ -30,6 +30,7 @@ enum fsck_msg_type {
 	FUNC(BAD_DATE_OVERFLOW, ERROR) \
 	FUNC(BAD_EMAIL, ERROR) \
 	FUNC(BAD_GPGSIG, ERROR) \
+	FUNC(BAD_HEAD_TARGET, ERROR) \
 	FUNC(BAD_NAME, ERROR) \
 	FUNC(BAD_OBJECT_SHA1, ERROR) \
 	FUNC(BAD_PACKED_REF_ENTRY, ERROR) \
@@ -39,6 +40,7 @@ enum fsck_msg_type {
 	FUNC(BAD_REF_CONTENT, ERROR) \
 	FUNC(BAD_REF_FILETYPE, ERROR) \
 	FUNC(BAD_REF_NAME, ERROR) \
+	FUNC(BAD_REF_OID, ERROR) \
 	FUNC(BAD_TIMEZONE, ERROR) \
 	FUNC(BAD_TREE, ERROR) \
 	FUNC(BAD_TREE_SHA1, ERROR) \
@@ -162,8 +164,6 @@ struct fsck_object_report {
 
 struct fsck_ref_report {
 	const char *path;
-	const struct object_id *oid;
-	const char *referent;
 };
 
 struct fsck_options {
@@ -247,6 +247,13 @@ int fsck_tag_standalone(const struct object_id *oid, const char *buffer,
  * checks.
  */
 int fsck_finish(struct fsck_options *options);
+
+/*
+ * Check whether there are any checks that have been queued up and that still
+ * need to be run. Returns `false` iff `fsck_finish()` wouldn't perform any
+ * actions, `true` otherwise.
+ */
+bool fsck_has_queued_checks(struct fsck_options *options);
 
 /*
  * Clear the fsck_options struct, freeing any allocated memory.

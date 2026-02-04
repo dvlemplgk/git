@@ -354,22 +354,17 @@ static int for_each_root_ref(struct files_ref_store *refs,
 			     void *cb_data)
 {
 	struct strbuf path = STRBUF_INIT, refname = STRBUF_INIT;
-	const char *dirname = refs->loose->root->name;
 	struct dirent *de;
-	size_t dirnamelen;
 	int ret;
 	DIR *d;
 
-	files_ref_path(refs, &path, dirname);
+	files_ref_path(refs, &path, "");
 
 	d = opendir(path.buf);
 	if (!d) {
 		strbuf_release(&path);
 		return -1;
 	}
-
-	strbuf_addstr(&refname, dirname);
-	dirnamelen = refname.len;
 
 	while ((de = readdir(d)) != NULL) {
 		unsigned char dtype;
@@ -378,6 +373,8 @@ static int for_each_root_ref(struct files_ref_store *refs,
 			continue;
 		if (ends_with(de->d_name, ".lock"))
 			continue;
+
+		strbuf_reset(&refname);
 		strbuf_addstr(&refname, de->d_name);
 
 		dtype = get_dtype(de, &path, 1);
@@ -386,8 +383,6 @@ static int for_each_root_ref(struct files_ref_store *refs,
 			if (ret)
 				goto done;
 		}
-
-		strbuf_setlen(&refname, dirnamelen);
 	}
 
 	ret = 0;
@@ -961,26 +956,23 @@ static int files_ref_iterator_advance(struct ref_iterator *ref_iterator)
 
 	while ((ok = ref_iterator_advance(iter->iter0)) == ITER_OK) {
 		if (iter->flags & DO_FOR_EACH_PER_WORKTREE_ONLY &&
-		    parse_worktree_ref(iter->iter0->refname, NULL, NULL,
+		    parse_worktree_ref(iter->iter0->ref.name, NULL, NULL,
 				       NULL) != REF_WORKTREE_CURRENT)
 			continue;
 
 		if ((iter->flags & DO_FOR_EACH_OMIT_DANGLING_SYMREFS) &&
-		    (iter->iter0->flags & REF_ISSYMREF) &&
-		    (iter->iter0->flags & REF_ISBROKEN))
+		    (iter->iter0->ref.flags & REF_ISSYMREF) &&
+		    (iter->iter0->ref.flags & REF_ISBROKEN))
 			continue;
 
 		if (!(iter->flags & DO_FOR_EACH_INCLUDE_BROKEN) &&
-		    !ref_resolves_to_object(iter->iter0->refname,
+		    !ref_resolves_to_object(iter->iter0->ref.name,
 					    iter->repo,
-					    iter->iter0->oid,
-					    iter->iter0->flags))
+					    iter->iter0->ref.oid,
+					    iter->iter0->ref.flags))
 			continue;
 
-		iter->base.refname = iter->iter0->refname;
-		iter->base.oid = iter->iter0->oid;
-		iter->base.flags = iter->iter0->flags;
-		iter->base.referent = iter->iter0->referent;
+		iter->base.ref = iter->iter0->ref;
 
 		return ITER_OK;
 	}
@@ -996,15 +988,6 @@ static int files_ref_iterator_seek(struct ref_iterator *ref_iterator,
 	return ref_iterator_seek(iter->iter0, refname, flags);
 }
 
-static int files_ref_iterator_peel(struct ref_iterator *ref_iterator,
-				   struct object_id *peeled)
-{
-	struct files_ref_iterator *iter =
-		(struct files_ref_iterator *)ref_iterator;
-
-	return ref_iterator_peel(iter->iter0, peeled);
-}
-
 static void files_ref_iterator_release(struct ref_iterator *ref_iterator)
 {
 	struct files_ref_iterator *iter =
@@ -1015,7 +998,6 @@ static void files_ref_iterator_release(struct ref_iterator *ref_iterator)
 static struct ref_iterator_vtable files_ref_iterator_vtable = {
 	.advance = files_ref_iterator_advance,
 	.seek = files_ref_iterator_seek,
-	.peel = files_ref_iterator_peel,
 	.release = files_ref_iterator_release,
 };
 
@@ -1367,37 +1349,36 @@ static void prune_refs(struct files_ref_store *refs, struct ref_to_prune **refs_
  * Return true if the specified reference should be packed.
  */
 static int should_pack_ref(struct files_ref_store *refs,
-			   const char *refname,
-			   const struct object_id *oid, unsigned int ref_flags,
-			   struct pack_refs_opts *opts)
+			   const struct reference *ref,
+			   struct refs_optimize_opts *opts)
 {
 	struct string_list_item *item;
 
 	/* Do not pack per-worktree refs: */
-	if (parse_worktree_ref(refname, NULL, NULL, NULL) !=
+	if (parse_worktree_ref(ref->name, NULL, NULL, NULL) !=
 	    REF_WORKTREE_SHARED)
 		return 0;
 
 	/* Do not pack symbolic refs: */
-	if (ref_flags & REF_ISSYMREF)
+	if (ref->flags & REF_ISSYMREF)
 		return 0;
 
 	/* Do not pack broken refs: */
-	if (!ref_resolves_to_object(refname, refs->base.repo, oid, ref_flags))
+	if (!ref_resolves_to_object(ref->name, refs->base.repo, ref->oid, ref->flags))
 		return 0;
 
-	if (ref_excluded(opts->exclusions, refname))
+	if (ref_excluded(opts->exclusions, ref->name))
 		return 0;
 
 	for_each_string_list_item(item, opts->includes)
-		if (!wildmatch(item->string, refname, 0))
+		if (!wildmatch(item->string, ref->name, 0))
 			return 1;
 
 	return 0;
 }
 
 static int should_pack_refs(struct files_ref_store *refs,
-			    struct pack_refs_opts *opts)
+			    struct refs_optimize_opts *opts)
 {
 	struct ref_iterator *iter;
 	size_t packed_size;
@@ -1405,7 +1386,7 @@ static int should_pack_refs(struct files_ref_store *refs,
 	size_t limit;
 	int ret;
 
-	if (!(opts->flags & PACK_REFS_AUTO))
+	if (!(opts->flags & REFS_OPTIMIZE_AUTO))
 		return 1;
 
 	ret = packed_refs_size(refs->packed_ref_store, &packed_size);
@@ -1443,8 +1424,7 @@ static int should_pack_refs(struct files_ref_store *refs,
 	iter = cache_ref_iterator_begin(get_loose_ref_cache(refs, 0), NULL,
 					refs->base.repo, 0);
 	while ((ret = ref_iterator_advance(iter)) == ITER_OK) {
-		if (should_pack_ref(refs, iter->refname, iter->oid,
-				    iter->flags, opts))
+		if (should_pack_ref(refs, &iter->ref, opts))
 			refcount++;
 		if (refcount >= limit) {
 			ref_iterator_free(iter);
@@ -1459,8 +1439,8 @@ static int should_pack_refs(struct files_ref_store *refs,
 	return 0;
 }
 
-static int files_pack_refs(struct ref_store *ref_store,
-			   struct pack_refs_opts *opts)
+static int files_optimize(struct ref_store *ref_store,
+			  struct refs_optimize_opts *opts)
 {
 	struct files_ref_store *refs =
 		files_downcast(ref_store, REF_STORE_WRITE | REF_STORE_ODB,
@@ -1489,24 +1469,24 @@ static int files_pack_refs(struct ref_store *ref_store,
 		 * in the packed ref cache. If the reference should be
 		 * pruned, also add it to refs_to_prune.
 		 */
-		if (!should_pack_ref(refs, iter->refname, iter->oid, iter->flags, opts))
+		if (!should_pack_ref(refs, &iter->ref, opts))
 			continue;
 
 		/*
 		 * Add a reference creation for this reference to the
 		 * packed-refs transaction:
 		 */
-		if (ref_transaction_update(transaction, iter->refname,
-					   iter->oid, NULL, NULL, NULL,
+		if (ref_transaction_update(transaction, iter->ref.name,
+					   iter->ref.oid, NULL, NULL, NULL,
 					   REF_NO_DEREF, NULL, &err))
 			die("failure preparing to create packed reference %s: %s",
-			    iter->refname, err.buf);
+			    iter->ref.name, err.buf);
 
 		/* Schedule the loose reference for pruning if requested. */
-		if ((opts->flags & PACK_REFS_PRUNE)) {
+		if ((opts->flags & REFS_OPTIMIZE_PRUNE)) {
 			struct ref_to_prune *n;
-			FLEX_ALLOC_STR(n, name, iter->refname);
-			oidcpy(&n->oid, iter->oid);
+			FLEX_ALLOC_STR(n, name, iter->ref.name);
+			oidcpy(&n->oid, iter->ref.oid);
 			n->next = refs_to_prune;
 			refs_to_prune = n;
 		}
@@ -1527,13 +1507,14 @@ static int files_pack_refs(struct ref_store *ref_store,
 	return 0;
 }
 
-static int files_optimize(struct ref_store *ref_store, struct pack_refs_opts *opts)
+static int files_optimize_required(struct ref_store *ref_store,
+				   struct refs_optimize_opts *opts,
+				   bool *required)
 {
-	/*
-	 * For the "files" backend, "optimizing" is the same as "packing".
-	 * So, we just call the existing worker function for packing.
-	 */
-	return files_pack_refs(ref_store, opts);
+	struct files_ref_store *refs = files_downcast(ref_store, REF_STORE_READ,
+						      "optimize_required");
+	*required = should_pack_refs(refs, opts);
+	return 0;
 }
 
 /*
@@ -2394,7 +2375,7 @@ static int files_reflog_iterator_advance(struct ref_iterator *ref_iterator)
 					 REFNAME_ALLOW_ONELEVEL))
 			continue;
 
-		iter->base.refname = diter->relative_path;
+		iter->base.ref.name = diter->relative_path;
 		return ITER_OK;
 	}
 
@@ -2408,12 +2389,6 @@ static int files_reflog_iterator_seek(struct ref_iterator *ref_iterator UNUSED,
 	BUG("ref_iterator_seek() called for reflog_iterator");
 }
 
-static int files_reflog_iterator_peel(struct ref_iterator *ref_iterator UNUSED,
-				      struct object_id *peeled UNUSED)
-{
-	BUG("ref_iterator_peel() called for reflog_iterator");
-}
-
 static void files_reflog_iterator_release(struct ref_iterator *ref_iterator)
 {
 	struct files_reflog_iterator *iter =
@@ -2424,7 +2399,6 @@ static void files_reflog_iterator_release(struct ref_iterator *ref_iterator)
 static struct ref_iterator_vtable files_reflog_iterator_vtable = {
 	.advance = files_reflog_iterator_advance,
 	.seek = files_reflog_iterator_seek,
-	.peel = files_reflog_iterator_peel,
 	.release = files_reflog_iterator_release,
 };
 
@@ -3165,14 +3139,11 @@ static int parse_and_write_reflog(struct files_ref_store *refs,
 	return 0;
 }
 
-static int ref_present(const char *refname, const char *referent UNUSED,
-		       const struct object_id *oid UNUSED,
-		       int flags UNUSED,
-		       void *cb_data)
+static int ref_present(const struct reference *ref, void *cb_data)
 {
 	struct string_list *affected_refnames = cb_data;
 
-	return string_list_has_string(affected_refnames, refname);
+	return string_list_has_string(affected_refnames, ref->name);
 }
 
 static int files_transaction_finish_initial(struct files_ref_store *refs,
@@ -3744,64 +3715,50 @@ static int files_ref_store_remove_on_disk(struct ref_store *ref_store,
 typedef int (*files_fsck_refs_fn)(struct ref_store *ref_store,
 				  struct fsck_options *o,
 				  const char *refname,
-				  struct dir_iterator *iter);
+				  const char *path,
+				  int mode);
 
-static int files_fsck_symref_target(struct fsck_options *o,
+static int files_fsck_symref_target(struct ref_store *ref_store,
+				    struct fsck_options *o,
 				    struct fsck_ref_report *report,
+				    const char *refname,
 				    struct strbuf *referent,
 				    unsigned int symbolic_link)
 {
-	int is_referent_root;
 	char orig_last_byte;
 	size_t orig_len;
 	int ret = 0;
 
 	orig_len = referent->len;
 	orig_last_byte = referent->buf[orig_len - 1];
-	if (!symbolic_link)
+
+	if (!symbolic_link) {
 		strbuf_rtrim(referent);
 
-	is_referent_root = is_root_ref(referent->buf);
-	if (!is_referent_root &&
-	    !starts_with(referent->buf, "refs/") &&
-	    !starts_with(referent->buf, "worktrees/")) {
-		ret = fsck_report_ref(o, report,
-				      FSCK_MSG_SYMREF_TARGET_IS_NOT_A_REF,
-				      "points to non-ref target '%s'", referent->buf);
+		if (referent->len == orig_len ||
+		    (referent->len < orig_len && orig_last_byte != '\n')) {
+			ret |= fsck_report_ref(o, report,
+					       FSCK_MSG_REF_MISSING_NEWLINE,
+					       "misses LF at the end");
+		}
 
+		if (referent->len != orig_len && referent->len != orig_len - 1) {
+			ret |= fsck_report_ref(o, report,
+					       FSCK_MSG_TRAILING_REF_CONTENT,
+					       "has trailing whitespaces or newlines");
+		}
 	}
 
-	if (!is_referent_root && check_refname_format(referent->buf, 0)) {
-		ret = fsck_report_ref(o, report,
-				      FSCK_MSG_BAD_REFERENT_NAME,
-				      "points to invalid refname '%s'", referent->buf);
-		goto out;
-	}
+	ret |= refs_fsck_symref(ref_store, o, report, refname, referent->buf);
 
-	if (symbolic_link)
-		goto out;
-
-	if (referent->len == orig_len ||
-	    (referent->len < orig_len && orig_last_byte != '\n')) {
-		ret = fsck_report_ref(o, report,
-				      FSCK_MSG_REF_MISSING_NEWLINE,
-				      "misses LF at the end");
-	}
-
-	if (referent->len != orig_len && referent->len != orig_len - 1) {
-		ret = fsck_report_ref(o, report,
-				      FSCK_MSG_TRAILING_REF_CONTENT,
-				      "has trailing whitespaces or newlines");
-	}
-
-out:
-	return ret;
+	return ret ? -1 : 0;
 }
 
 static int files_fsck_refs_content(struct ref_store *ref_store,
 				   struct fsck_options *o,
 				   const char *target_name,
-				   struct dir_iterator *iter)
+				   const char *path,
+				   int mode)
 {
 	struct strbuf ref_content = STRBUF_INIT;
 	struct strbuf abs_gitdir = STRBUF_INIT;
@@ -3815,7 +3772,7 @@ static int files_fsck_refs_content(struct ref_store *ref_store,
 
 	report.path = target_name;
 
-	if (S_ISLNK(iter->st.st_mode)) {
+	if (S_ISLNK(mode)) {
 		const char *relative_referent_path = NULL;
 
 		ret = fsck_report_ref(o, &report,
@@ -3827,7 +3784,7 @@ static int files_fsck_refs_content(struct ref_store *ref_store,
 		if (!is_dir_sep(abs_gitdir.buf[abs_gitdir.len - 1]))
 			strbuf_addch(&abs_gitdir, '/');
 
-		strbuf_add_real_path(&ref_content, iter->path.buf);
+		strbuf_add_real_path(&ref_content, path);
 		skip_prefix(ref_content.buf, abs_gitdir.buf,
 			    &relative_referent_path);
 
@@ -3836,11 +3793,12 @@ static int files_fsck_refs_content(struct ref_store *ref_store,
 		else
 			strbuf_addbuf(&referent, &ref_content);
 
-		ret |= files_fsck_symref_target(o, &report, &referent, 1);
+		ret |= files_fsck_symref_target(ref_store, o, &report,
+						target_name, &referent, 1);
 		goto cleanup;
 	}
 
-	if (strbuf_read_file(&ref_content, iter->path.buf, 0) < 0) {
+	if (strbuf_read_file(&ref_content, path, 0) < 0) {
 		/*
 		 * Ref file could be removed by another concurrent process. We should
 		 * ignore this error and continue to the next ref.
@@ -3848,7 +3806,7 @@ static int files_fsck_refs_content(struct ref_store *ref_store,
 		if (errno == ENOENT)
 			goto cleanup;
 
-		ret = error_errno(_("cannot read ref file '%s'"), iter->path.buf);
+		ret = error_errno(_("cannot read ref file '%s'"), path);
 		goto cleanup;
 	}
 
@@ -3875,8 +3833,11 @@ static int files_fsck_refs_content(struct ref_store *ref_store,
 					      "has trailing garbage: '%s'", trailing);
 			goto cleanup;
 		}
+
+		ret = refs_fsck_ref(ref_store, o, &report, target_name, &oid);
 	} else {
-		ret = files_fsck_symref_target(o, &report, &referent, 0);
+		ret = files_fsck_symref_target(ref_store, o, &report,
+					       target_name, &referent, 0);
 		goto cleanup;
 	}
 
@@ -3890,21 +3851,25 @@ cleanup:
 static int files_fsck_refs_name(struct ref_store *ref_store UNUSED,
 				struct fsck_options *o,
 				const char *refname,
-				struct dir_iterator *iter)
+				const char *path,
+				int mode UNUSED)
 {
 	struct strbuf sb = STRBUF_INIT;
+	const char *filename;
 	int ret = 0;
+
+	filename = basename((char *) path);
 
 	/*
 	 * Ignore the files ending with ".lock" as they may be lock files
 	 * However, do not allow bare ".lock" files.
 	 */
-	if (iter->basename[0] != '.' && ends_with(iter->basename, ".lock"))
+	if (filename[0] != '.' && ends_with(filename, ".lock"))
 		goto cleanup;
 
-	/*
-	 * This works right now because we never check the root refs.
-	 */
+	if (is_root_ref(refname))
+		goto cleanup;
+
 	if (check_refname_format(refname, 0)) {
 		struct fsck_ref_report report = { 0 };
 
@@ -3919,11 +3884,44 @@ cleanup:
 	return ret;
 }
 
+static const files_fsck_refs_fn fsck_refs_fn[]= {
+	files_fsck_refs_name,
+	files_fsck_refs_content,
+	NULL,
+};
+
+static int files_fsck_ref(struct ref_store *ref_store,
+			  struct fsck_options *o,
+			  const char *refname,
+			  const char *path,
+			  int mode)
+{
+	int ret = 0;
+
+	if (o->verbose)
+		fprintf_ln(stderr, "Checking %s", refname);
+
+	if (!S_ISREG(mode) && !S_ISLNK(mode)) {
+		struct fsck_ref_report report = { .path = refname };
+
+		if (fsck_report_ref(o, &report,
+				    FSCK_MSG_BAD_REF_FILETYPE,
+				    "unexpected file type"))
+			ret = -1;
+		goto out;
+	}
+
+	for (size_t i = 0; fsck_refs_fn[i]; i++)
+		if (fsck_refs_fn[i](ref_store, o, refname, path, mode))
+			ret = -1;
+
+out:
+	return ret;
+}
+
 static int files_fsck_refs_dir(struct ref_store *ref_store,
 			       struct fsck_options *o,
-			       const char *refs_check_dir,
-			       struct worktree *wt,
-			       files_fsck_refs_fn *fsck_refs_fn)
+			       struct worktree *wt)
 {
 	struct strbuf refname = STRBUF_INIT;
 	struct strbuf sb = STRBUF_INIT;
@@ -3931,7 +3929,7 @@ static int files_fsck_refs_dir(struct ref_store *ref_store,
 	int iter_status;
 	int ret = 0;
 
-	strbuf_addf(&sb, "%s/%s", ref_store->gitdir, refs_check_dir);
+	strbuf_addf(&sb, "%s/refs", ref_store->gitdir);
 
 	iter = dir_iterator_begin(sb.buf, 0);
 	if (!iter) {
@@ -3943,31 +3941,17 @@ static int files_fsck_refs_dir(struct ref_store *ref_store,
 	}
 
 	while ((iter_status = dir_iterator_advance(iter)) == ITER_OK) {
-		if (S_ISDIR(iter->st.st_mode)) {
+		if (S_ISDIR(iter->st.st_mode))
 			continue;
-		} else if (S_ISREG(iter->st.st_mode) ||
-			   S_ISLNK(iter->st.st_mode)) {
-			strbuf_reset(&refname);
 
-			if (!is_main_worktree(wt))
-				strbuf_addf(&refname, "worktrees/%s/", wt->id);
-			strbuf_addf(&refname, "%s/%s", refs_check_dir,
-				    iter->relative_path);
+		strbuf_reset(&refname);
+		if (!is_main_worktree(wt))
+			strbuf_addf(&refname, "worktrees/%s/", wt->id);
+		strbuf_addf(&refname, "refs/%s", iter->relative_path);
 
-			if (o->verbose)
-				fprintf_ln(stderr, "Checking %s", refname.buf);
-
-			for (size_t i = 0; fsck_refs_fn[i]; i++) {
-				if (fsck_refs_fn[i](ref_store, o, refname.buf, iter))
-					ret = -1;
-			}
-		} else {
-			struct fsck_ref_report report = { .path = iter->basename };
-			if (fsck_report_ref(o, &report,
-					    FSCK_MSG_BAD_REF_FILETYPE,
-					    "unexpected file type"))
-				ret = -1;
-		}
+		if (files_fsck_ref(ref_store, o, refname.buf,
+				   iter->path.buf, iter->st.st_mode) < 0)
+			ret = -1;
 	}
 
 	if (iter_status != ITER_DONE)
@@ -3980,17 +3964,35 @@ out:
 	return ret;
 }
 
-static int files_fsck_refs(struct ref_store *ref_store,
-			   struct fsck_options *o,
-			   struct worktree *wt)
-{
-	files_fsck_refs_fn fsck_refs_fn[]= {
-		files_fsck_refs_name,
-		files_fsck_refs_content,
-		NULL,
-	};
+struct files_fsck_root_ref_data {
+	struct files_ref_store *refs;
+	struct fsck_options *o;
+	struct worktree *wt;
+	struct strbuf refname;
+	struct strbuf path;
+};
 
-	return files_fsck_refs_dir(ref_store, o, "refs", wt, fsck_refs_fn);
+static int files_fsck_root_ref(const char *refname, void *cb_data)
+{
+	struct files_fsck_root_ref_data *data = cb_data;
+	struct stat st;
+
+	strbuf_reset(&data->refname);
+	if (!is_main_worktree(data->wt))
+		strbuf_addf(&data->refname, "worktrees/%s/", data->wt->id);
+	strbuf_addstr(&data->refname, refname);
+
+	strbuf_reset(&data->path);
+	strbuf_addf(&data->path, "%s/%s", data->refs->gitcommondir, data->refname.buf);
+
+	if (stat(data->path.buf, &st)) {
+		if (errno == ENOENT)
+			return 0;
+		return error_errno("failed to read ref: '%s'", data->path.buf);
+	}
+
+	return files_fsck_ref(&data->refs->base, data->o, data->refname.buf,
+			      data->path.buf, st.st_mode);
 }
 
 static int files_fsck(struct ref_store *ref_store,
@@ -3999,9 +4001,27 @@ static int files_fsck(struct ref_store *ref_store,
 {
 	struct files_ref_store *refs =
 		files_downcast(ref_store, REF_STORE_READ, "fsck");
+	struct files_fsck_root_ref_data data = {
+		.refs = refs,
+		.o = o,
+		.wt = wt,
+		.refname = STRBUF_INIT,
+		.path = STRBUF_INIT,
+	};
+	int ret = 0;
 
-	return files_fsck_refs(ref_store, o, wt) |
-	       refs->packed_ref_store->be->fsck(refs->packed_ref_store, o, wt);
+	if (files_fsck_refs_dir(ref_store, o, wt) < 0)
+		ret = -1;
+
+	if (for_each_root_ref(refs, files_fsck_root_ref, &data) < 0)
+		ret = -1;
+
+	if (refs->packed_ref_store->be->fsck(refs->packed_ref_store, o, wt) < 0)
+		ret = -1;
+
+	strbuf_release(&data.refname);
+	strbuf_release(&data.path);
+	return ret;
 }
 
 struct ref_storage_be refs_be_files = {
@@ -4015,8 +4035,8 @@ struct ref_storage_be refs_be_files = {
 	.transaction_finish = files_transaction_finish,
 	.transaction_abort = files_transaction_abort,
 
-	.pack_refs = files_pack_refs,
 	.optimize = files_optimize,
+	.optimize_required = files_optimize_required,
 	.rename_ref = files_rename_ref,
 	.copy_ref = files_copy_ref,
 

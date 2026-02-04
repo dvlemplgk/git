@@ -799,6 +799,9 @@ void get_version_info(struct strbuf *buf, int show_build_options)
 
 		if (fsmonitor_ipc__is_supported())
 			strbuf_addstr(buf, "feature: fsmonitor--daemon\n");
+#if !defined NO_GETTEXT
+		strbuf_addstr(buf, "gettext: enabled\n");
+#endif
 #if defined LIBCURL_VERSION
 		strbuf_addf(buf, "libcurl: %s\n", LIBCURL_VERSION);
 #endif
@@ -851,18 +854,16 @@ struct similar_ref_cb {
 	struct string_list *similar_refs;
 };
 
-static int append_similar_ref(const char *refname, const char *referent UNUSED,
-			      const struct object_id *oid UNUSED,
-			      int flags UNUSED, void *cb_data)
+static int append_similar_ref(const struct reference *ref, void *cb_data)
 {
 	struct similar_ref_cb *cb = (struct similar_ref_cb *)(cb_data);
-	char *branch = strrchr(refname, '/') + 1;
+	char *branch = strrchr(ref->name, '/') + 1;
 
 	/* A remote branch of the same name is deemed similar */
-	if (starts_with(refname, "refs/remotes/") &&
+	if (starts_with(ref->name, "refs/remotes/") &&
 	    !strcmp(branch, cb->base_ref))
 		string_list_append_nodup(cb->similar_refs,
-					 refs_shorten_unambiguous_ref(get_main_ref_store(the_repository), refname, 1));
+					 refs_shorten_unambiguous_ref(get_main_ref_store(the_repository), ref->name, 1));
 	return 0;
 }
 

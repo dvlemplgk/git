@@ -24,6 +24,7 @@ clar_test_suites = [
   'unit-tests/u-strvec.c',
   'unit-tests/u-trailer.c',
   'unit-tests/u-urlmatch-normalization.c',
+  'unit-tests/u-utf8-width.c',
 ]
 
 clar_sources = [
@@ -184,6 +185,7 @@ integration_tests = [
   't1308-config-set.sh',
   't1309-early-config.sh',
   't1310-config-default.sh',
+  't1311-config-optional.sh',
   't1350-config-hooks-path.sh',
   't1400-update-ref.sh',
   't1401-symbolic-ref.sh',
@@ -688,6 +690,7 @@ integration_tests = [
   't5562-http-backend-content-length.sh',
   't5563-simple-http-auth.sh',
   't5564-http-proxy.sh',
+  't5565-push-multiple.sh',
   't5570-git-daemon.sh',
   't5571-pre-push-hook.sh',
   't5572-pull-submodule.sh',
@@ -956,6 +959,7 @@ integration_tests = [
   't8012-blame-colors.sh',
   't8013-blame-ignore-revs.sh',
   't8014-blame-ignore-fuzzy.sh',
+  't8015-blame-diff-algorithm.sh',
   't8020-last-modified.sh',
   't9001-send-email.sh',
   't9002-column.sh',

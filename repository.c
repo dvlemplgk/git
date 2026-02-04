@@ -52,7 +52,6 @@ static void set_default_hash_algo(struct repository *repo)
 
 void initialize_repository(struct repository *repo)
 {
-	repo->objects = odb_new(repo);
 	repo->remote_state = remote_state_new();
 	repo->parsed_objects = parsed_object_pool_new(repo);
 	ALLOC_ARRAY(repo->index, 1);
@@ -166,19 +165,13 @@ void repo_set_gitdir(struct repository *repo,
 
 	repo_set_commondir(repo, o->commondir);
 
-	if (!repo->objects->sources) {
-		CALLOC_ARRAY(repo->objects->sources, 1);
-		repo->objects->sources->odb = repo->objects;
-		repo->objects->sources->local = true;
-		repo->objects->sources_tail = &repo->objects->sources->next;
-	}
-	expand_base_dir(&repo->objects->sources->path, o->object_dir,
-			repo->commondir, "objects");
+	if (!repo->objects)
+		repo->objects = odb_new(repo, o->object_dir, o->alternate_db);
+	else if (!o->skip_initializing_odb)
+		BUG("cannot reinitialize an already-initialized object directory");
 
-	repo->objects->sources->disable_ref_updates = o->disable_ref_updates;
+	repo->disable_ref_updates = o->disable_ref_updates;
 
-	free(repo->objects->alternate_db);
-	repo->objects->alternate_db = xstrdup_or_null(o->alternate_db);
 	expand_base_dir(&repo->graft_file, o->graft_file,
 			repo->commondir, "info/grafts");
 	expand_base_dir(&repo->index_file, o->index_file,
@@ -357,7 +350,6 @@ out:
 static void repo_clear_path_cache(struct repo_path_cache *cache)
 {
 	FREE_AND_NULL(cache->squash_msg);
-	FREE_AND_NULL(cache->squash_msg);
 	FREE_AND_NULL(cache->merge_msg);
 	FREE_AND_NULL(cache->merge_rr);
 	FREE_AND_NULL(cache->merge_mode);
@@ -378,8 +370,8 @@ void repo_clear(struct repository *repo)
 	FREE_AND_NULL(repo->worktree);
 	FREE_AND_NULL(repo->submodule_prefix);
 
-	odb_clear(repo->objects);
-	FREE_AND_NULL(repo->objects);
+	odb_free(repo->objects);
+	repo->objects = NULL;
 
 	parsed_object_pool_clear(repo->parsed_objects);
 	FREE_AND_NULL(repo->parsed_objects);

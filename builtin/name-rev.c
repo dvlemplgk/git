@@ -180,8 +180,7 @@ static void name_rev(struct commit *start_commit,
 {
 	struct prio_queue queue;
 	struct commit *commit;
-	struct commit **parents_to_queue = NULL;
-	size_t parents_to_queue_nr, parents_to_queue_alloc = 0;
+	struct commit_stack parents_to_queue = COMMIT_STACK_INIT;
 	struct rev_name *start_name;
 
 	repo_parse_commit(the_repository, start_commit);
@@ -206,7 +205,7 @@ static void name_rev(struct commit *start_commit,
 		struct commit_list *parents;
 		int parent_number = 1;
 
-		parents_to_queue_nr = 0;
+		parents_to_queue.nr = 0;
 
 		for (parents = commit->parents;
 				parents;
@@ -238,22 +237,18 @@ static void name_rev(struct commit *start_commit,
 								string_pool);
 				else
 					parent_name->tip_name = name->tip_name;
-				ALLOC_GROW(parents_to_queue,
-					   parents_to_queue_nr + 1,
-					   parents_to_queue_alloc);
-				parents_to_queue[parents_to_queue_nr] = parent;
-				parents_to_queue_nr++;
+				commit_stack_push(&parents_to_queue, parent);
 			}
 		}
 
 		/* The first parent must come out first from the prio_queue */
-		while (parents_to_queue_nr)
+		while (parents_to_queue.nr)
 			prio_queue_put(&queue,
-				       parents_to_queue[--parents_to_queue_nr]);
+				       commit_stack_pop(&parents_to_queue));
 	}
 
 	clear_prio_queue(&queue);
-	free(parents_to_queue);
+	commit_stack_clear(&parents_to_queue);
 }
 
 static int subpath_matches(const char *path, const char *filter)
@@ -339,10 +334,9 @@ static int cmp_by_tag_and_age(const void *a_, const void *b_)
 	return a->taggerdate != b->taggerdate;
 }
 
-static int name_ref(const char *path, const char *referent UNUSED, const struct object_id *oid,
-		    int flags UNUSED, void *cb_data)
+static int name_ref(const struct reference *ref, void *cb_data)
 {
-	struct object *o = parse_object(the_repository, oid);
+	struct object *o = parse_object(the_repository, ref->oid);
 	struct name_ref_data *data = cb_data;
 	int can_abbreviate_output = data->tags_only && data->name_only;
 	int deref = 0;
@@ -350,14 +344,14 @@ static int name_ref(const char *path, const char *referent UNUSED, const struct 
 	struct commit *commit = NULL;
 	timestamp_t taggerdate = TIME_MAX;
 
-	if (data->tags_only && !starts_with(path, "refs/tags/"))
+	if (data->tags_only && !starts_with(ref->name, "refs/tags/"))
 		return 0;
 
 	if (data->exclude_filters.nr) {
 		struct string_list_item *item;
 
 		for_each_string_list_item(item, &data->exclude_filters) {
-			if (subpath_matches(path, item->string) >= 0)
+			if (subpath_matches(ref->name, item->string) >= 0)
 				return 0;
 		}
 	}
@@ -378,7 +372,7 @@ static int name_ref(const char *path, const char *referent UNUSED, const struct 
 			 * shouldn't stop when seeing 'refs/tags/v1.4' matches
 			 * 'refs/tags/v*'.  We should show it as 'v1.4'.
 			 */
-			switch (subpath_matches(path, item->string)) {
+			switch (subpath_matches(ref->name, item->string)) {
 			case -1: /* did not match */
 				break;
 			case 0: /* matched fully */
@@ -406,13 +400,13 @@ static int name_ref(const char *path, const char *referent UNUSED, const struct 
 	}
 	if (o && o->type == OBJ_COMMIT) {
 		commit = (struct commit *)o;
-		from_tag = starts_with(path, "refs/tags/");
+		from_tag = starts_with(ref->name, "refs/tags/");
 		if (taggerdate == TIME_MAX)
 			taggerdate = commit->date;
 	}
 
-	add_to_tip_table(oid, path, can_abbreviate_output, commit, taggerdate,
-			 from_tag, deref);
+	add_to_tip_table(ref->oid, ref->name, can_abbreviate_output,
+			 commit, taggerdate, from_tag, deref);
 	return 0;
 }
 

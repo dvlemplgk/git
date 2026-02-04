@@ -72,7 +72,7 @@ static void mark_tree_contents_uninteresting(struct repository *r,
 	struct tree_desc desc;
 	struct name_entry entry;
 
-	if (parse_tree_gently(tree, 1) < 0)
+	if (repo_parse_tree_gently(the_repository, tree, 1) < 0)
 		return;
 
 	init_tree_desc(&desc, &tree->object.oid, tree->buffer, tree->size);
@@ -179,7 +179,7 @@ static void add_children_by_path(struct repository *r,
 	if (!tree)
 		return;
 
-	if (parse_tree_gently(tree, 1) < 0)
+	if (repo_parse_tree_gently(the_repository, tree, 1) < 0)
 		return;
 
 	init_tree_desc(&desc, &tree->object.oid, tree->buffer, tree->size);
@@ -248,29 +248,6 @@ void mark_trees_uninteresting_sparse(struct repository *r,
 		mark_trees_uninteresting_sparse(r, &entry->trees);
 
 	paths_and_oids_clear(&map);
-}
-
-struct commit_stack {
-	struct commit **items;
-	size_t nr, alloc;
-};
-#define COMMIT_STACK_INIT { 0 }
-
-static void commit_stack_push(struct commit_stack *stack, struct commit *commit)
-{
-	ALLOC_GROW(stack->items, stack->nr + 1, stack->alloc);
-	stack->items[stack->nr++] = commit;
-}
-
-static struct commit *commit_stack_pop(struct commit_stack *stack)
-{
-	return stack->nr ? stack->items[--stack->nr] : NULL;
-}
-
-static void commit_stack_clear(struct commit_stack *stack)
-{
-	FREE_AND_NULL(stack->items);
-	stack->nr = stack->alloc = 0;
 }
 
 static void mark_one_parent_uninteresting(struct rev_info *revs, struct commit *commit,
@@ -1644,19 +1621,17 @@ struct all_refs_cb {
 	struct worktree *wt;
 };
 
-static int handle_one_ref(const char *path, const char *referent UNUSED, const struct object_id *oid,
-			  int flag UNUSED,
-			  void *cb_data)
+static int handle_one_ref(const struct reference *ref, void *cb_data)
 {
 	struct all_refs_cb *cb = cb_data;
 	struct object *object;
 
-	if (ref_excluded(&cb->all_revs->ref_excludes, path))
+	if (ref_excluded(&cb->all_revs->ref_excludes, ref->name))
 	    return 0;
 
-	object = get_reference(cb->all_revs, path, oid, cb->all_flags);
-	add_rev_cmdline(cb->all_revs, object, path, REV_CMD_REF, cb->all_flags);
-	add_pending_object(cb->all_revs, object, path);
+	object = get_reference(cb->all_revs, ref->name, ref->oid, cb->all_flags);
+	add_rev_cmdline(cb->all_revs, object, ref->name, REV_CMD_REF, cb->all_flags);
+	add_pending_object(cb->all_revs, object, ref->name);
 	return 0;
 }
 
@@ -2543,14 +2518,14 @@ static int handle_revision_opt(struct rev_info *revs, int argc, const char **arg
 		die(_("--unpacked=<packfile> no longer supported"));
 	} else if (!strcmp(arg, "--no-kept-objects")) {
 		revs->no_kept_objects = 1;
-		revs->keep_pack_cache_flags |= IN_CORE_KEEP_PACKS;
-		revs->keep_pack_cache_flags |= ON_DISK_KEEP_PACKS;
+		revs->keep_pack_cache_flags |= KEPT_PACK_IN_CORE;
+		revs->keep_pack_cache_flags |= KEPT_PACK_ON_DISK;
 	} else if (skip_prefix(arg, "--no-kept-objects=", &optarg)) {
 		revs->no_kept_objects = 1;
 		if (!strcmp(optarg, "in-core"))
-			revs->keep_pack_cache_flags |= IN_CORE_KEEP_PACKS;
+			revs->keep_pack_cache_flags |= KEPT_PACK_IN_CORE;
 		if (!strcmp(optarg, "on-disk"))
-			revs->keep_pack_cache_flags |= ON_DISK_KEEP_PACKS;
+			revs->keep_pack_cache_flags |= KEPT_PACK_ON_DISK;
 	} else if (!strcmp(arg, "-r")) {
 		revs->diff = 1;
 		revs->diffopt.flags.recursive = 1;

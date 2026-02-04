@@ -38,37 +38,8 @@ struct strbuf;
 DISABLE_WARNING(-Wsign-compare)
 #endif
 
-#ifndef FLEX_ARRAY
-/*
- * See if our compiler is known to support flexible array members.
- */
-
-/*
- * Check vendor specific quirks first, before checking the
- * __STDC_VERSION__, as vendor compilers can lie and we need to be
- * able to work them around.  Note that by not defining FLEX_ARRAY
- * here, we can fall back to use the "safer but a bit wasteful" one
- * later.
- */
-#if defined(__SUNPRO_C) && (__SUNPRO_C <= 0x580)
-#elif defined(__GNUC__)
-# if (__GNUC__ >= 3)
-#  define FLEX_ARRAY /* empty */
-# else
-#  define FLEX_ARRAY 0 /* older GNU extension */
-# endif
-#elif defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L)
-# define FLEX_ARRAY /* empty */
-#endif
-
-/*
- * Otherwise, default to safer but a bit wasteful traditional style
- */
-#ifndef FLEX_ARRAY
-# define FLEX_ARRAY 1
-#endif
-#endif
-
+#undef FLEX_ARRAY
+#define FLEX_ARRAY /* empty - weather balloon to require C99 FAM */
 
 /*
  * BUILD_ASSERT_OR_ZERO - assert a build-time dependency, as an expression.
@@ -607,6 +578,30 @@ static inline bool strip_suffix(const char *str, const char *suffix,
 #define DEFAULT_PACKED_GIT_LIMIT \
 	((1024L * 1024L) * (size_t)(sizeof(void*) >= 8 ? (32 * 1024L * 1024L) : 256))
 
+#ifdef _MSC_VER
+  /*
+   * When traversing into too-deep trees, Visual C-compiled Git seems to
+   * run into some internal stack overflow detection in the
+   * `RtlpAllocateHeap()` function that is called from within
+   * `git_inflate_init()`'s call tree. The following value seems to be
+   * low enough to avoid that by letting Git exit with an error before
+   * the stack overflow can occur.
+   */
+#define DEFAULT_MAX_ALLOWED_TREE_DEPTH 512
+#elif defined(GIT_WINDOWS_NATIVE) && defined(__clang__) && defined(__aarch64__)
+  /*
+   * Similar to Visual C, it seems that on Windows/ARM64 the clang-based
+   * builds have a smaller stack space available. When running out of
+   * that stack space, a `STATUS_STACK_OVERFLOW` is produced. When the
+   * Git command was run from an MSYS2 Bash, this unfortunately results
+   * in an exit code 127. Let's prevent that by lowering the maximal
+   * tree depth; This value seems to be low enough.
+   */
+#define DEFAULT_MAX_ALLOWED_TREE_DEPTH 1280
+#else
+#define DEFAULT_MAX_ALLOWED_TREE_DEPTH 2048
+#endif
+
 int git_open_cloexec(const char *name, int flags);
 #define git_open(name) git_open_cloexec(name, O_RDONLY)
 
@@ -726,6 +721,7 @@ static inline uint64_t u64_add(uint64_t a, uint64_t b)
 #define ALLOC_ARRAY(x, alloc) (x) = xmalloc(st_mult(sizeof(*(x)), (alloc)))
 #define CALLOC_ARRAY(x, alloc) (x) = xcalloc((alloc), sizeof(*(x)))
 #define REALLOC_ARRAY(x, alloc) (x) = xrealloc((x), st_mult(sizeof(*(x)), (alloc)))
+#define MEMZERO_ARRAY(x, alloc) memset((x), 0x0, st_mult(sizeof(*(x)), (alloc)))
 
 #define COPY_ARRAY(dst, src, n) copy_array((dst), (src), (n), sizeof(*(dst)) + \
 	BARF_UNLESS_COPYABLE((dst), (src)))

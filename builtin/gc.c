@@ -36,6 +36,7 @@
 #include "reflog.h"
 #include "repack.h"
 #include "rerere.h"
+#include "revision.h"
 #include "blob.h"
 #include "tree.h"
 #include "promisor-remote.h"
@@ -286,12 +287,26 @@ static void maintenance_run_opts_release(struct maintenance_run_opts *opts)
 
 static int pack_refs_condition(UNUSED struct gc_config *cfg)
 {
-	/*
-	 * The auto-repacking logic for refs is handled by the ref backends and
-	 * exposed via `git pack-refs --auto`. We thus always return truish
-	 * here and let the backend decide for us.
-	 */
-	return 1;
+	struct string_list included_refs = STRING_LIST_INIT_NODUP;
+	struct ref_exclusions excludes = REF_EXCLUSIONS_INIT;
+	struct refs_optimize_opts optimize_opts = {
+		.exclusions = &excludes,
+		.includes = &included_refs,
+		.flags = REFS_OPTIMIZE_PRUNE | REFS_OPTIMIZE_AUTO,
+	};
+	bool required;
+
+	/* Check for all refs, similar to 'git refs optimize --all'. */
+	string_list_append(optimize_opts.includes, "*");
+
+	if (refs_optimize_required(get_main_ref_store(the_repository),
+				   &optimize_opts, &required))
+		return 0;
+
+	clear_ref_exclusions(&excludes);
+	string_list_clear(&included_refs, 0);
+
+	return required;
 }
 
 static int maintenance_task_pack_refs(struct maintenance_run_opts *opts,
@@ -1048,7 +1063,7 @@ int cmd_gc(int argc,
 	report_garbage = report_pack_garbage;
 	odb_reprepare(the_repository->objects);
 	if (pack_garbage.nr > 0) {
-		close_object_store(the_repository->objects);
+		odb_close(the_repository->objects);
 		clean_pack_garbage();
 	}
 
@@ -1095,34 +1110,30 @@ static int maintenance_opt_schedule(const struct option *opt, const char *arg,
 	return 0;
 }
 
-/* Remember to update object flag allocation in object.h */
-#define SEEN		(1u<<0)
-
 struct cg_auto_data {
 	int num_not_in_graph;
 	int limit;
 };
 
-static int dfs_on_ref(const char *refname UNUSED,
-		      const char *referent UNUSED,
-		      const struct object_id *oid,
-		      int flags UNUSED,
-		      void *cb_data)
+static int dfs_on_ref(const struct reference *ref, void *cb_data)
 {
 	struct cg_auto_data *data = (struct cg_auto_data *)cb_data;
 	int result = 0;
+	const struct object_id *maybe_peeled = ref->oid;
 	struct object_id peeled;
 	struct commit_list *stack = NULL;
 	struct commit *commit;
 
-	if (!peel_iterated_oid(the_repository, oid, &peeled))
-		oid = &peeled;
-	if (odb_read_object_info(the_repository->objects, oid, NULL) != OBJ_COMMIT)
+	if (!reference_get_peeled_oid(the_repository, ref, &peeled))
+		maybe_peeled = &peeled;
+	if (odb_read_object_info(the_repository->objects, maybe_peeled, NULL) != OBJ_COMMIT)
 		return 0;
 
-	commit = lookup_commit(the_repository, oid);
-	if (!commit)
+	commit = lookup_commit(the_repository, maybe_peeled);
+	if (!commit || commit->object.flags & SEEN)
 		return 0;
+	commit->object.flags |= SEEN;
+
 	if (repo_parse_commit(the_repository, commit) ||
 	    commit_graph_position(commit) != COMMIT_NOT_FROM_GRAPH)
 		return 0;
@@ -1132,7 +1143,7 @@ static int dfs_on_ref(const char *refname UNUSED,
 	if (data->num_not_in_graph >= data->limit)
 		return 1;
 
-	commit_list_append(commit, &stack);
+	commit_list_insert(commit, &stack);
 
 	while (!result && stack) {
 		struct commit_list *parent;
@@ -1153,7 +1164,7 @@ static int dfs_on_ref(const char *refname UNUSED,
 				break;
 			}
 
-			commit_list_append(parent->item, &stack);
+			commit_list_insert(parent->item, &stack);
 		}
 	}
 
@@ -3447,7 +3458,67 @@ static int maintenance_stop(int argc, const char **argv, const char *prefix,
 	return update_background_schedule(NULL, 0);
 }
 
-static const char * const builtin_maintenance_usage[] = {
+static const char *const builtin_maintenance_is_needed_usage[] = {
+	"git maintenance is-needed [--task=<task>] [--schedule]",
+	NULL
+};
+
+static int maintenance_is_needed(int argc, const char **argv, const char *prefix,
+				 struct repository *repo UNUSED)
+{
+	struct maintenance_run_opts opts = MAINTENANCE_RUN_OPTS_INIT;
+	struct string_list selected_tasks = STRING_LIST_INIT_DUP;
+	struct gc_config cfg = GC_CONFIG_INIT;
+	struct option options[] = {
+		OPT_BOOL(0, "auto", &opts.auto_flag,
+			 N_("run tasks based on the state of the repository")),
+		OPT_CALLBACK_F(0, "task", &selected_tasks, N_("task"),
+			       N_("check a specific task"),
+			       PARSE_OPT_NONEG, task_option_parse),
+		OPT_END()
+	};
+	bool is_needed = false;
+
+	argc = parse_options(argc, argv, prefix, options,
+			     builtin_maintenance_is_needed_usage,
+			     PARSE_OPT_STOP_AT_NON_OPTION);
+	if (argc)
+		usage_with_options(builtin_maintenance_is_needed_usage, options);
+
+	gc_config(&cfg);
+	initialize_task_config(&opts, &selected_tasks);
+
+	if (opts.auto_flag) {
+		for (size_t i = 0; i < opts.tasks_nr; i++) {
+			if (tasks[opts.tasks[i]].auto_condition &&
+			    tasks[opts.tasks[i]].auto_condition(&cfg)) {
+				is_needed = true;
+				break;
+			}
+		}
+	} else {
+		/*
+		 * When not using --auto we always require maintenance right now.
+		 *
+		 * TODO: this certainly is too eager, as some maintenance tasks may
+		 * decide to not do anything because the data structures are already
+		 * fully optimized. We may eventually want to extend the auto
+		 * condition to also cover non-auto runs so that we can detect such
+		 * cases.
+		 */
+		is_needed = true;
+	}
+
+	string_list_clear(&selected_tasks, 0);
+	maintenance_run_opts_release(&opts);
+	gc_config_release(&cfg);
+
+	if (is_needed)
+		return 0;
+	return 1;
+}
+
+static const char *const builtin_maintenance_usage[] = {
 	N_("git maintenance <subcommand> [<options>]"),
 	NULL,
 };
@@ -3464,6 +3535,7 @@ int cmd_maintenance(int argc,
 		OPT_SUBCOMMAND("stop", &fn, maintenance_stop),
 		OPT_SUBCOMMAND("register", &fn, maintenance_register),
 		OPT_SUBCOMMAND("unregister", &fn, maintenance_unregister),
+		OPT_SUBCOMMAND("is-needed", &fn, maintenance_is_needed),
 		OPT_END(),
 	};
 

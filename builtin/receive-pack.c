@@ -34,7 +34,6 @@
 #include "object-file.h"
 #include "object-name.h"
 #include "odb.h"
-#include "path.h"
 #include "protocol.h"
 #include "commit-reach.h"
 #include "server-info.h"
@@ -42,6 +41,7 @@
 #include "trace2.h"
 #include "worktree.h"
 #include "shallow.h"
+#include "setup.h"
 #include "parse-options.h"
 
 static const char * const receive_pack_usage[] = {
@@ -177,8 +177,9 @@ static int receive_pack_config(const char *var, const char *value,
 
 		if (git_config_pathname(&path, var, value))
 			return -1;
-		strbuf_addf(&fsck_msg_types, "%cskiplist=%s",
-			fsck_msg_types.len ? ',' : '=', path);
+		if (path)
+			strbuf_addf(&fsck_msg_types, "%cskiplist=%s",
+				    fsck_msg_types.len ? ',' : '=', path);
 		free(path);
 		return 0;
 	}
@@ -305,13 +306,12 @@ static void show_ref(const char *path, const struct object_id *oid)
 	}
 }
 
-static int show_ref_cb(const char *path_full, const char *referent UNUSED, const struct object_id *oid,
-		       int flag UNUSED, void *data)
+static int show_ref_cb(const struct reference *ref, void *data)
 {
 	struct oidset *seen = data;
-	const char *path = strip_namespace(path_full);
+	const char *path = strip_namespace(ref->name);
 
-	if (ref_is_hidden(path, path_full, &hidden_refs))
+	if (ref_is_hidden(path, ref->name, &hidden_refs))
 		return 0;
 
 	/*
@@ -320,13 +320,13 @@ static int show_ref_cb(const char *path_full, const char *referent UNUSED, const
 	 * transfer but will otherwise ignore them.
 	 */
 	if (!path) {
-		if (oidset_insert(seen, oid))
+		if (oidset_insert(seen, ref->oid))
 			return 0;
 		path = ".have";
 	} else {
-		oidset_insert(seen, oid);
+		oidset_insert(seen, ref->oid);
 	}
-	show_ref(path, oid);
+	show_ref(path, ref->oid);
 	return 0;
 }
 

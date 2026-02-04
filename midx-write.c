@@ -697,36 +697,33 @@ static void prepare_midx_packing_data(struct packing_data *pdata,
 	trace2_region_leave("midx", "prepare_midx_packing_data", ctx->repo);
 }
 
-static int add_ref_to_pending(const char *refname, const char *referent UNUSED,
-			      const struct object_id *oid,
-			      int flag, void *cb_data)
+static int add_ref_to_pending(const struct reference *ref, void *cb_data)
 {
 	struct rev_info *revs = (struct rev_info*)cb_data;
+	const struct object_id *maybe_peeled = ref->oid;
 	struct object_id peeled;
 	struct object *object;
 
-	if ((flag & REF_ISSYMREF) && (flag & REF_ISBROKEN)) {
-		warning("symbolic ref is dangling: %s", refname);
+	if ((ref->flags & REF_ISSYMREF) && (ref->flags & REF_ISBROKEN)) {
+		warning("symbolic ref is dangling: %s", ref->name);
 		return 0;
 	}
 
-	if (!peel_iterated_oid(revs->repo, oid, &peeled))
-		oid = &peeled;
+	if (!reference_get_peeled_oid(revs->repo, ref, &peeled))
+		maybe_peeled = &peeled;
 
-	object = parse_object_or_die(revs->repo, oid, refname);
+	object = parse_object_or_die(revs->repo, maybe_peeled, ref->name);
 	if (object->type != OBJ_COMMIT)
 		return 0;
 
 	add_pending_object(revs, object, "");
-	if (bitmap_is_preferred_refname(revs->repo, refname))
+	if (bitmap_is_preferred_refname(revs->repo, ref->name))
 		object->flags |= NEEDS_BITMAP;
 	return 0;
 }
 
 struct bitmap_commit_cb {
-	struct commit **commits;
-	size_t commits_nr, commits_alloc;
-
+	struct commit_stack *commits;
 	struct write_midx_context *ctx;
 };
 
@@ -746,8 +743,7 @@ static void bitmap_show_commit(struct commit *commit, void *_data)
 	if (pos < 0)
 		return;
 
-	ALLOC_GROW(data->commits, data->commits_nr + 1, data->commits_alloc);
-	data->commits[data->commits_nr++] = commit;
+	commit_stack_push(data->commits, commit);
 }
 
 static int read_refs_snapshot(const char *refs_snapshot,
@@ -785,16 +781,14 @@ static int read_refs_snapshot(const char *refs_snapshot,
 	return 0;
 }
 
-static struct commit **find_commits_for_midx_bitmap(uint32_t *indexed_commits_nr_p,
-						    const char *refs_snapshot,
-						    struct write_midx_context *ctx)
+static void find_commits_for_midx_bitmap(struct commit_stack *commits,
+					 const char *refs_snapshot,
+					 struct write_midx_context *ctx)
 {
 	struct rev_info revs;
-	struct bitmap_commit_cb cb = {0};
+	struct bitmap_commit_cb cb = { .commits = commits, .ctx = ctx };
 
 	trace2_region_enter("midx", "find_commits_for_midx_bitmap", ctx->repo);
-
-	cb.ctx = ctx;
 
 	repo_init_revisions(ctx->repo, &revs, NULL);
 	if (refs_snapshot) {
@@ -824,14 +818,10 @@ static struct commit **find_commits_for_midx_bitmap(uint32_t *indexed_commits_nr
 		die(_("revision walk setup failed"));
 
 	traverse_commit_list(&revs, bitmap_show_commit, NULL, &cb);
-	if (indexed_commits_nr_p)
-		*indexed_commits_nr_p = cb.commits_nr;
 
 	release_revisions(&revs);
 
 	trace2_region_leave("midx", "find_commits_for_midx_bitmap", ctx->repo);
-
-	return cb.commits;
 }
 
 static int write_midx_bitmap(struct write_midx_context *ctx,
@@ -1015,6 +1005,79 @@ static void clear_midx_files(struct odb_source *source,
 	strbuf_release(&buf);
 }
 
+static bool midx_needs_update(struct multi_pack_index *midx, struct write_midx_context *ctx)
+{
+	struct strset packs = STRSET_INIT;
+	struct strbuf buf = STRBUF_INIT;
+	bool needed = true;
+
+	/*
+	 * Ensure that we have a valid checksum before consulting the
+	 * exisiting MIDX in order to determine if we can avoid an
+	 * update.
+	 *
+	 * This is necessary because the given MIDX is loaded directly
+	 * from the object store (because we still compare our proposed
+	 * update to any on-disk MIDX regardless of whether or not we
+	 * have assigned "ctx.m") and is thus not guaranteed to have a
+	 * valid checksum.
+	 */
+	if (!midx_checksum_valid(midx))
+		goto out;
+
+	/*
+	 * Ignore incremental updates for now. The assumption is that any
+	 * incremental update would be either empty (in which case we will bail
+	 * out later) or it would actually cover at least one new pack.
+	 */
+	if (ctx->incremental)
+		goto out;
+
+	/*
+	 * Otherwise, we need to verify that the packs covered by the existing
+	 * MIDX match the packs that we already have. The logic to do so is way
+	 * more complicated than it has any right to be. This is because:
+	 *
+	 *   - We cannot assume any ordering.
+	 *
+	 *   - The MIDX packs may not be loaded at all, and loading them would
+	 *     be wasteful. So we need to use the pack names tracked by the
+	 *     MIDX itself.
+	 *
+	 *   - The MIDX pack names are tracking the ".idx" files, whereas the
+	 *     packs themselves are tracking the ".pack" files. So we need to
+	 *     strip suffixes.
+	 */
+	if (ctx->nr != midx->num_packs + midx->num_packs_in_base)
+		goto out;
+
+	for (uint32_t i = 0; i < ctx->nr; i++) {
+		strbuf_reset(&buf);
+		strbuf_addstr(&buf, pack_basename(ctx->info[i].p));
+		strbuf_strip_suffix(&buf, ".pack");
+
+		if (!strset_add(&packs, buf.buf))
+			BUG("same pack added twice?");
+	}
+
+	for (uint32_t i = 0; i < ctx->nr; i++) {
+		strbuf_reset(&buf);
+		strbuf_addstr(&buf, midx->pack_names[i]);
+		strbuf_strip_suffix(&buf, ".idx");
+
+		if (!strset_contains(&packs, buf.buf))
+			goto out;
+		strset_remove(&packs, buf.buf);
+	}
+
+	needed = false;
+
+out:
+	strbuf_release(&buf);
+	strset_clear(&packs);
+	return needed;
+}
+
 static int write_midx_internal(struct odb_source *source,
 			       struct string_list *packs_to_include,
 			       struct string_list *packs_to_drop,
@@ -1032,6 +1095,7 @@ static int write_midx_internal(struct odb_source *source,
 	struct write_midx_context ctx = {
 		.preferred_pack_idx = NO_PREFERRED_PACK,
 	 };
+	struct multi_pack_index *midx_to_free = NULL;
 	int bitmapped_packs_concat_len = 0;
 	int pack_name_concat_len = 0;
 	int dropped_packs = 0;
@@ -1112,27 +1176,39 @@ static int write_midx_internal(struct odb_source *source,
 	for_each_file_in_pack_dir(source->path, add_pack_to_midx, &ctx);
 	stop_progress(&ctx.progress);
 
-	if ((ctx.m && ctx.nr == ctx.m->num_packs + ctx.m->num_packs_in_base) &&
-	    !ctx.incremental &&
-	    !(packs_to_include || packs_to_drop)) {
-		struct bitmap_index *bitmap_git;
-		int bitmap_exists;
-		int want_bitmap = flags & MIDX_WRITE_BITMAP;
+	if (!packs_to_drop) {
+		/*
+		 * If there is no MIDX then either it doesn't exist, or we're
+		 * doing a geometric repack. Try to load it from the source to
+		 * tell these two cases apart.
+		 */
+		struct multi_pack_index *midx = ctx.m;
+		if (!midx)
+			midx = midx_to_free = load_multi_pack_index(ctx.source);
 
-		bitmap_git = prepare_midx_bitmap_git(ctx.m);
-		bitmap_exists = bitmap_git && bitmap_is_midx(bitmap_git);
-		free_bitmap_index(bitmap_git);
+		if (midx && !midx_needs_update(midx, &ctx)) {
+			struct bitmap_index *bitmap_git;
+			int bitmap_exists;
+			int want_bitmap = flags & MIDX_WRITE_BITMAP;
 
-		if (bitmap_exists || !want_bitmap) {
-			/*
-			 * The correct MIDX already exists, and so does a
-			 * corresponding bitmap (or one wasn't requested).
-			 */
-			if (!want_bitmap)
-				clear_midx_files_ext(source, "bitmap", NULL);
-			result = 0;
-			goto cleanup;
+			bitmap_git = prepare_midx_bitmap_git(midx);
+			bitmap_exists = bitmap_git && bitmap_is_midx(bitmap_git);
+			free_bitmap_index(bitmap_git);
+
+			if (bitmap_exists || !want_bitmap) {
+				/*
+				 * The correct MIDX already exists, and so does a
+				 * corresponding bitmap (or one wasn't requested).
+				 */
+				if (!want_bitmap)
+					clear_midx_files_ext(source, "bitmap", NULL);
+				result = 0;
+				goto cleanup;
+			}
 		}
+
+		close_midx(midx_to_free);
+		midx_to_free = NULL;
 	}
 
 	if (ctx.incremental && !ctx.nr) {
@@ -1376,15 +1452,14 @@ static int write_midx_internal(struct odb_source *source,
 
 	if (flags & MIDX_WRITE_BITMAP) {
 		struct packing_data pdata;
-		struct commit **commits;
-		uint32_t commits_nr;
+		struct commit_stack commits = COMMIT_STACK_INIT;
 
 		if (!ctx.entries_nr)
 			BUG("cannot write a bitmap without any objects");
 
 		prepare_midx_packing_data(&pdata, &ctx);
 
-		commits = find_commits_for_midx_bitmap(&commits_nr, refs_snapshot, &ctx);
+		find_commits_for_midx_bitmap(&commits, refs_snapshot, &ctx);
 
 		/*
 		 * The previous steps translated the information from
@@ -1395,17 +1470,16 @@ static int write_midx_internal(struct odb_source *source,
 		FREE_AND_NULL(ctx.entries);
 		ctx.entries_nr = 0;
 
-		if (write_midx_bitmap(&ctx,
-				      midx_hash, &pdata, commits, commits_nr,
-				      flags) < 0) {
+		if (write_midx_bitmap(&ctx, midx_hash, &pdata,
+				      commits.items, commits.nr, flags) < 0) {
 			error(_("could not write multi-pack bitmap"));
 			clear_packing_data(&pdata);
-			free(commits);
+			commit_stack_clear(&commits);
 			goto cleanup;
 		}
 
 		clear_packing_data(&pdata);
-		free(commits);
+		commit_stack_clear(&commits);
 	}
 	/*
 	 * NOTE: Do not use ctx.entries beyond this point, since it might
@@ -1459,7 +1533,7 @@ static int write_midx_internal(struct odb_source *source,
 	}
 
 	if (ctx.m || ctx.base_midx)
-		close_object_store(ctx.repo->objects);
+		odb_close(ctx.repo->objects);
 
 	if (commit_lock_file(&lk) < 0)
 		die_errno(_("could not write multi-pack-index"));
@@ -1488,6 +1562,7 @@ cleanup:
 		free(keep_hashes);
 	}
 	strbuf_release(&midx_name);
+	close_midx(midx_to_free);
 
 	trace2_region_leave("midx", "write_midx_internal", r);
 

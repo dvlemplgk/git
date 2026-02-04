@@ -333,6 +333,13 @@ int remove_signature(struct strbuf *buf);
  */
 int check_commit_signature(const struct commit *commit, struct signature_check *sigc);
 
+/*
+ * Same as check_commit_signature() but accepts a commit buffer and
+ * its size, instead of a `struct commit *`.
+ */
+int verify_commit_buffer(const char *buffer, size_t size,
+			 struct signature_check *sigc);
+
 /* record author-date for each commit object */
 struct author_date_slab;
 void record_author_date(struct author_date_slab *author_date,
@@ -373,5 +380,17 @@ int parse_buffer_signed_by_header(const char *buffer,
 				  struct strbuf *signature,
 				  const struct git_hash_algo *algop);
 int add_header_signature(struct strbuf *buf, struct strbuf *sig, const struct git_hash_algo *algo);
+
+struct commit_stack {
+	struct commit **items;
+	size_t nr, alloc;
+};
+#define COMMIT_STACK_INIT { 0 }
+
+void commit_stack_init(struct commit_stack *);
+void commit_stack_grow(struct commit_stack *, size_t);
+void commit_stack_push(struct commit_stack *, struct commit *);
+struct commit *commit_stack_pop(struct commit_stack *);
+void commit_stack_clear(struct commit_stack *);
 
 #endif /* COMMIT_H */

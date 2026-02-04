@@ -213,6 +213,28 @@ static uint32_t bitmap_num_objects(struct bitmap_index *index)
 	return index->pack->num_objects;
 }
 
+static uint32_t bitmap_name_hash(struct bitmap_index *index, uint32_t pos)
+{
+	if (bitmap_is_midx(index)) {
+		while (index && pos < index->midx->num_objects_in_base) {
+			ASSERT(bitmap_is_midx(index));
+			index = index->base;
+		}
+
+		if (!index)
+			BUG("NULL base bitmap for object position: %"PRIu32, pos);
+
+		pos -= index->midx->num_objects_in_base;
+		if (pos >= index->midx->num_objects)
+			BUG("out-of-bounds midx bitmap object at %"PRIu32, pos);
+	}
+
+	if (!index->hashes)
+		return 0;
+
+	return get_be32(index->hashes + pos);
+}
+
 static struct repository *bitmap_repo(struct bitmap_index *bitmap_git)
 {
 	if (bitmap_is_midx(bitmap_git))
@@ -1724,8 +1746,7 @@ static void show_objects_for_type(
 				pack = bitmap_git->pack;
 			}
 
-			if (bitmap_git->hashes)
-				hash = get_be32(bitmap_git->hashes + index_pos);
+			hash = bitmap_name_hash(bitmap_git, index_pos);
 
 			show_reach(&oid, object_type, 0, hash, pack, ofs, payload);
 		}
@@ -1855,8 +1876,7 @@ static unsigned long get_size_by_pos(struct bitmap_index *bitmap_git,
 			ofs = pack_pos_to_offset(pack, pos);
 		}
 
-		if (packed_object_info(bitmap_repo(bitmap_git), pack, ofs,
-				       &oi) < 0) {
+		if (packed_object_info(pack, ofs, &oi) < 0) {
 			struct object_id oid;
 			nth_bitmap_object_oid(bitmap_git, &oid,
 					      pack_pos_to_index(pack, pos));
@@ -3124,8 +3144,8 @@ uint32_t *create_bitmap_mapping(struct bitmap_index *bitmap_git,
 
 		if (oe) {
 			reposition[i] = oe_in_pack_pos(mapping, oe) + 1;
-			if (bitmap_git->hashes && !oe->hash)
-				oe->hash = get_be32(bitmap_git->hashes + index_pos);
+			if (!oe->hash)
+				oe->hash = bitmap_name_hash(bitmap_git, index_pos);
 		}
 	}
 

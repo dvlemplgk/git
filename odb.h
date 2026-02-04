@@ -15,6 +15,14 @@ struct repository;
 struct multi_pack_index;
 
 /*
+ * Set this to 0 to prevent odb_read_object_info_extended() from fetching missing
+ * blobs. This has a difference only if extensions.partialClone is set.
+ *
+ * Its default value is 1.
+ */
+extern int fetch_if_missing;
+
+/*
  * Compute the exact path an alternate is at and returns it. In case of
  * error NULL is returned and the human readable error is added to `err`
  * `path` may be relative and should point to $GIT_DIR.
@@ -40,27 +48,11 @@ struct odb_source {
 	/* Object database that owns this object source. */
 	struct object_database *odb;
 
-	/*
-	 * Used to store the results of readdir(3) calls when we are OK
-	 * sacrificing accuracy due to races for speed. That includes
-	 * object existence with OBJECT_INFO_QUICK, as well as
-	 * our search for unique abbreviated hashes. Don't use it for tasks
-	 * requiring greater accuracy!
-	 *
-	 * Be sure to call odb_load_loose_cache() before using.
-	 */
-	uint32_t loose_objects_subdir_seen[8]; /* 256 bits */
-	struct oidtree *loose_objects_cache;
+	/* Private state for loose objects. */
+	struct odb_source_loose *loose;
 
-	/* Map between object IDs for loose objects. */
-	struct loose_object_map *loose_map;
-
-	/*
-	 * private data
-	 *
-	 * should only be accessed directly by packfile.c and midx.c
-	 */
-	struct multi_pack_index *midx;
+	/* Should only be accessed directly by packfile.c and midx.c. */
+	struct packfile_store *packfiles;
 
 	/*
 	 * Figure out whether this is the local source of the owning
@@ -69,13 +61,6 @@ struct odb_source {
 	 * written to.
 	 */
 	bool local;
-
-	/*
-	 * This is a temporary object store created by the tmp_objdir
-	 * facility. Disable ref updates since the objects in the store
-	 * might be discarded on rollback.
-	 */
-	int disable_ref_updates;
 
 	/*
 	 * This object store is ephemeral, so there is no need to fsync.
@@ -139,9 +124,6 @@ struct object_database {
 	struct commit_graph *commit_graph;
 	unsigned commit_graph_attempted : 1; /* if loading has been attempted */
 
-	/* Should only be accessed directly by packfile.c and midx.c. */
-	struct packfile_store *packfiles;
-
 	/*
 	 * This is meant to hold a *small* number of objects that you would
 	 * want odb_read_object() to be able to return, but yet you do not want
@@ -166,8 +148,30 @@ struct object_database {
 	struct string_list submodule_source_paths;
 };
 
-struct object_database *odb_new(struct repository *repo);
-void odb_clear(struct object_database *o);
+/*
+ * Create a new object database for the given repository.
+ *
+ * If the primary source parameter is set it will override the usual primary
+ * object directory derived from the repository's common directory. The
+ * alternate sources are expected to be a PATH_SEP-separated list of secondary
+ * sources. Note that these alternate sources will be added in addition to, not
+ * instead of, the alternates identified by the primary source.
+ *
+ * Returns the newly created object database.
+ */
+struct object_database *odb_new(struct repository *repo,
+				const char *primary_source,
+				const char *alternate_sources);
+
+/* Free the object database and release all resources. */
+void odb_free(struct object_database *o);
+
+/*
+ * Close the object database and all of its sources so that any held resources
+ * will be released. The database can still be used after closing it, in which
+ * case these resources may be reallocated.
+ */
+void odb_close(struct object_database *o);
 
 /*
  * Clear caches, reload alternates and then reload object sources so that new
@@ -319,7 +323,6 @@ struct object_info {
 		OI_CACHED,
 		OI_LOOSE,
 		OI_PACKED,
-		OI_DBCACHED
 	} whence;
 	union {
 		/*
@@ -333,7 +336,12 @@ struct object_info {
 		struct {
 			struct packed_git *pack;
 			off_t offset;
-			unsigned int is_delta;
+			enum packed_object_type {
+				PACKED_OBJECT_TYPE_UNKNOWN,
+				PACKED_OBJECT_TYPE_FULL,
+				PACKED_OBJECT_TYPE_OFS_DELTA,
+				PACKED_OBJECT_TYPE_REF_DELTA,
+			} type;
 		} packed;
 	} u;
 };
@@ -395,6 +403,9 @@ enum {
 int odb_has_object(struct object_database *odb,
 		   const struct object_id *oid,
 		   unsigned flags);
+
+int odb_freshen_object(struct object_database *odb,
+		       const struct object_id *oid);
 
 void odb_assert_oid_type(struct object_database *odb,
 			 const struct object_id *oid, enum object_type expect);
@@ -488,5 +499,15 @@ static inline int odb_write_object(struct object_database *odb,
 {
 	return odb_write_object_ext(odb, buf, len, type, oid, NULL, 0);
 }
+
+struct odb_write_stream {
+	const void *(*read)(struct odb_write_stream *, unsigned long *len);
+	void *data;
+	int is_finished;
+};
+
+int odb_write_object_stream(struct object_database *odb,
+			    struct odb_write_stream *stream, size_t len,
+			    struct object_id *oid);
 
 #endif /* ODB_H */
